@@ -9,6 +9,10 @@ import type {
   AccountFailureCategory,
   AccountRepository,
   CollectionSummary,
+  CoreCollectionResult,
+  MediaAssetRepository,
+  MediaStorage,
+  NormalizedBatch,
   SourceAccount,
 } from "../../collect-instagram/types.ts";
 
@@ -28,6 +32,35 @@ function success(account: SourceAccount): CollectionSummary {
     updatedPosts: 2,
     insertedSnapshots: 1,
     posts: [],
+  };
+}
+
+function coreSuccess(account: SourceAccount): CoreCollectionResult {
+  const summary = success(account);
+  return {
+    summary,
+    mediaWork: {
+      sourceAccountId: account.id,
+      batch: {
+        username: account.username,
+        account: {
+          instagramAccountId: `instagram-${account.username}`,
+          followersCount: 10,
+          capabilities: {
+            followersAvailable: true,
+            likesAvailable: true,
+            commentsAvailable: true,
+            viewsAvailable: false,
+            mediaUrlAvailable: false,
+            carouselChildrenAvailable: false,
+          },
+        },
+        posts: [],
+        collectedAt: collectedAt.toISOString(),
+        receivedMedia: 0,
+      },
+      ingestedPosts: [],
+    },
   };
 }
 
@@ -81,7 +114,7 @@ Deno.test("limits concurrency to two and isolates one account failure", async ()
           "permission",
         );
       }
-      return success(account);
+      return coreSuccess(account);
     },
   });
 
@@ -120,7 +153,7 @@ Deno.test("rejects a requested account ID outside the active DB set", async () =
       accountRepository: accountRepository(accounts, []),
       collectAccount: (account) => {
         collectionCalls += 1;
-        return Promise.resolve(success(account));
+        return Promise.resolve(coreSuccess(account));
       },
     }),
     (error: unknown) => error instanceof CollectionInputError,
@@ -144,7 +177,7 @@ Deno.test("marks accounts not started before the run deadline as exhausted", asy
     accountRepository: accountRepository(accounts.slice(0, 3), failures),
     collectAccount: (account) => {
       clock = 101;
-      return Promise.resolve(success(account));
+      return Promise.resolve(coreSuccess(account));
     },
     now: () => clock,
   });
@@ -159,6 +192,82 @@ Deno.test("marks accounts not started before the run deadline as exhausted", asy
     failures.map((failure) => failure.category),
     ["run_budget_exhausted", "run_budget_exhausted"],
   );
+});
+
+Deno.test("starts auxiliary media only after every core account and preserves core success", async () => {
+  const events: string[] = [];
+  const mediaBatch = (account: SourceAccount): NormalizedBatch => ({
+    ...coreSuccess(account).mediaWork.batch,
+    posts: [{
+      externalPostId: `post-${account.username}`,
+      caption: null,
+      permalink: null,
+      mediaType: "IMAGE",
+      mediaProductType: null,
+      publishedAt: "2026-09-17T02:30:00.000Z",
+      likeCount: 1,
+      commentsCount: 0,
+      viewCount: null,
+      followersCountAtCollection: 10,
+      postAgeMinutes: 30,
+      rawPayload: { id: `post-${account.username}` },
+      assets: [{
+        externalMediaId: `image-${account.username}`,
+        assetType: "IMAGE",
+        carouselIndex: null,
+        originalMediaUrl: `https://cdn.example/${account.username}.jpg`,
+      }],
+    }],
+  });
+  const mediaRepository: MediaAssetRepository = {
+    prepareMediaAssets: (sourceAccountId) => {
+      events.push(`prepare:${sourceAccountId}`);
+      if (sourceAccountId === accounts[0].id) {
+        return Promise.reject(new Error("safe prepare failure"));
+      }
+      return Promise.resolve([]);
+    },
+    finalizeMediaAssets: () => Promise.resolve(0),
+  };
+  const mediaStorage: MediaStorage = {
+    store: () => Promise.reject(new Error("must not upload")),
+  };
+
+  const summary = await runInstagramCollection({
+    requestedSourceAccountIds: undefined,
+    collectedAt,
+    concurrency: 2,
+    runBudgetMs: 100_000,
+    accountBudgetMs: 20_000,
+    accountRepository: accountRepository(accounts.slice(0, 2), []),
+    collectAccount: (account) => {
+      events.push(`core:${account.id}`);
+      const result = coreSuccess(account);
+      result.mediaWork.batch = mediaBatch(account);
+      result.mediaWork.ingestedPosts = [{
+        externalPostId: `post-${account.username}`,
+        rawPostId: account.id,
+      }];
+      return Promise.resolve(result);
+    },
+    mediaRepository,
+    mediaStorage,
+    mediaConcurrency: 2,
+    mediaLimitPerRun: 20,
+  });
+
+  const lastCore = Math.max(
+    ...events.map((event, index) => event.startsWith("core:") ? index : -1),
+  );
+  const firstPrepare = events.findIndex((event) =>
+    event.startsWith("prepare:")
+  );
+  assert.ok(firstPrepare > lastCore);
+  assert.equal(summary.accountsSuccess, 2);
+  assert.equal(summary.accountsFailed, 0);
+  assert.equal(summary.assetsFailed, 1);
+  assert.equal(summary.accounts[0].status, "success");
+  assert.equal(summary.accounts[0].assetsFailed, 1);
 });
 
 Deno.test("aborts an account that exceeds its account budget", async () => {

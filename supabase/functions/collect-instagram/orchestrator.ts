@@ -1,11 +1,15 @@
 import { MetaApiError } from "./meta_client.ts";
+import { cacheMediaAssets } from "./media_cache.ts";
 import { RepositoryError } from "./repository.ts";
 import type {
   AccountCollectionResult,
   AccountFailureCategory,
   AccountRepository,
   CollectionRunSummary,
-  CollectionSummary,
+  CoreCollectionResult,
+  MediaAssetRepository,
+  MediaStorage,
+  MediaWorkItem,
   SourceAccount,
 } from "./types.ts";
 
@@ -27,8 +31,17 @@ export interface RunInstagramCollectionOptions {
     account: SourceAccount,
     collectedAt: Date,
     signal: AbortSignal,
-  ) => Promise<CollectionSummary>;
+  ) => Promise<CoreCollectionResult>;
+  mediaRepository?: MediaAssetRepository;
+  mediaStorage?: MediaStorage;
+  mediaConcurrency?: number;
+  mediaLimitPerRun?: number;
   now?: () => number;
+}
+
+interface CoreWorkerResult {
+  account: AccountCollectionResult;
+  mediaWork?: MediaWorkItem;
 }
 
 export async function mapWithConcurrency<T, R>(
@@ -142,6 +155,18 @@ export async function runInstagramCollection(
   }
 
   const now = options.now ?? Date.now;
+  const mediaOptions = [
+    options.mediaRepository,
+    options.mediaStorage,
+    options.mediaConcurrency,
+    options.mediaLimitPerRun,
+  ];
+  if (
+    mediaOptions.some((value) => value !== undefined) &&
+    mediaOptions.some((value) => value === undefined)
+  ) {
+    throw new CollectionInputError();
+  }
   const deadline = now() + options.runBudgetMs;
   const activeAccounts = await options.accountRepository.listActive();
   const selectedAccounts = selectAccounts(
@@ -149,10 +174,10 @@ export async function runInstagramCollection(
     options.requestedSourceAccountIds,
   );
 
-  const accounts = await mapWithConcurrency(
+  const coreResults = await mapWithConcurrency(
     selectedAccounts,
     options.concurrency,
-    async (account): Promise<AccountCollectionResult> => {
+    async (account): Promise<CoreWorkerResult> => {
       if (now() >= deadline) {
         const category = "run_budget_exhausted";
         await recordFailureSafely(
@@ -161,7 +186,7 @@ export async function runInstagramCollection(
           options.collectedAt,
           category,
         );
-        return failedResult(account.id, category);
+        return { account: failedResult(account.id, category) };
       }
 
       const controller = new AbortController();
@@ -177,13 +202,16 @@ export async function runInstagramCollection(
           controller.signal,
         );
         return {
-          sourceAccountId: account.id,
-          status: "success",
-          insertedPosts: result.insertedPosts,
-          updatedPosts: result.updatedPosts,
-          insertedSnapshots: result.insertedSnapshots,
-          assetsStored: 0,
-          assetsFailed: 0,
+          account: {
+            sourceAccountId: account.id,
+            status: "success",
+            insertedPosts: result.summary.insertedPosts,
+            updatedPosts: result.summary.updatedPosts,
+            insertedSnapshots: result.summary.insertedSnapshots,
+            assetsStored: 0,
+            assetsFailed: 0,
+          },
+          mediaWork: result.mediaWork,
         };
       } catch (error) {
         const category = failureCategory(error, controller.signal);
@@ -193,12 +221,43 @@ export async function runInstagramCollection(
           options.collectedAt,
           category,
         );
-        return failedResult(account.id, category);
+        return { account: failedResult(account.id, category) };
       } finally {
         clearTimeout(timeoutId);
       }
     },
   );
+
+  const accounts = coreResults.map((result) => result.account);
+  if (
+    options.mediaRepository !== undefined &&
+    options.mediaStorage !== undefined &&
+    options.mediaConcurrency !== undefined &&
+    options.mediaLimitPerRun !== undefined
+  ) {
+    try {
+      const media = await cacheMediaAssets({
+        workItems: coreResults.flatMap((result) =>
+          result.mediaWork === undefined ? [] : [result.mediaWork]
+        ),
+        repository: options.mediaRepository,
+        storage: options.mediaStorage,
+        concurrency: options.mediaConcurrency,
+        limit: options.mediaLimitPerRun,
+        deadlineAt: deadline,
+        now,
+      });
+      for (const account of accounts) {
+        const counts = media.bySourceAccountId[account.sourceAccountId];
+        if (counts !== undefined) {
+          account.assetsStored = counts.assetsStored;
+          account.assetsFailed = counts.assetsFailed;
+        }
+      }
+    } catch {
+      // Auxiliary media work must never replace completed core results.
+    }
+  }
 
   return {
     accountsRequested: accounts.length,

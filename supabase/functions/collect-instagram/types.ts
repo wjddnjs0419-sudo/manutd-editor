@@ -44,6 +44,15 @@ export interface PendingMediaAsset {
   rawPostId: string;
   externalMediaId: string;
   assetType: MediaAssetType;
+  carouselIndex: number | null;
+  originalMediaUrl: string;
+}
+
+export interface PreparedMediaAsset {
+  rawPostId: string;
+  externalMediaId: string;
+  assetType: MediaAssetType;
+  carouselIndex: number | null;
   originalMediaUrl: string;
 }
 
@@ -160,4 +169,26 @@ export interface AccountRepository {
     category: AccountFailureCategory;
     markUnsupported: boolean;
   }): Promise<void>;
+}
+
+export interface MediaAssetRepository {
+  prepareMediaAssets(
+    sourceAccountId: string,
+    assets: PreparedMediaAsset[],
+  ): Promise<PendingMediaAsset[]>;
+  finalizeMediaAssets(
+    sourceAccountId: string,
+    assets: StoredMediaAsset[],
+  ): Promise<number>;
+}
+
+export interface MediaWorkItem {
+  sourceAccountId: string;
+  batch: NormalizedBatch;
+  ingestedPosts: IngestedPost[];
+}
+
+export interface CoreCollectionResult {
+  summary: CollectionSummary;
+  mediaWork: MediaWorkItem;
 }

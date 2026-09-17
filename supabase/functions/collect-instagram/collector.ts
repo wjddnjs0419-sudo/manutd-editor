@@ -1,6 +1,7 @@
 import { normalizeBusinessDiscovery } from "./normalizer.ts";
 import type {
   CollectionSummary,
+  CoreCollectionResult,
   IngestRepository,
   MetaClient,
   SourceAccount,
@@ -16,7 +17,7 @@ export interface CollectInstagramDependencies {
 
 export async function collectInstagram(
   dependencies: CollectInstagramDependencies,
-): Promise<CollectionSummary> {
+): Promise<CoreCollectionResult> {
   const rawPayload = await dependencies.metaClient.fetchAccount(
     dependencies.sourceAccount.username,
     { signal: dependencies.signal },
@@ -31,10 +32,18 @@ export async function collectInstagram(
     batch,
   );
 
-  return {
+  const summary: CollectionSummary = {
     username: dependencies.sourceAccount.username,
     ...persisted,
     receivedMedia: batch.receivedMedia,
     deduplicatedMedia: batch.posts.length,
+  };
+  return {
+    summary,
+    mediaWork: {
+      sourceAccountId: dependencies.sourceAccount.id,
+      batch,
+      ingestedPosts: persisted.posts,
+    },
   };
 }

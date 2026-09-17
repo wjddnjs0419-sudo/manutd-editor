@@ -4,8 +4,13 @@ import type {
   IngestRepository,
   IngestResult,
   JsonObject,
+  MediaAssetRepository,
+  MediaAssetType,
   NormalizedBatch,
+  PendingMediaAsset,
+  PreparedMediaAsset,
   SourceAccount,
+  StoredMediaAsset,
 } from "./types.ts";
 
 export type RepositoryErrorCode =
@@ -31,7 +36,10 @@ export interface IngestRepositoryConfig {
   sleep?: (milliseconds: number) => Promise<void>;
 }
 
-export type InstagramRepository = IngestRepository & AccountRepository;
+export type InstagramRepository =
+  & IngestRepository
+  & AccountRepository
+  & MediaAssetRepository;
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -153,6 +161,76 @@ async function decodeResult(response: Response): Promise<IngestResult> {
   };
 }
 
+function mediaAssetType(value: unknown): MediaAssetType | null {
+  return value === "IMAGE" || value === "CAROUSEL_CHILD" ||
+      value === "THUMBNAIL"
+    ? value
+    : null;
+}
+
+function decodePendingAsset(
+  value: unknown,
+  status: number,
+): PendingMediaAsset {
+  if (!isObject(value)) throw invalidResponse(status);
+  const assetType = mediaAssetType(value.asset_type);
+  const carouselIndex = value.carousel_index === null
+    ? null
+    : Number.isSafeInteger(value.carousel_index) &&
+        (value.carousel_index as number) >= 0
+    ? value.carousel_index as number
+    : undefined;
+  let url: URL;
+  try {
+    url = new URL(String(value.original_media_url));
+  } catch {
+    throw invalidResponse(status);
+  }
+  if (
+    typeof value.media_asset_id !== "string" ||
+    !UUID_PATTERN.test(value.media_asset_id) ||
+    typeof value.raw_post_id !== "string" ||
+    !UUID_PATTERN.test(value.raw_post_id) ||
+    typeof value.external_media_id !== "string" ||
+    value.external_media_id.trim() === "" || assetType === null ||
+    carouselIndex === undefined || url.protocol !== "https:"
+  ) {
+    throw invalidResponse(status);
+  }
+  return {
+    mediaAssetId: value.media_asset_id,
+    rawPostId: value.raw_post_id,
+    externalMediaId: value.external_media_id,
+    assetType,
+    carouselIndex,
+    originalMediaUrl: value.original_media_url as string,
+  };
+}
+
+async function decodePending(response: Response): Promise<PendingMediaAsset[]> {
+  const value = await parseJson(response);
+  if (!isObject(value) || !Array.isArray(value.pending)) {
+    throw invalidResponse(response.status);
+  }
+  const assets = value.pending.map((asset) =>
+    decodePendingAsset(asset, response.status)
+  );
+  if (
+    new Set(assets.map((asset) => asset.mediaAssetId)).size !== assets.length
+  ) {
+    throw invalidResponse(response.status);
+  }
+  return assets;
+}
+
+async function decodeFinalized(response: Response): Promise<number> {
+  const value = await parseJson(response);
+  if (!isObject(value)) throw invalidResponse(response.status);
+  const finalized = requiredCount(value.finalized);
+  if (finalized === null) throw invalidResponse(response.status);
+  return finalized;
+}
+
 export function createIngestRepository(
   config: IngestRepositoryConfig,
 ): InstagramRepository {
@@ -248,6 +326,53 @@ export function createIngestRepository(
         },
       );
       await response.body?.cancel();
+    },
+
+    async prepareMediaAssets(
+      sourceAccountId: string,
+      assets: PreparedMediaAsset[],
+    ): Promise<PendingMediaAsset[]> {
+      const response = await request(
+        "/rest/v1/rpc/prepare_instagram_media_assets",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            p_source_account_id: sourceAccountId,
+            p_assets: assets.map((asset) => ({
+              raw_post_id: asset.rawPostId,
+              external_media_id: asset.externalMediaId,
+              asset_type: asset.assetType,
+              carousel_index: asset.carouselIndex,
+              original_media_url: asset.originalMediaUrl,
+            })),
+          }),
+        },
+      );
+      return await decodePending(response);
+    },
+
+    async finalizeMediaAssets(
+      sourceAccountId: string,
+      assets: StoredMediaAsset[],
+    ): Promise<number> {
+      const response = await request(
+        "/rest/v1/rpc/finalize_instagram_media_assets",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            p_source_account_id: sourceAccountId,
+            p_assets: assets.map((asset) => ({
+              media_asset_id: asset.mediaAssetId,
+              storage_path: asset.storagePath,
+              mime_type: asset.mimeType,
+              fetched_at: asset.fetchedAt,
+            })),
+          }),
+        },
+      );
+      return await decodeFinalized(response);
     },
   };
 }

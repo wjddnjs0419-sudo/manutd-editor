@@ -34,6 +34,7 @@ const batch: NormalizedBatch = {
       followersCountAtCollection: 250_000,
       postAgeMinutes: 30,
       rawPayload: { id: "image-1", media_type: "IMAGE" },
+      assets: [],
     },
   ],
   collectedAt: "2026-09-17T01:00:00.000Z",
@@ -206,6 +207,139 @@ Deno.test("records only a safe probe failure category", async () => {
   const headers = new Headers(requestInit?.headers);
   assert.equal(headers.get("apikey"), "sb_secret_test_value");
   assert.equal(headers.get("authorization"), null);
+});
+
+Deno.test("prepares and finalizes media assets through exact RPC contracts", async () => {
+  const requests: Array<{ url: string; body: unknown }> = [];
+  const mediaAssetId = "00000000-0000-4000-8000-000000000010";
+  const rawPostId = "00000000-0000-4000-8000-000000000002";
+  const repository = createIngestRepository({
+    supabaseUrl: "http://127.0.0.1:55321",
+    secretKey: "sb_secret_test_value",
+    fetch: (input, init) => {
+      requests.push({
+        url: String(input),
+        body: JSON.parse(
+          String((init as globalThis.RequestInit | undefined)?.body),
+        ),
+      });
+      return Promise.resolve(
+        requests.length === 1
+          ? jsonResponse({
+            pending: [{
+              media_asset_id: mediaAssetId,
+              raw_post_id: rawPostId,
+              external_media_id: "image-1",
+              asset_type: "IMAGE",
+              carousel_index: null,
+              original_media_url: "https://cdn.example/image-1.jpg",
+            }],
+          })
+          : jsonResponse({ finalized: 1 }),
+      );
+    },
+    sleep: () => Promise.resolve(),
+  });
+
+  const pending = await repository.prepareMediaAssets(sourceAccountId, [{
+    rawPostId,
+    externalMediaId: "image-1",
+    assetType: "IMAGE",
+    carouselIndex: null,
+    originalMediaUrl: "https://cdn.example/image-1.jpg",
+  }]);
+  const finalized = await repository.finalizeMediaAssets(sourceAccountId, [{
+    mediaAssetId,
+    storagePath: "instagram/account/post/image-1.jpg",
+    mimeType: "image/jpeg",
+    fetchedAt: "2026-09-17T03:00:00.000Z",
+  }]);
+
+  assert.deepEqual(pending, [{
+    mediaAssetId,
+    rawPostId,
+    externalMediaId: "image-1",
+    assetType: "IMAGE",
+    carouselIndex: null,
+    originalMediaUrl: "https://cdn.example/image-1.jpg",
+  }]);
+  assert.equal(finalized, 1);
+  assert.deepEqual(requests, [
+    {
+      url: "http://127.0.0.1:55321/rest/v1/rpc/prepare_instagram_media_assets",
+      body: {
+        p_source_account_id: sourceAccountId,
+        p_assets: [{
+          raw_post_id: rawPostId,
+          external_media_id: "image-1",
+          asset_type: "IMAGE",
+          carousel_index: null,
+          original_media_url: "https://cdn.example/image-1.jpg",
+        }],
+      },
+    },
+    {
+      url: "http://127.0.0.1:55321/rest/v1/rpc/finalize_instagram_media_assets",
+      body: {
+        p_source_account_id: sourceAccountId,
+        p_assets: [{
+          media_asset_id: mediaAssetId,
+          storage_path: "instagram/account/post/image-1.jpg",
+          mime_type: "image/jpeg",
+          fetched_at: "2026-09-17T03:00:00.000Z",
+        }],
+      },
+    },
+  ]);
+});
+
+Deno.test("rejects malformed or duplicate pending media rows", async () => {
+  const mediaAssetId = "00000000-0000-4000-8000-000000000010";
+  const rawPostId = "00000000-0000-4000-8000-000000000002";
+  for (
+    const pending of [
+      [{
+        media_asset_id: "not-a-uuid",
+        raw_post_id: rawPostId,
+        external_media_id: "image-1",
+        asset_type: "IMAGE",
+        carousel_index: null,
+        original_media_url: "https://cdn.example/image-1.jpg",
+      }],
+      [
+        {
+          media_asset_id: mediaAssetId,
+          raw_post_id: rawPostId,
+          external_media_id: "image-1",
+          asset_type: "IMAGE",
+          carousel_index: null,
+          original_media_url: "https://cdn.example/image-1.jpg",
+        },
+        {
+          media_asset_id: mediaAssetId,
+          raw_post_id: rawPostId,
+          external_media_id: "image-2",
+          asset_type: "IMAGE",
+          carousel_index: null,
+          original_media_url: "https://cdn.example/image-2.jpg",
+        },
+      ],
+    ]
+  ) {
+    const repository = createIngestRepository({
+      supabaseUrl: "http://127.0.0.1:55321",
+      secretKey: "sb_secret_test_value",
+      fetch: () => Promise.resolve(jsonResponse({ pending })),
+      sleep: () => Promise.resolve(),
+    });
+
+    await assert.rejects(
+      repository.prepareMediaAssets(sourceAccountId, []),
+      (error: unknown) =>
+        error instanceof RepositoryError &&
+        error.code === "DATABASE_INVALID_RESPONSE",
+    );
+  }
 });
 
 Deno.test("retries one ambiguous 5xx response and returns the second result", async () => {

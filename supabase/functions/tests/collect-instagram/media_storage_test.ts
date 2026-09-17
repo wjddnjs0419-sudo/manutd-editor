@@ -11,6 +11,7 @@ const asset: PendingMediaAsset = {
   rawPostId: "00000000-0000-4000-8000-000000000011",
   externalMediaId: "image-1",
   assetType: "IMAGE",
+  carouselIndex: null,
   originalMediaUrl: "https://cdn.example/image-1.jpg?temporary=secret",
 };
 const context = {

@@ -73,17 +73,27 @@ Deno.test("collects, normalizes, persists, and summarizes one account batch", as
   });
 
   assert.deepEqual(result, {
-    username: "utdreport",
-    accountId: sourceAccount.id,
-    receivedMedia: 1,
-    deduplicatedMedia: 1,
-    insertedPosts: 1,
-    updatedPosts: 0,
-    insertedSnapshots: 1,
-    posts: [{
-      externalPostId: "image-1",
-      rawPostId: "00000000-0000-4000-8000-000000000002",
-    }],
+    summary: {
+      username: "utdreport",
+      accountId: sourceAccount.id,
+      receivedMedia: 1,
+      deduplicatedMedia: 1,
+      insertedPosts: 1,
+      updatedPosts: 0,
+      insertedSnapshots: 1,
+      posts: [{
+        externalPostId: "image-1",
+        rawPostId: "00000000-0000-4000-8000-000000000002",
+      }],
+    },
+    mediaWork: {
+      sourceAccountId: sourceAccount.id,
+      batch: savedBatches[0],
+      ingestedPosts: [{
+        externalPostId: "image-1",
+        rawPostId: "00000000-0000-4000-8000-000000000002",
+      }],
+    },
   });
   assert.deepEqual(savedAccountIds, [sourceAccount.id]);
   assert.equal(receivedSignal, controller.signal);
