@@ -21,7 +21,8 @@
 - GLOBAL↔KR unresolved/manual review가 있으면 korea_coverage_status=UNCERTAIN, korea_gap_score=0, FIRST_MOVER=false이다.
 - Deterministic thresholds는 same >=0.85, different <=0.40, ambiguity (0.40,0.85)이다.
 - AI merge/separate는 confidence>=0.90에서만 허용한다.
-- Korean Saturation은 K를 공식에 넣지 않으며 KR post와 valid ER이 없으면 score 0이다.
+- Korean Saturation은 K를 공식에 넣지 않으며 KR post가 있고 valid KR outperformance ratio가 없으면 score 0이다.
+- Global Momentum ratio는 post-level → per-account median → account priority_weight weighted median의 2단계 aggregation을 사용한다.
 - Baseline fallback은 account+media+age(n>=5), account+age(n>=5), region cohort+media+age(n>=20), unavailable 순서다.
 - Missing component는 weight redistribution 없이 0으로 처리하고 Data Confidence만 낮춘다.
 - Lease와 heartbeat는 STORY_INTELLIGENCE_LEASE_SECONDS(기본 300, 허용 60~1800), STORY_INTELLIGENCE_HEARTBEAT_SECONDS(기본 30, lease 절반 미만)으로 설정한다.
@@ -83,10 +84,10 @@ supabase seed buckets
 supabase test db
 ~~~
 
-- [ ] Add signature_json/signature_version, candidate score_version/korea_coverage_status, private evaluation table, singleton lease table, constraints, RLS, schema grants, and pair/version/hash unique key.
+- [ ] Add signature_json/signature_version, candidate score_version/korea_coverage_status, private evaluation table, singleton lease table, constraints, RLS, schema grants, and raw-post/candidate-cluster/version/hash unique key.
 - [ ] Add trigger validation that candidate score_version equals referenced scoring config version.
 - [ ] Implement invoker lease RPCs with atomic expiry predicate; membership RPC locks post and cluster, enforces one raw_post_id membership, and updates signature in the same transaction.
-- [ ] Implement deterministic SQL score functions for all curves, eligible denominators, KR completeness/uncertainty, K-free saturation, baseline sample factor, seven confidence factors, flags, and candidate upsert.
+- [ ] Implement deterministic SQL score functions for all curves, eligible denominators, two-stage GLOBAL/KR aggregation, KR completeness/uncertainty, K-free saturation, baseline sample factor, seven confidence factors, flags, and candidate upsert.
 - [ ] Seed M4 config and run supabase test db plus local DB lint.
 - [ ] Commit with message feat: add milestone 4 intelligence schema and score functions.
 
@@ -109,7 +110,7 @@ supabase test db
 - [ ] Run Deno focused tests and confirm missing implementations fail.
 - [ ] Implement strict parsing for STORY_CLUSTER_AI_ENABLED, model, prompt version, dictionary version, lease seconds, and heartbeat seconds. Reject lease outside 60–1800 seconds or heartbeat below 10 seconds/at least half the lease without echoing values.
 - [ ] Implement versioned bilingual dictionary and feature extraction. Unknown tokens remain unknown.
-- [ ] Implement stable-key-order SHA-256 hashing for canonical classifier JSON and post-pair ordering.
+- [ ] Implement stable-key-order SHA-256 hashing for canonical classifier JSON containing the raw post and aggregate candidate-cluster signature; do not canonicalize post pairs.
 - [ ] Run focused tests and commit with message feat: add intelligence config and bilingual features.
 
 ~~~bash
@@ -155,7 +156,7 @@ docker run --rm -v "$PWD/supabase:/workspace" -w /workspace denoland/deno:2.1.4 
 - [ ] Add timeout, 429/5xx, malformed JSON, missing field, low confidence, and oversized reason tests.
 - [ ] Implement normalized-only structured request and response validation.
 - [ ] Map only confidence>=0.90 same/separate to automatic decisions; all other outcomes are manual review/error.
-- [ ] Persist canonical pair ids, model, prompt version, dictionary version, classifier version, hash/snapshot, result, confidence, and evaluated time using unique conflict handling.
+- [ ] Persist evaluation identity as raw_post_id + candidate_cluster_id, with unique key raw_post_id + candidate_cluster_id + classifier_version + input_hash. Store model, prompt version, dictionary version, hash/snapshot, result, confidence, and evaluated time; cluster signature/member changes must alter input_hash.
 - [ ] Run focused tests and commit with message feat: add conservative AI ambiguity resolution.
 
 ### Task 5: Repository and idempotent orchestrator
@@ -176,9 +177,9 @@ docker run --rm -v "$PWD/supabase:/workspace" -w /workspace denoland/deno:2.1.4 
 - [ ] Add tests for lease contention, expired lease takeover, heartbeat scheduling, eligible account observation, partial account failures, rerun idempotency, manual review, and score invocation.
 - [ ] Implement recent-post, eligible-account, source-registry, signature, evaluation, and RPC repository queries. Keep api_supported NULL/false outside denominators and record their ids.
 - [ ] Acquire lease before processing, renew using parsed config, release in finally, and return already_running without processing when busy.
-- [ ] Process features, pre-filter, aggregate signatures, AI ambiguity, membership/audit, source aggregates, and SQL scoring in that order.
+- [ ] Process features, pre-filter, aggregate signatures, AI ambiguity, membership/audit, source aggregates, two-stage GLOBAL/KR ratio aggregation, and SQL scoring in that order.
 - [ ] Set KNOWN only when eligible KR completeness is 1.0 and no unresolved GLOBAL↔KR evaluation exists; otherwise set UNCERTAIN and force gap score 0/FIRST_MOVER false at SQL boundary.
-- [ ] Apply OPEN/ACTIVE/STALE/ARCHIVED lifecycle transitions from first_seen_at, last_seen_at, member count, and the 6-hour/7-day rules before candidate calculation.
+- [ ] Apply lifecycle precedence exactly: manual archive → ARCHIVED; else last_seen >7d → ARCHIVED; else last_seen >6h → STALE; else recent state with member_count>=2 → ACTIVE; otherwise OPEN.
 - [ ] Expose get_todays_candidates with deterministic rank ordering and component/coverage/status fields for later Notion and Telegram consumers.
 - [ ] Run focused tests and commit with message feat: orchestrate idempotent intelligence runs.
 
@@ -245,7 +246,7 @@ Expected: all pgTAP/Deno tests pass, DB lint and workflow validation pass, and s
 **Files:** all M4 files above.
 
 - [ ] Run git diff --check and scan tracked files for secret values.
-- [ ] Map every spec requirement to a test or smoke assertion, especially KR gate, uncertainty, model-aware dedupe, aggregate signature, exact confidence factors, and lease config bounds.
+- [ ] Map every spec requirement to a test or smoke assertion, especially two-stage GLOBAL/KR aggregation, KR gate, uncertainty, model-aware evaluation identity, aggregate signature, lifecycle precedence, exact confidence factors, and lease config bounds.
 - [ ] Re-run complete tests from a clean local reset.
 - [ ] Confirm branch diff excludes Notion, Telegram, Creative Brief, Figma, score history, and unrelated refactors.
 - [ ] Present branch, commits, test counts, smoke summary, and known manual-review items.

@@ -1,7 +1,7 @@
 # MU Content Intelligence System — Milestone 4 설계
 
 - 작성일: 2026-09-18
-- 상태: 구현 계획 승인 대기 (구현 전)
+- 상태: 설계 승인됨 (구현 전)
 - 대상 branch: `milestone-4-content-intelligence`
 - 언어: 한국어
 
@@ -187,7 +187,7 @@ flag가 false이면 ambiguity pair는 전부 manual review다.
 
 ~~~text
 raw_post_id
-candidate_cluster_id nullable
+candidate_cluster_id
 deterministic_score
 decision (SAME_STORY|DIFFERENT_STORY|MANUAL_REVIEW|ERROR)
 same_story nullable
@@ -206,7 +206,8 @@ resolved_cluster_id nullable
 resolved_at nullable
 ~~~
 
-pair의 post id는 작은 UUID가 앞에 오도록 canonicalize한다. 동일 pair·동일
+evaluation identity는 post↔candidate cluster 관계이므로 post pair를
+canonicalize하지 않는다. 동일 candidate 관계에서
 `classifier_version`·동일 input hash는 unique하게 저장한다.
 `classifier_version`은 다음 세 값을 결합한 문자열이다.
 
@@ -214,9 +215,16 @@ pair의 post id는 작은 UUID가 앞에 오도록 canonicalize한다. 동일 pa
 model + prompt_version + dictionary_version
 ~~~
 
-따라서 model이 바뀌면 같은 input/prompt라도 새 평가가 가능하다.
 `model`, `prompt_version`, `dictionary_version`은 별도 column으로도 저장한다.
-`raw_posts` 변경이나 dictionary 변경으로 hash가 바뀌면 새 평가로 남긴다.
+`raw_posts` 변경, cluster signature/member 변화, 또는 dictionary 변경으로
+hash가 바뀌면 새 평가로 남긴다. evaluation identity와 unique key는 다음과
+같다.
+
+~~~text
+identity = (raw_post_id, candidate_cluster_id)
+unique   = (raw_post_id, candidate_cluster_id,
+            classifier_version, input_hash)
+~~~
 
 manual resolution은 service-role 전용 `reassign_story_cluster_post` RPC를
 사용한다. 잘못 merge된 post를 분리할 때는 새 cluster를 만들고 membership을
@@ -224,10 +232,20 @@ manual resolution은 service-role 전용 `reassign_story_cluster_post` RPC를
 
 ## 9. Cluster lifecycle
 
-- OPEN: member 1개이고 최초 감지 후 6시간 이내
-- ACTIVE: member 2개 이상이거나 최근 6시간 이내 유효 coverage가 추가됨
-- STALE: `last_seen_at`이 6시간 초과이고 7일 이내
-- ARCHIVED: `last_seen_at`이 7일 초과 또는 명시적 archive
+lifecycle은 다음 precedence를 위에서 아래로 평가한다.
+
+~~~text
+1. manual archive                   → ARCHIVED
+2. last_seen_at > 7 days            → ARCHIVED
+3. last_seen_at > 6 hours           → STALE
+4. recent state AND member_count>=2 → ACTIVE
+5. otherwise                        → OPEN
+~~~
+
+manual archive는 자동 transition보다 우선하며 한 번 ARCHIVED된 cluster는
+재오픈하지 않는다. recent state는 last_seen_at >= run_at - 6 hours이다.
+OPEN은 새로 발견된 single-member cluster를 포함하고, ACTIVE는 recent state에서
+member가 2개 이상인 cluster다.
 
 Candidate 계산 window는 lifecycle과 독립적으로 `first_seen_at <= 24h`로
 제한한다. ARCHIVED cluster는 계산에서 제외한다.
@@ -260,6 +278,25 @@ column을 유지한다.
 | Source Diversity | 5 | 1→1, 2→3, 3+→5 |
 | Freshness | 10 | 기존 story age curve |
 
+### Global Momentum aggregation
+
+Engagement Outperformance, Engagement Velocity, Velocity Acceleration은
+eligible GLOBAL accounts의 데이터만 사용한다. 동일 account가 한 cluster에
+여러 post를 가지더라도 account weight가 post 수만큼 증가하지 않도록 다음
+2단계 aggregation을 적용한다.
+
+~~~text
+post-level ratio
+  → per-account median
+  → account priority_weight weighted median
+~~~
+
+즉 각 eligible GLOBAL account에서 먼저 cluster member post들의 ratio median을
+계산하고, 그 account medians를 priority_weight로 weighted median한다. 이
+cluster-level GLOBAL aggregate를 FIRST_MOVER의 velocity_ratio와 MUST_COVER의
+outperformance_ratio에도 동일하게 사용한다. GLOBAL post가 없거나 valid ratio가
+없으면 해당 component는 0이고, 관련 flag는 false다.
+
 ### Baseline과 outperformance
 
 baseline fallback은 다음 순서와 최소 sample로 고정한다.
@@ -274,8 +311,8 @@ baseline fallback은 다음 순서와 최소 sample로 고정한다.
 median을 사용하고, fallback level과 sample count를 모두 audit한다.
 
 outperformance curve는 `0.5x→0, 1.0x→3, 1.5x→6, 2.0x→9, 2.5x→12`이다.
-여러 member account는 maximum이 아니라 priority weight weighted median을
-사용한다.
+account별 median을 먼저 계산한 뒤 account priority_weight weighted median을
+사용하며, maximum은 사용하지 않는다.
 
 velocity curve는 `0.5x→0, 1.0x→2.5, 1.5x→5, 2.0x→7.5, 2.5x→10`이다.
 이전 interval velocity와 baseline velocity가
@@ -367,14 +404,16 @@ Coverage Gap과 First-Mover가 한국 미커버를 담당하므로 saturation �
 `K`를 제거한다.
 
 ~~~text
-KR post가 1개 이상이고 valid KR ER이 존재:
-  normalized = clamp(weighted_median(KR outperformance ratio) / 2.5, 0, 1)
+KR post가 1개 이상이고 valid KR outperformance ratio가 존재:
+  account별 KR post ratio median
+  → account priority_weight weighted median
+  normalized = clamp(weighted_median(KR account medians) / 2.5, 0, 1)
   korean_saturation_score = 10 × (1 - normalized)
 
 KR post가 0개:
   korean_saturation_score = 0 (unavailable)
 
-KR post는 있으나 valid ER이 없음:
+KR post는 있으나 valid KR outperformance ratio가 없음:
   korean_saturation_score = 0 (conservative unavailable)
 ~~~
 
@@ -594,7 +633,7 @@ lock이 사용 중이면 already_running을 반환하고 즉시 종료한다.
 동시 실행 보호는 lease만으로 끝내지 않고 다음 unique/upsert를 함께 사용한다.
 
 - `story_cluster_posts.raw_post_id` unique
-- AI evaluation pair + classifier version + input hash unique
+- AI evaluation raw-post/candidate-cluster identity + classifier version + input hash unique
 - `content_candidates(story_cluster_id, ranking_date, scoring_config_id)` unique
 - cluster signature와 aggregate 갱신의 atomic membership RPC
 
@@ -700,6 +739,6 @@ M4 완료는 다음을 모두 만족해야 한다.
 - unit/cluster/pgTAP/Deno/DB lint/n8n 검증
 - M3 실제 데이터 TOP 5 smoke 및 human sanity check
 
-이 문서는 설계 단계의 산출물이며, 승인 후 별도의 implementation plan을
-작성한다. 이 문서만으로는 migration, Edge Function, n8n workflow를 생성하지
+이 문서는 승인된 설계 산출물이며, 구현은 별도의 implementation plan에 따라
+진행한다. 이 문서만으로는 migration, Edge Function, n8n workflow를 생성하지
 않는다.
