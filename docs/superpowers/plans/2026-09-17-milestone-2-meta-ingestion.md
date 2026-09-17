@@ -14,10 +14,10 @@
 
 - The only account collected in Milestone 2 is `utdreport`.
 - Do not implement the n8n workflow, scheduling, multi-account collection, pagination, carousel-child persistence, or later metric snapshots.
-- n8n must never receive `SUPABASE_SERVICE_ROLE_KEY`; callers authenticate with `COLLECTOR_INVOKE_SECRET`.
+- n8n must never receive a Supabase secret key; callers authenticate with `COLLECTOR_INVOKE_SECRET`.
 - The RPC must be `SECURITY INVOKER`, use an empty search path and fully qualified names, revoke execution from `PUBLIC`, `anon`, and `authenticated`, and grant execution only to `service_role`.
 - A malformed or unsupported post fails the whole Milestone 2 batch; preserve the normalizer boundary so Milestone 3 can quarantine individual rejected items.
-- Never log or return authorization headers, Meta tokens, service-role keys, or complete upstream error bodies.
+- Never log or return authorization headers, Meta tokens, Supabase secret keys, or complete upstream error bodies.
 - Request `IMAGE`, `CAROUSEL_ALBUM`, and Reel (`VIDEO` plus `REELS`) media; Reel views remain nullable.
 - Use tests first and observe each new test fail for the intended missing behavior before implementing it.
 
@@ -239,7 +239,7 @@ git commit -m "feat: normalize Meta media batches"
 - Create: `supabase/functions/tests/collect-instagram/repository_test.ts`
 
 **Interfaces:**
-- Consumes: injected `fetch`, sleep, random, Meta configuration, Supabase URL, and service-role key.
+- Consumes: injected `fetch`, sleep, random, Meta configuration, Supabase URL, and secret key.
 - Produces: `createMetaClient(config): MetaClient` and `createIngestRepository(config): IngestRepository`.
 
 - [ ] **Step 1: Write Meta client tests first**
@@ -264,8 +264,8 @@ Test the real PostgREST request builder through injected fetch:
 ```typescript
 assert.equal(url, `${supabaseUrl}/rest/v1/rpc/ingest_instagram_batch`);
 assert.equal(init.method, 'POST');
-assert.equal(init.headers.apikey, serviceRoleKey);
-assert.equal(init.headers.Authorization, `Bearer ${serviceRoleKey}`);
+assert.equal(init.headers.apikey, secretKey);
+assert.equal(init.headers.Authorization, undefined);
 assert.deepEqual(JSON.parse(init.body), {
   p_username: 'utdreport',
   p_account: expectedAccount,
@@ -343,7 +343,7 @@ META_ACCESS_TOKEN
 META_BUSINESS_ACCOUNT_ID
 META_API_VERSION
 SUPABASE_URL
-SUPABASE_SERVICE_ROLE_KEY
+SUPABASE_SECRET_KEYS
 ```
 
 Wire the real adapters into `Deno.serve`, fix the username to `utdreport`, and keep the media limit bounded.
@@ -370,7 +370,7 @@ Expected: zero failures.
 
 - [ ] **Step 7: Update operator documentation**
 
-Replace ambiguous legacy Meta names in `.env.example` with the six required variables while retaining unrelated future-service entries. Update `README.md` with architecture, supported media, RPC atomicity/idempotency, service-role isolation from n8n, local secret setup and invocation, test commands, the M2 fail-fast limitation, and the M3 quarantine/n8n boundary.
+Replace ambiguous legacy Meta names in `.env.example` with the six required variables while retaining unrelated future-service entries. Update `README.md` with architecture, supported media, RPC atomicity/idempotency, Supabase secret-key isolation from n8n, local secret setup and invocation, test commands, the M2 fail-fast limitation, and the M3 quarantine/n8n boundary.
 
 - [ ] **Step 8: Commit the endpoint and docs**
 
