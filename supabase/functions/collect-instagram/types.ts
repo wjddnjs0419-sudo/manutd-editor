@@ -126,6 +126,7 @@ export interface CollectionSummary extends IngestResult {
 
 export interface AccountCollectionResult {
   sourceAccountId: string;
+  username?: string;
   status: "success" | "failed";
   errorCategory?: AccountFailureCategory;
   insertedPosts: number;

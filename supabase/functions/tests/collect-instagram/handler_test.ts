@@ -19,6 +19,7 @@ const summary: CollectionRunSummary = {
   accounts: [
     {
       sourceAccountId: validUuid1,
+      username: "utdreport",
       status: "success",
       insertedPosts: 3,
       updatedPosts: 2,
@@ -28,6 +29,7 @@ const summary: CollectionRunSummary = {
     },
     {
       sourceAccountId: validUuid2,
+      username: "utddistrict",
       status: "failed",
       errorCategory: "permission",
       insertedPosts: 0,
@@ -204,8 +206,38 @@ Deno.test("returns a partial-failure aggregate as HTTP 200 with safe logs", asyn
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    requestId: "req-partial",
-    ...summary,
+    request_id: "req-partial",
+    accounts_requested: 2,
+    accounts_success: 1,
+    accounts_failed: 1,
+    posts_created: 3,
+    posts_updated: 2,
+    snapshots_created: 4,
+    assets_stored: 0,
+    assets_failed: 0,
+    accounts: [
+      {
+        source_account_id: validUuid1,
+        username: "utdreport",
+        status: "success",
+        posts_created: 3,
+        posts_updated: 2,
+        snapshots_created: 4,
+        assets_stored: 0,
+        assets_failed: 0,
+      },
+      {
+        source_account_id: validUuid2,
+        username: "utddistrict",
+        status: "failed",
+        error_category: "permission",
+        posts_created: 0,
+        posts_updated: 0,
+        snapshots_created: 0,
+        assets_stored: 0,
+        assets_failed: 0,
+      },
+    ],
   });
   assert.deepEqual(logs, [{
     requestId: "req-partial",

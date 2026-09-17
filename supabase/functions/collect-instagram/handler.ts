@@ -101,6 +101,33 @@ function failureCategories(
   return categories;
 }
 
+function collectionResponse(requestId: string, result: CollectionRunSummary) {
+  return {
+    request_id: requestId,
+    accounts_requested: result.accountsRequested,
+    accounts_success: result.accountsSuccess,
+    accounts_failed: result.accountsFailed,
+    posts_created: result.postsCreated,
+    posts_updated: result.postsUpdated,
+    snapshots_created: result.snapshotsCreated,
+    assets_stored: result.assetsStored,
+    assets_failed: result.assetsFailed,
+    accounts: result.accounts.map((account) => ({
+      source_account_id: account.sourceAccountId,
+      ...(account.username === undefined ? {} : { username: account.username }),
+      status: account.status,
+      ...(account.errorCategory === undefined
+        ? {}
+        : { error_category: account.errorCategory }),
+      posts_created: account.insertedPosts,
+      posts_updated: account.updatedPosts,
+      snapshots_created: account.insertedSnapshots,
+      assets_stored: account.assetsStored,
+      assets_failed: account.assetsFailed,
+    })),
+  };
+}
+
 export function createHandler(
   dependencies: HandlerDependencies,
 ): (request: Request) => Promise<Response> {
@@ -161,7 +188,7 @@ export function createHandler(
         assetsStored: result.assetsStored,
         assetsFailed: result.assetsFailed,
       });
-      return json({ requestId: id, ...result }, 200);
+      return json(collectionResponse(id, result), 200);
     } catch (error) {
       if (
         error instanceof InvalidRequestError ||

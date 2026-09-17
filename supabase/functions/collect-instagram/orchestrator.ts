@@ -72,10 +72,12 @@ export async function mapWithConcurrency<T, R>(
 
 function failedResult(
   sourceAccountId: string,
+  username: string,
   errorCategory: AccountFailureCategory,
 ): AccountCollectionResult {
   return {
     sourceAccountId,
+    username,
     status: "failed",
     errorCategory,
     insertedPosts: 0,
@@ -186,7 +188,9 @@ export async function runInstagramCollection(
           options.collectedAt,
           category,
         );
-        return { account: failedResult(account.id, category) };
+        return {
+          account: failedResult(account.id, account.username, category),
+        };
       }
 
       const controller = new AbortController();
@@ -204,6 +208,7 @@ export async function runInstagramCollection(
         return {
           account: {
             sourceAccountId: account.id,
+            username: account.username,
             status: "success",
             insertedPosts: result.summary.insertedPosts,
             updatedPosts: result.summary.updatedPosts,
@@ -221,7 +226,9 @@ export async function runInstagramCollection(
           options.collectedAt,
           category,
         );
-        return { account: failedResult(account.id, category) };
+        return {
+          account: failedResult(account.id, account.username, category),
+        };
       } finally {
         clearTimeout(timeoutId);
       }
