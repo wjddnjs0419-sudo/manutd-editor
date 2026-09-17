@@ -1,9 +1,9 @@
-import { normalizeBusinessDiscovery } from './normalizer.ts';
+import { normalizeBusinessDiscovery } from "./normalizer.ts";
 import type {
   CollectionSummary,
   IngestRepository,
   MetaClient,
-} from './types.ts';
+} from "./types.ts";
 
 export interface CollectInstagramDependencies {
   username: string;
@@ -15,7 +15,9 @@ export interface CollectInstagramDependencies {
 export async function collectInstagram(
   dependencies: CollectInstagramDependencies,
 ): Promise<CollectionSummary> {
-  const rawPayload = await dependencies.metaClient.fetchAccount(dependencies.username);
+  const rawPayload = await dependencies.metaClient.fetchAccount(
+    dependencies.username,
+  );
   const batch = normalizeBusinessDiscovery(
     rawPayload,
     dependencies.username,

@@ -2,7 +2,7 @@
 
 맨체스터 유나이티드 관련 Instagram 콘텐츠를 수집·분석하고, 객관적인 우선순위 점수와 실행 가능한 콘텐츠 브리프를 만드는 시스템입니다.
 
-현재 구현 범위는 **Milestone 1: Supabase/Postgres 데이터 기반**입니다. Meta 수집기, 스토리 클러스터링 실행 로직, 점수 계산 워커, OpenAI 분석, Telegram, Notion 동기화는 아직 구현하지 않았습니다.
+현재 구현 범위는 **Milestone 2: `@utdreport` Meta 수집 vertical slice**입니다. Supabase/Postgres 데이터 기반에 더해 Edge Function이 Meta Business Discovery 응답을 검증하고, 계정·원본 게시물·최초 메트릭 스냅숏을 원자적으로 저장합니다. 다계정 수집, n8n 스케줄링, 스토리 클러스터링, 점수 계산 워커, Notion 동기화는 아직 구현하지 않았습니다.
 
 ## 핵심 원칙
 
@@ -52,6 +52,50 @@ AI는 게시물에서 이 엔티티를 추출할 수 있지만, 숫자 신뢰도
 - 서버 전용 `service_role`만 CRUD를 수행합니다.
 - `SUPABASE_SERVICE_ROLE_KEY`는 브라우저나 공개 클라이언트에 절대 노출하지 않습니다.
 - 실제 키와 Meta 토큰은 커밋하지 않습니다. `.env.example`에는 빈 변수명만 제공합니다.
+
+## Milestone 2 수집 경로
+
+```text
+n8n Schedule (Milestone 3)
+  → collect-instagram Edge Function
+  → Meta Business Discovery API
+  → ingest_instagram_batch RPC
+  → source_accounts + raw_posts + post_metric_snapshots
+```
+
+현재 함수는 `utdreport`만 수집하며 caller가 계정명을 바꿀 수 없습니다. `IMAGE`, `CAROUSEL_ALBUM`, `VIDEO` + `REELS`를 처리하고, Meta가 Reel 조회수를 제공하지 않으면 `view_count`를 `NULL`로 보존합니다. 캐러셀 child는 `raw_payload`에는 남지만 별도 `media_assets` 행으로 만들지 않습니다.
+
+Meta 응답 전체가 검증된 후에만 RPC를 호출합니다. RPC는 계정 행을 잠그고 계정 업데이트, `raw_posts` upsert, 최초 snapshot 생성을 한 트랜잭션으로 수행합니다. `(source_account_id, external_post_id)`가 게시물 중복을 막고, 기존 snapshot 존재 여부가 재실행 시 최초 snapshot 중복을 막습니다.
+
+RPC는 `SECURITY INVOKER`이며 `PUBLIC`, `anon`, `authenticated`의 실행 권한을 제거하고 `service_role`에만 허용합니다. 외부 caller에는 service-role key를 주지 않습니다. Edge Function은 `verify_jwt = false`로 gateway JWT 검사를 사용하지 않는 대신 `Authorization: Bearer <COLLECTOR_INVOKE_SECRET>`을 함수 내부에서 timing-safe 방식으로 검증합니다.
+
+Milestone 2에서는 malformed/unsupported media 하나가 전체 batch를 실패시키는 것이 의도된 제한입니다. Milestone 3의 다계정 수집에서는 normalizer 경계를 유지한 채 rejected-item/quarantine 저장으로 바꿔, 항목 하나가 계정 전체나 다른 계정 수집을 막지 않게 합니다.
+
+### 환경 변수
+
+실제 값은 로컬의 무시된 env 파일이나 Supabase secrets에만 둡니다.
+
+```text
+COLLECTOR_INVOKE_SECRET
+META_ACCESS_TOKEN
+META_BUSINESS_ACCOUNT_ID
+META_API_VERSION
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+```
+
+n8n에는 이후 `COLLECTOR_INVOKE_SECRET`만 전달하며 `SUPABASE_SERVICE_ROLE_KEY`는 전달하지 않습니다.
+
+### 로컬 함수 실행
+
+```bash
+supabase functions serve collect-instagram --env-file supabase/functions/.env.local
+
+curl --request POST 'http://127.0.0.1:55321/functions/v1/collect-instagram' \
+  --header 'Authorization: Bearer <COLLECTOR_INVOKE_SECRET>'
+```
+
+토큰, secret, service-role key, 전체 upstream 오류 본문은 응답이나 구조화 로그에 남기지 않습니다.
 
 ## 로컬 개발
 
@@ -109,13 +153,19 @@ pgTAP 테스트는 다음을 검증합니다.
 - 출처 신뢰도와 계정 가중치 제약
 - 전 테이블 RLS 및 클라이언트 역할 권한 차단
 - 초기 계정·출처·점수 설정 seed
+- service-role 전용 ingest RPC 권한과 `SECURITY INVOKER`
+- 계정·게시물·최초 snapshot의 원자적 저장과 재실행 멱등성
+- IMAGE, CAROUSEL_ALBUM, REELS 정규화와 nullable Reel 조회수
+- Meta/API 및 DB transient retry와 영구 오류 비재시도
+- collector secret 인증과 오류 응답의 비밀값 비노출
+
+Edge Function 테스트는 Deno 2.1.4 컨테이너로 실행할 수 있습니다.
+
+```bash
+docker run --rm -v "$PWD/supabase:/workspace" -w /workspace \
+  denoland/deno:2.1.4 deno test functions/tests
+```
 
 ## 다음 마일스톤
 
-Milestone 2에서는 이미 검증된 Meta Business Discovery API를 사용해 다음 최소 흐름을 구현합니다.
-
-```text
-계정 1개 조회 → 최신 미디어 수집 → 중복 제거 → raw_posts 저장 → 최초 metric snapshot 저장
-```
-
-Meta API 가용성은 다시 조사하지 않으며, 실제 자격 증명은 환경 변수로만 전달합니다.
+Milestone 3에서는 검증된 Edge Function 앞에 n8n Schedule/orchestration을 연결하고, 다계정 수집과 rejected-item/quarantine 경로를 추가합니다.

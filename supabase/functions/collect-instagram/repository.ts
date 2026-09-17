@@ -3,12 +3,12 @@ import type {
   IngestResult,
   JsonObject,
   NormalizedBatch,
-} from './types.ts';
+} from "./types.ts";
 
 export type RepositoryErrorCode =
-  | 'DATABASE_HTTP_ERROR'
-  | 'DATABASE_NETWORK_ERROR'
-  | 'DATABASE_INVALID_RESPONSE';
+  | "DATABASE_HTTP_ERROR"
+  | "DATABASE_NETWORK_ERROR"
+  | "DATABASE_INVALID_RESPONSE";
 
 export class RepositoryError extends Error {
   constructor(
@@ -17,7 +17,7 @@ export class RepositoryError extends Error {
     readonly retriable: boolean,
   ) {
     super(status === null ? code : `${code} (${status})`);
-    this.name = 'RepositoryError';
+    this.name = "RepositoryError";
   }
 }
 
@@ -39,7 +39,8 @@ function requestBody(batch: NormalizedBatch): JsonObject {
       comments_available: batch.account.capabilities.commentsAvailable,
       views_available: batch.account.capabilities.viewsAvailable,
       media_url_available: batch.account.capabilities.mediaUrlAvailable,
-      carousel_children_available: batch.account.capabilities.carouselChildrenAvailable,
+      carousel_children_available:
+        batch.account.capabilities.carouselChildrenAvailable,
     },
     p_posts: batch.posts.map((post) => ({
       external_post_id: post.externalPostId,
@@ -60,11 +61,13 @@ function requestBody(batch: NormalizedBatch): JsonObject {
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function requiredCount(value: unknown): number | null {
-  return Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : null;
+  return Number.isSafeInteger(value) && (value as number) >= 0
+    ? value as number
+    : null;
 }
 
 async function decodeResult(response: Response): Promise<IngestResult> {
@@ -72,17 +75,35 @@ async function decodeResult(response: Response): Promise<IngestResult> {
   try {
     value = JSON.parse(await response.text());
   } catch {
-    throw new RepositoryError('DATABASE_INVALID_RESPONSE', response.status, false);
+    throw new RepositoryError(
+      "DATABASE_INVALID_RESPONSE",
+      response.status,
+      false,
+    );
   }
-  if (!isObject(value) || typeof value.account_id !== 'string' || value.account_id === '') {
-    throw new RepositoryError('DATABASE_INVALID_RESPONSE', response.status, false);
+  if (
+    !isObject(value) || typeof value.account_id !== "string" ||
+    value.account_id === ""
+  ) {
+    throw new RepositoryError(
+      "DATABASE_INVALID_RESPONSE",
+      response.status,
+      false,
+    );
   }
 
   const insertedPosts = requiredCount(value.inserted_posts);
   const updatedPosts = requiredCount(value.updated_posts);
   const insertedSnapshots = requiredCount(value.inserted_snapshots);
-  if (insertedPosts === null || updatedPosts === null || insertedSnapshots === null) {
-    throw new RepositoryError('DATABASE_INVALID_RESPONSE', response.status, false);
+  if (
+    insertedPosts === null || updatedPosts === null ||
+    insertedSnapshots === null
+  ) {
+    throw new RepositoryError(
+      "DATABASE_INVALID_RESPONSE",
+      response.status,
+      false,
+    );
   }
 
   return {
@@ -93,14 +114,20 @@ async function decodeResult(response: Response): Promise<IngestResult> {
   };
 }
 
-export function createIngestRepository(config: IngestRepositoryConfig): IngestRepository {
+export function createIngestRepository(
+  config: IngestRepositoryConfig,
+): IngestRepository {
   if (!config.supabaseUrl || !config.serviceRoleKey) {
-    throw new Error('Ingest repository configuration is incomplete');
+    throw new Error("Ingest repository configuration is incomplete");
   }
 
   const fetchImpl = config.fetch ?? globalThis.fetch;
-  const sleep = config.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
-  const url = `${config.supabaseUrl.replace(/\/$/, '')}/rest/v1/rpc/ingest_instagram_batch`;
+  const sleep = config.sleep ??
+    ((milliseconds) =>
+      new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const url = `${
+    config.supabaseUrl.replace(/\/$/, "")
+  }/rest/v1/rpc/ingest_instagram_batch`;
 
   return {
     async ingest(batch: NormalizedBatch): Promise<IngestResult> {
@@ -108,16 +135,20 @@ export function createIngestRepository(config: IngestRepositoryConfig): IngestRe
         let response: Response;
         try {
           response = await fetchImpl(url, {
-            method: 'POST',
+            method: "POST",
             headers: {
               apikey: config.serviceRoleKey,
               Authorization: `Bearer ${config.serviceRoleKey}`,
-              'content-type': 'application/json',
+              "content-type": "application/json",
             },
             body: JSON.stringify(requestBody(batch)),
           });
         } catch {
-          const error = new RepositoryError('DATABASE_NETWORK_ERROR', null, true);
+          const error = new RepositoryError(
+            "DATABASE_NETWORK_ERROR",
+            null,
+            true,
+          );
           if (attempt === 2) throw error;
           await sleep(250);
           continue;
@@ -128,13 +159,17 @@ export function createIngestRepository(config: IngestRepositoryConfig): IngestRe
         }
 
         const retriable = response.status >= 500;
-        const error = new RepositoryError('DATABASE_HTTP_ERROR', response.status, retriable);
+        const error = new RepositoryError(
+          "DATABASE_HTTP_ERROR",
+          response.status,
+          retriable,
+        );
         await response.body?.cancel();
         if (!retriable || attempt === 2) throw error;
         await sleep(250);
       }
 
-      throw new RepositoryError('DATABASE_NETWORK_ERROR', null, true);
+      throw new RepositoryError("DATABASE_NETWORK_ERROR", null, true);
     },
   };
 }

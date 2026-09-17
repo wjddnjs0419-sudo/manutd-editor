@@ -19,8 +19,8 @@ export interface NormalizedPost {
   externalPostId: string;
   caption: string | null;
   permalink: string | null;
-  mediaType: 'IMAGE' | 'CAROUSEL_ALBUM' | 'VIDEO';
-  mediaProductType: 'REELS' | null;
+  mediaType: "IMAGE" | "CAROUSEL_ALBUM" | "VIDEO";
+  mediaProductType: "REELS" | null;
   publishedAt: string;
   likeCount: number | null;
   commentsCount: number | null;
