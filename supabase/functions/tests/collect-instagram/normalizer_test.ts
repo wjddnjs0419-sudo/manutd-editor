@@ -35,7 +35,18 @@ function validPayload(): Record<string, unknown> {
             comments_count: 3,
             media_url: "https://cdn.example/carousel-1.jpg",
             children: {
-              data: [{ id: "child-1", media_type: "IMAGE" }],
+              data: [
+                {
+                  id: "child-1",
+                  media_type: "IMAGE",
+                  media_url: "https://cdn.example/child-1.jpg",
+                },
+                {
+                  id: "child-2",
+                  media_type: "IMAGE",
+                  media_url: "https://cdn.example/child-2.jpg",
+                },
+              ],
             },
           },
           {
@@ -74,6 +85,32 @@ Deno.test("normalizes IMAGE, CAROUSEL_ALBUM, and REELS with nullable views", () 
   );
   assert.equal(batch.posts[2].viewCount, null);
   assert.equal(batch.posts[2].postAgeMinutes, 90);
+  assert.deepEqual(batch.posts[0].assets, [{
+    externalMediaId: "image-1",
+    assetType: "IMAGE",
+    carouselIndex: null,
+    originalMediaUrl: "https://cdn.example/image-1.jpg",
+  }]);
+  assert.deepEqual(batch.posts[1].assets, [
+    {
+      externalMediaId: "child-1",
+      assetType: "CAROUSEL_CHILD",
+      carouselIndex: 0,
+      originalMediaUrl: "https://cdn.example/child-1.jpg",
+    },
+    {
+      externalMediaId: "child-2",
+      assetType: "CAROUSEL_CHILD",
+      carouselIndex: 1,
+      originalMediaUrl: "https://cdn.example/child-2.jpg",
+    },
+  ]);
+  assert.deepEqual(batch.posts[2].assets, [{
+    externalMediaId: "reel-1",
+    assetType: "THUMBNAIL",
+    carouselIndex: null,
+    originalMediaUrl: "https://cdn.example/reel-1.jpg",
+  }]);
   assert.deepEqual(batch.posts[1].rawPayload, {
     id: "carousel-1",
     caption: "Carousel fixture",
@@ -83,7 +120,20 @@ Deno.test("normalizes IMAGE, CAROUSEL_ALBUM, and REELS with nullable views", () 
     like_count: 20,
     comments_count: 3,
     media_url: "https://cdn.example/carousel-1.jpg",
-    children: { data: [{ id: "child-1", media_type: "IMAGE" }] },
+    children: {
+      data: [
+        {
+          id: "child-1",
+          media_type: "IMAGE",
+          media_url: "https://cdn.example/child-1.jpg",
+        },
+        {
+          id: "child-2",
+          media_type: "IMAGE",
+          media_url: "https://cdn.example/child-2.jpg",
+        },
+      ],
+    },
   });
   assert.deepEqual(batch.account.capabilities, {
     followersAvailable: true,
@@ -93,6 +143,26 @@ Deno.test("normalizes IMAGE, CAROUSEL_ALBUM, and REELS with nullable views", () 
     mediaUrlAvailable: true,
     carouselChildrenAvailable: true,
   });
+});
+
+Deno.test("omits unavailable or unsafe asset URLs without rejecting core posts", () => {
+  const payload = validPayload();
+  const media =
+    ((payload.business_discovery as Record<string, unknown>).media as {
+      data: Array<Record<string, unknown>>;
+    }).data;
+  media[0].media_url = "http://cdn.example/image-1.jpg";
+  const children = (media[1].children as {
+    data: Array<Record<string, unknown>>;
+  }).data;
+  delete children[0].media_url;
+  children[1].media_url = "javascript:alert(1)";
+  delete media[2].thumbnail_url;
+
+  const batch = normalizeBusinessDiscovery(payload, "utdreport", collectedAt);
+
+  assert.equal(batch.posts.length, 3);
+  assert.deepEqual(batch.posts.map((post) => post.assets), [[], [], []]);
 });
 
 Deno.test("deduplicates repeated media IDs by retaining the first item", () => {

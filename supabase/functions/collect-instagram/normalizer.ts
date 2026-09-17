@@ -2,6 +2,7 @@ import type {
   AccountCapabilities,
   JsonObject,
   NormalizedBatch,
+  NormalizedMediaAsset,
   NormalizedPost,
 } from "./types.ts";
 
@@ -66,6 +67,58 @@ function optionalCount(
     throw new ValidationError("INVALID_FIELD", field, itemId);
   }
   return value as number;
+}
+
+function httpsUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeAssets(
+  media: JsonObject,
+  externalPostId: string,
+  mediaType: "IMAGE" | "CAROUSEL_ALBUM" | "VIDEO",
+): NormalizedMediaAsset[] {
+  if (mediaType === "IMAGE") {
+    const originalMediaUrl = httpsUrl(media.media_url);
+    return originalMediaUrl === null ? [] : [{
+      externalMediaId: externalPostId,
+      assetType: "IMAGE",
+      carouselIndex: null,
+      originalMediaUrl,
+    }];
+  }
+
+  if (mediaType === "VIDEO") {
+    const originalMediaUrl = httpsUrl(media.thumbnail_url);
+    return originalMediaUrl === null ? [] : [{
+      externalMediaId: externalPostId,
+      assetType: "THUMBNAIL",
+      carouselIndex: null,
+      originalMediaUrl,
+    }];
+  }
+
+  if (!isObject(media.children) || !Array.isArray(media.children.data)) {
+    return [];
+  }
+  return media.children.data.flatMap((value, carouselIndex) => {
+    if (!isObject(value)) return [];
+    const externalMediaId =
+      typeof value.id === "string" && value.id.trim() !== "" ? value.id : null;
+    const originalMediaUrl = httpsUrl(value.media_url);
+    return externalMediaId === null || originalMediaUrl === null ? [] : [{
+      externalMediaId,
+      assetType: "CAROUSEL_CHILD" as const,
+      carouselIndex,
+      originalMediaUrl,
+    }];
+  });
 }
 
 function normalizePost(
@@ -134,6 +187,7 @@ function normalizePost(
     followersCountAtCollection: followersCount,
     postAgeMinutes,
     rawPayload: media,
+    assets: normalizeAssets(media, externalPostId, mediaType),
   };
 }
 

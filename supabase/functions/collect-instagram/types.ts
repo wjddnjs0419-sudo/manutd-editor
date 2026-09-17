@@ -30,6 +30,15 @@ export interface NormalizedAccount {
   capabilities: AccountCapabilities;
 }
 
+export type MediaAssetType = "IMAGE" | "CAROUSEL_CHILD" | "THUMBNAIL";
+
+export interface NormalizedMediaAsset {
+  externalMediaId: string;
+  assetType: MediaAssetType;
+  carouselIndex: number | null;
+  originalMediaUrl: string;
+}
+
 export interface NormalizedPost {
   externalPostId: string;
   caption: string | null;
@@ -43,6 +52,7 @@ export interface NormalizedPost {
   followersCountAtCollection: number | null;
   postAgeMinutes: number;
   rawPayload: JsonObject;
+  assets: NormalizedMediaAsset[];
 }
 
 export interface NormalizedBatch {
