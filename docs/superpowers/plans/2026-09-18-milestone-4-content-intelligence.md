@@ -47,7 +47,11 @@
   `s1=max(captured_at <= s0.captured_at-30m)`, `s2=max(captured_at <= s1.captured_at-30m)`를
   post별로 선택한다. 미래 snapshot은 사용하지 않으며 실제 `Δt01`, `Δt12`가 각각
   30분 이상이어야 한다. valid ER은 `followers>0` 및 like/comments/followers가 모두
-  non-null인 snapshot의 `(like_count + 4*comments_count) / followers_count`다.
+  non-null인 snapshot의
+  `(like_count + scoring_configs.comment_multiplier * comments_count) / followers_count`다.
+  multiplier는 해당 candidate가 참조하는 동일 `scoring_config_id`/version의
+  `scoring_configs.comment_multiplier`를 사용하고 `score_inputs`에 config id, version,
+  multiplier를 함께 기록한다.
   `v_current=(ER0-ER1)/hours(Δt01)`, `v_previous=(ER1-ER2)/hours(Δt12)`로 계산하고,
   `velocity_ratio=v_current/baseline_velocity`, `acceleration_ratio=v_current/v_previous`를
   각각 양의 분모가 `0.000001 ER/hour` 초과일 때만 계산한다. 미충족 시 해당 component는 0이다.
@@ -203,9 +207,10 @@ pre-filter exclusion, exact 0.40/0.85 thresholds, and aggregate-signature change
 clustering test file before implementation and confirm the exported functions are absent.
 
 **Implementation:** apply entity .35, event .20, source .15, number/opponent .10, time .10,
-caption .10 with missing signals zero; enforce contradiction gates and the explicit
-`first_seen_at >= run_at - 24h AND first_seen_at <= run_at` pre-filter. Compare the complete
-aggregate signature first, then at most three reliability/freshness-ranked representatives.
+caption .10 with missing signals zero; enforce contradiction gates and the story-similarity
+candidate pre-filter. Compare the complete aggregate signature first, then at most three
+reliability/freshness-ranked representatives. The 24-hour timestamp window is owned solely by
+Task 5's repository/orchestrator query.
 Return AUTO_MERGE, SEPARATE, or AMBIGUOUS with stable reason codes and union entities/events/
 sources/numbers/time into the signature.
 
@@ -222,7 +227,7 @@ tests pass and the task is committed as `feat: add aggregate signature clusterin
 
 **Files:**
 - Create: supabase/functions/intelligence/ai_classifier.ts
-- Modify: supabase/functions/intelligence/repository.ts
+- Create: supabase/functions/intelligence/repository.ts
 - Test: supabase/functions/tests/intelligence/ai_classifier_test.ts
 
 **Interfaces:**
@@ -261,7 +266,7 @@ tests pass and the task is committed as `feat: add conservative AI ambiguity res
 ### Task 5: Repository and idempotent orchestrator
 
 **Files:**
-- Create: supabase/functions/intelligence/repository.ts
+- Modify: supabase/functions/intelligence/repository.ts
 - Create: supabase/functions/intelligence/orchestrator.ts
 - Test: supabase/functions/tests/intelligence/orchestrator_test.ts
 
