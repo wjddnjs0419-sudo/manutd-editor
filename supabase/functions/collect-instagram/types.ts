@@ -39,6 +39,39 @@ export interface NormalizedMediaAsset {
   originalMediaUrl: string;
 }
 
+export interface PendingMediaAsset {
+  mediaAssetId: string;
+  rawPostId: string;
+  externalMediaId: string;
+  assetType: MediaAssetType;
+  originalMediaUrl: string;
+}
+
+export type StoredImageMime =
+  | "image/jpeg"
+  | "image/png"
+  | "image/webp"
+  | "image/gif";
+
+export interface StoredMediaAsset {
+  mediaAssetId: string;
+  storagePath: string;
+  mimeType: StoredImageMime;
+  fetchedAt: string;
+}
+
+export interface MediaStorage {
+  store(
+    asset: PendingMediaAsset,
+    context: {
+      sourceAccountId: string;
+      externalPostId: string;
+      fetchedAt: Date;
+      signal: AbortSignal;
+    },
+  ): Promise<StoredMediaAsset>;
+}
+
 export interface NormalizedPost {
   externalPostId: string;
   caption: string | null;
