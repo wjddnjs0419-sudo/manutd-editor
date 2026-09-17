@@ -40,6 +40,8 @@ const batch: NormalizedBatch = {
   receivedMedia: 1,
 };
 
+const sourceAccountId = "00000000-0000-4000-8000-000000000001";
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -47,7 +49,54 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-Deno.test("calls the ingest RPC with a secret key only in apikey", async () => {
+Deno.test("loads active accounts and rejects rows outside the response contract", async () => {
+  let requestUrl = "";
+  const repository = createIngestRepository({
+    supabaseUrl: "http://127.0.0.1:55321/",
+    secretKey: "sb_secret_test_value",
+    fetch: (input) => {
+      requestUrl = String(input);
+      return Promise.resolve(jsonResponse([{
+        id: sourceAccountId,
+        username: "utdreport",
+        active: true,
+      }]));
+    },
+    sleep: () => Promise.resolve(),
+  });
+
+  assert.deepEqual(await repository.listActive(), [{
+    id: sourceAccountId,
+    username: "utdreport",
+  }]);
+  assert.equal(
+    requestUrl,
+    "http://127.0.0.1:55321/rest/v1/source_accounts?select=id%2Cusername%2Cactive&active=eq.true&order=username.asc",
+  );
+
+  for (
+    const invalidRows of [
+      [{ id: sourceAccountId, username: "utdreport", active: false }],
+      [{ id: "not-a-uuid", username: "utdreport", active: true }],
+      [{ id: sourceAccountId, username: " ", active: true }],
+    ]
+  ) {
+    const invalidRepository = createIngestRepository({
+      supabaseUrl: "http://127.0.0.1:55321",
+      secretKey: "sb_secret_test_value",
+      fetch: () => Promise.resolve(jsonResponse(invalidRows)),
+      sleep: () => Promise.resolve(),
+    });
+    await assert.rejects(
+      invalidRepository.listActive(),
+      (error: unknown) =>
+        error instanceof RepositoryError &&
+        error.code === "DATABASE_INVALID_RESPONSE",
+    );
+  }
+});
+
+Deno.test("calls the account ingest RPC with a secret key only in apikey", async () => {
   let requestUrl = "";
   let requestInit: RequestInit | undefined;
   const repository = createIngestRepository({
@@ -57,26 +106,34 @@ Deno.test("calls the ingest RPC with a secret key only in apikey", async () => {
       requestUrl = String(input);
       requestInit = init;
       return Promise.resolve(jsonResponse({
-        account_id: "17841400000000001",
+        account_id: sourceAccountId,
         inserted_posts: 1,
         updated_posts: 0,
         inserted_snapshots: 1,
+        posts: [{
+          external_post_id: "image-1",
+          raw_post_id: "00000000-0000-4000-8000-000000000002",
+        }],
       }));
     },
     sleep: () => Promise.resolve(),
   });
 
-  const result = await repository.ingest(batch);
+  const result = await repository.ingest(sourceAccountId, batch);
 
   assert.deepEqual(result, {
-    accountId: "17841400000000001",
+    accountId: sourceAccountId,
     insertedPosts: 1,
     updatedPosts: 0,
     insertedSnapshots: 1,
+    posts: [{
+      externalPostId: "image-1",
+      rawPostId: "00000000-0000-4000-8000-000000000002",
+    }],
   });
   assert.equal(
     requestUrl,
-    "http://127.0.0.1:55321/rest/v1/rpc/ingest_instagram_batch",
+    "http://127.0.0.1:55321/rest/v1/rpc/ingest_instagram_account_batch",
   );
   assert.equal(requestInit?.method, "POST");
   const headers = new Headers(requestInit?.headers);
@@ -84,7 +141,7 @@ Deno.test("calls the ingest RPC with a secret key only in apikey", async () => {
   assert.equal(headers.get("authorization"), null);
   assert.equal(headers.get("content-type"), "application/json");
   assert.deepEqual(JSON.parse(String(requestInit?.body)), {
-    p_username: "utdreport",
+    p_source_account_id: sourceAccountId,
     p_account: {
       instagram_account_id: "17841400000000001",
       followers_count: 250_000,
@@ -115,6 +172,42 @@ Deno.test("calls the ingest RPC with a secret key only in apikey", async () => {
   });
 });
 
+Deno.test("records only a safe probe failure category", async () => {
+  let requestUrl = "";
+  let requestInit: RequestInit | undefined;
+  const repository = createIngestRepository({
+    supabaseUrl: "http://127.0.0.1:55321",
+    secretKey: "sb_secret_test_value",
+    fetch: (input, init) => {
+      requestUrl = String(input);
+      requestInit = init;
+      return Promise.resolve(jsonResponse(null));
+    },
+    sleep: () => Promise.resolve(),
+  });
+
+  await repository.recordFailure({
+    sourceAccountId,
+    probedAt: "2026-09-17T02:00:00.000Z",
+    category: "permission",
+    markUnsupported: true,
+  });
+
+  assert.equal(
+    requestUrl,
+    "http://127.0.0.1:55321/rest/v1/rpc/record_instagram_probe_failure",
+  );
+  assert.deepEqual(JSON.parse(String(requestInit?.body)), {
+    p_source_account_id: sourceAccountId,
+    p_probed_at: "2026-09-17T02:00:00.000Z",
+    p_category: "permission",
+    p_mark_unsupported: true,
+  });
+  const headers = new Headers(requestInit?.headers);
+  assert.equal(headers.get("apikey"), "sb_secret_test_value");
+  assert.equal(headers.get("authorization"), null);
+});
+
 Deno.test("retries one ambiguous 5xx response and returns the second result", async () => {
   let attempts = 0;
   const repository = createIngestRepository({
@@ -126,17 +219,18 @@ Deno.test("retries one ambiguous 5xx response and returns the second result", as
         attempts === 1
           ? jsonResponse({ message: "private database detail" }, 503)
           : jsonResponse({
-            account_id: "17841400000000001",
+            account_id: sourceAccountId,
             inserted_posts: 0,
             updated_posts: 1,
             inserted_snapshots: 0,
+            posts: [],
           }),
       );
     },
     sleep: () => Promise.resolve(),
   });
 
-  const result = await repository.ingest(batch);
+  const result = await repository.ingest(sourceAccountId, batch);
 
   assert.equal(attempts, 2);
   assert.equal(result.updatedPosts, 1);
@@ -152,16 +246,17 @@ Deno.test("retries one thrown network failure after ambiguous commit state", asy
       return attempts === 1
         ? Promise.reject(new TypeError("socket failure with private detail"))
         : Promise.resolve(jsonResponse({
-          account_id: "17841400000000001",
+          account_id: sourceAccountId,
           inserted_posts: 0,
           updated_posts: 1,
           inserted_snapshots: 0,
+          posts: [],
         }));
     },
     sleep: () => Promise.resolve(),
   });
 
-  await repository.ingest(batch);
+  await repository.ingest(sourceAccountId, batch);
 
   assert.equal(attempts, 2);
 });
@@ -184,7 +279,7 @@ Deno.test("does not retry deterministic database errors and redacts details", as
   });
 
   await assert.rejects(
-    repository.ingest(batch),
+    repository.ingest(sourceAccountId, batch),
     (error: unknown) => {
       assert.ok(error instanceof RepositoryError);
       assert.equal(error.code, "DATABASE_HTTP_ERROR");
@@ -210,7 +305,7 @@ Deno.test("rejects a malformed successful RPC response safely", async () => {
   });
 
   await assert.rejects(
-    repository.ingest(batch),
+    repository.ingest(sourceAccountId, batch),
     (error: unknown) =>
       error instanceof RepositoryError &&
       error.code === "DATABASE_INVALID_RESPONSE" &&

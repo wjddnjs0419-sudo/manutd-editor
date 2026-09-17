@@ -1,5 +1,20 @@
 export type JsonObject = Record<string, unknown>;
 
+export interface SourceAccount {
+  id: string;
+  username: string;
+}
+
+export type AccountFailureCategory =
+  | "unsupported_account"
+  | "permission"
+  | "rate_limited"
+  | "temporary_upstream"
+  | "invalid_payload"
+  | "database"
+  | "run_budget_exhausted"
+  | "internal";
+
 export interface AccountCapabilities {
   followersAvailable: boolean;
   likesAvailable: boolean;
@@ -43,6 +58,12 @@ export interface IngestResult {
   insertedPosts: number;
   updatedPosts: number;
   insertedSnapshots: number;
+  posts: IngestedPost[];
+}
+
+export interface IngestedPost {
+  externalPostId: string;
+  rawPostId: string;
 }
 
 export interface CollectionSummary extends IngestResult {
@@ -56,5 +77,18 @@ export interface MetaClient {
 }
 
 export interface IngestRepository {
-  ingest(batch: NormalizedBatch): Promise<IngestResult>;
+  ingest(
+    sourceAccountId: string,
+    batch: NormalizedBatch,
+  ): Promise<IngestResult>;
+}
+
+export interface AccountRepository {
+  listActive(): Promise<SourceAccount[]>;
+  recordFailure(input: {
+    sourceAccountId: string;
+    probedAt: string;
+    category: AccountFailureCategory;
+    markUnsupported: boolean;
+  }): Promise<void>;
 }

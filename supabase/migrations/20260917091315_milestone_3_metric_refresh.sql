@@ -452,3 +452,60 @@ revoke all on function public.ingest_instagram_account_batch(uuid, jsonb, jsonb,
   from public, anon, authenticated;
 grant execute on function public.ingest_instagram_account_batch(uuid, jsonb, jsonb, timestamptz)
   to service_role;
+
+create function public.record_instagram_probe_failure(
+  p_source_account_id uuid,
+  p_probed_at timestamptz,
+  p_category text,
+  p_mark_unsupported boolean
+)
+returns void
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  if p_source_account_id is null or p_probed_at is null or p_mark_unsupported is null then
+    raise exception using
+      errcode = '22023',
+      message = 'probe failure input is incomplete';
+  end if;
+
+  if p_category is null or p_category not in (
+    'unsupported_account',
+    'permission',
+    'rate_limited',
+    'temporary_upstream',
+    'invalid_payload',
+    'database',
+    'run_budget_exhausted',
+    'internal'
+  ) then
+    raise exception using
+      errcode = '22023',
+      message = 'invalid probe failure category';
+  end if;
+
+  update public.source_accounts
+  set
+    last_probe_at = p_probed_at,
+    probe_error = p_category,
+    api_supported = case
+      when p_mark_unsupported then false
+      else api_supported
+    end
+  where id = p_source_account_id
+    and active;
+
+  if not found then
+    raise exception using
+      errcode = 'P0002',
+      message = 'active source account was not found';
+  end if;
+end;
+$$;
+
+revoke all on function public.record_instagram_probe_failure(uuid, timestamptz, text, boolean)
+  from public, anon, authenticated;
+grant execute on function public.record_instagram_probe_failure(uuid, timestamptz, text, boolean)
+  to service_role;

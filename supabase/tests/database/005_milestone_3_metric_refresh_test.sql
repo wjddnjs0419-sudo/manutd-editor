@@ -2,7 +2,7 @@ begin;
 
 set role postgres;
 set search_path = pgtap, extensions, public;
-select plan(14);
+select plan(20);
 
 select has_column(
   'public',
@@ -177,6 +177,88 @@ select is(
   '2026-09-17T00:31:00Z'::timestamptz,
   'failed mutation preserves the original published_at'
 );
+
+select has_function(
+  'public',
+  'record_instagram_probe_failure',
+  array['uuid', 'timestamp with time zone', 'text', 'boolean'],
+  'safe Instagram probe failure RPC exists'
+);
+
+select ok(
+  not (
+    select p.prosecdef
+    from pg_catalog.pg_proc p
+    where p.oid =
+      'public.record_instagram_probe_failure(uuid,timestamptz,text,boolean)'::regprocedure
+  ),
+  'probe failure RPC uses SECURITY INVOKER'
+);
+
+select ok(
+  not has_function_privilege(
+    'anon',
+    'public.record_instagram_probe_failure(uuid,timestamptz,text,boolean)',
+    'EXECUTE'
+  ),
+  'anon cannot execute probe failure RPC'
+);
+
+set local role service_role;
+
+select public.record_instagram_probe_failure(
+  (select id from public.source_accounts where username = 'utddistrict'),
+  '2026-09-17T02:00:00Z'::timestamptz,
+  'permission',
+  true
+);
+
+reset role;
+
+select row_eq(
+  $$
+    select last_probe_at, probe_error, api_supported
+    from public.source_accounts
+    where username = 'utddistrict'
+  $$,
+  row('2026-09-17T02:00:00Z'::timestamptz, 'permission'::text, false),
+  'permanent probe failure stores only its category and marks the account unsupported'
+);
+
+set local role service_role;
+
+select public.record_instagram_probe_failure(
+  (select id from public.source_accounts where username = 'utdreport'),
+  '2026-09-17T02:30:00Z'::timestamptz,
+  'temporary_upstream',
+  false
+);
+
+reset role;
+
+select is(
+  (select api_supported from public.source_accounts where username = 'utdreport'),
+  true,
+  'transient probe failure preserves existing API support state'
+);
+
+set local role service_role;
+
+select throws_ok(
+  $$
+    select public.record_instagram_probe_failure(
+      (select id from public.source_accounts where username = 'utdreport'),
+      '2026-09-17T02:31:00Z'::timestamptz,
+      'raw upstream secret',
+      false
+    )
+  $$,
+  '22023',
+  'invalid probe failure category',
+  'probe failure RPC rejects arbitrary error text'
+);
+
+reset role;
 
 select * from finish();
 rollback;
