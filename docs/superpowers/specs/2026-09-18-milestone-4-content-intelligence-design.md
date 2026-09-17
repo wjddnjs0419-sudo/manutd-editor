@@ -1,7 +1,7 @@
 # MU Content Intelligence System — Milestone 4 설계
 
 - 작성일: 2026-09-18
-- 상태: 설계 승인 대기 (구현 전)
+- 상태: 구현 계획 승인 대기 (구현 전)
 - 대상 branch: `milestone-4-content-intelligence`
 - 언어: 한국어
 
@@ -195,6 +195,8 @@ confidence nullable
 reason
 model
 prompt_version
+dictionary_version
+classifier_version (model + prompt_version + dictionary_version)
 input_hash (canonical JSON SHA-256)
 input_snapshot (normalized, non-secret input)
 result (structured classifier result)
@@ -204,7 +206,16 @@ resolved_cluster_id nullable
 resolved_at nullable
 ~~~
 
-동일 pair·동일 prompt version·동일 input hash는 unique하게 저장한다.
+pair의 post id는 작은 UUID가 앞에 오도록 canonicalize한다. 동일 pair·동일
+`classifier_version`·동일 input hash는 unique하게 저장한다.
+`classifier_version`은 다음 세 값을 결합한 문자열이다.
+
+~~~text
+model + prompt_version + dictionary_version
+~~~
+
+따라서 model이 바뀌면 같은 input/prompt라도 새 평가가 가능하다.
+`model`, `prompt_version`, `dictionary_version`은 별도 column으로도 저장한다.
 `raw_posts` 변경이나 dictionary 변경으로 hash가 바뀌면 새 평가로 남긴다.
 
 manual resolution은 service-role 전용 `reassign_story_cluster_post` RPC를
@@ -273,16 +284,54 @@ velocity curve는 `0.5x→0, 1.0x→2.5, 1.5x→5, 2.0x→7.5, 2.5x→10`이다.
 ### Korean Coverage Gap과 uncertainty
 
 ~~~text
-G = active GLOBAL monitored account weighted coverage
-K = active KR monitored account weighted coverage
+eligible monitored accounts
+  = active = true AND api_supported = true
+  (region별로 같은 조건을 적용)
+
+G = eligible GLOBAL account weighted coverage
+K = eligible KR account weighted coverage
 gap = 15 × min(G/0.60, 1) × (1-K)
 ~~~
 
-단, 다음 어느 하나라도 있으면 `korea_coverage_status = UNCERTAIN`으로
-저장한다.
+api_supported IS NULL은 아직 capability probe가 끝나지 않은 초기 상태로
+간주한다. 이 계정은 eligible denominator와 observation completeness numerator
+어디에도 넣지 않지만, score_inputs에 pending_capability_account_ids로
+기록한다. api_supported = false 계정도 현재 M4 관측 불가 계정이므로
+denominator에서 제외하고 unsupported_account_ids로 기록한다. 이후 probe가
+true가 되면 다음 intelligence run부터 eligible set에 포함한다. 따라서 API
+미지원/미확정 계정이 coverage를 영구적으로 희석하지 않는다.
 
-- GLOBAL↔KR ambiguity pair가 unresolved/manual_review
-- KR observation completeness/freshness가 충족되지 않음
+coverage denominator는 run 시각에 조회한 region별 eligible set의 전체
+priority_weight 합이다. eligible account가 하나도 없는 region의 coverage는
+0이지만, KR eligible set이 비어 있으면 FIRST_MOVER를 만들 수 없다.
+
+cluster coverage 자체는 해당 eligible account가 cluster member를 하나 이상
+가지는지로 계산한다.
+
+~~~text
+coverage_R(cluster) =
+  sum(priority_weight of eligible region-R accounts represented in cluster)
+  /
+  sum(priority_weight of all eligible region-R accounts)
+~~~
+
+관측 freshness와 별도로 저장되는 값이므로, stale account가 이미 올린 member는
+coverage에는 남지만 FIRST_MOVER gate와 observation completeness에는 사용할 수
+없다.
+
+KR observation completeness는 다음 식으로 계산하며, eligible KR account가
+하나 이상일 때 값이 1.0이어야 KNOWN으로 본다.
+
+~~~text
+KR_observation_completeness =
+  sum(priority_weight of eligible KR accounts with fresh successful probe)
+  /
+  sum(priority_weight of all eligible KR accounts)
+~~~
+
+eligible KR account가 하나 이상이고 KR observation completeness < 1.0이면
+korea_coverage_status = UNCERTAIN으로 저장한다. GLOBAL↔KR ambiguity pair가
+unresolved/manual_review여도 UNCERTAIN으로 저장한다.
 
 UNCERTAIN cluster는 `korea_gap_score = 0`으로 보수적으로 계산하고
 `data_confidence`를 낮춘다. API와 `score_inputs`에
@@ -297,16 +346,20 @@ global_coverage >= 0.30
 AND korean_coverage = 0
 AND velocity_ratio available AND velocity_ratio >= 1.5
 AND reliability_score >= 8
-AND active KR account count > 0
-AND every active KR account:
-      last_probe_at <= intelligence_run_at - 90 minutes
+AND eligible KR account count > 0
+AND every eligible KR account:
+      last_probe_at >= intelligence_run_at - 90 minutes
+      AND last_probe_at <= intelligence_run_at
       AND probe_error IS NULL
 AND korea_coverage_status = KNOWN
 ~~~
 
-즉 일부 KR 계정 수집 실패·stale 상태에서 `korean_coverage=0`만으로
-FIRST_MOVER를 만들 수 없다. unresolved GLOBAL↔KR ambiguity가 있으면 항상
-false다.
+여기서 eligible KR account는 `active=true AND api_supported=true`인 계정이다.
+`api_supported IS NULL` 또는 `false`인 계정만 있는 경우에는 eligible KR
+account count가 0이므로 false다. eligible KR account 중 하나라도 최근 90분
+probe가 없거나 실패하면 false다. 즉 일부 KR 계정 수집 실패·stale 상태에서
+`korean_coverage=0`만으로 FIRST_MOVER를 만들 수 없다. unresolved
+GLOBAL↔KR ambiguity가 있으면 항상 false다.
 
 ### Korean Saturation
 
@@ -345,24 +398,132 @@ cluster certainty               10
 API field availability            5
 ~~~
 
-baseline evidence는 fallback factor와 실제 sample count를 함께 반영한다.
+### Account coverage completeness
+
+run 시각의 모든 eligible account(`active=true AND api_supported=true`)를
+대상으로 한다.
+
+~~~text
+C_account =
+  sum(priority_weight of eligible accounts with
+      last_probe_at >= run_at - 90m
+      AND last_probe_at <= run_at
+      AND probe_error IS NULL)
+  /
+  sum(priority_weight of all eligible accounts)
+~~~
+
+eligible set이 비어 있으면 0이다. `api_supported IS NULL|false`는 분모에서
+제외하되 score input에 별도 보존한다.
+
+### Baseline evidence exact aggregation
+
+각 ER/velocity baseline 사용 건의 fallback factor에 실제 sample count factor를
+곱한다.
 
 ~~~text
 primary fallback factor = 1.0
 account-age fallback    = 0.8
 cohort fallback         = 0.6
-unavailable              = 0
-
-sample_factor(n) = min(1, sqrt(n / 50))
-baseline evidence factor = fallback_factor × sample_factor(n)
+unavailable             = 0
+sample_factor(n)        = min(1, sqrt(n / 50))
+evidence_factor         = fallback_factor × sample_factor(n)
+C_baseline              = arithmetic mean(evidence_factor for all baselines used)
 ~~~
 
-따라서 n=5와 n=50은 서로 다른 confidence를 갖는다. 모든 계정/게시물의
-baseline level, n, factor를 `score_inputs`에 저장한다.
+사용된 baseline이 하나도 없으면 C_baseline은 0이다. n=5와 n=50은 서로 다른
+confidence를 갖는다.
 
-cluster certainty는 deterministic high-confidence membership 0.95,
-AI accepted membership의 classifier confidence, singleton 0.60을 사용한다.
-AI confidence는 전체 Data Confidence와 동일시하지 않는다.
+### Metric snapshot availability
+
+각 member post p에 대해 run 시각까지의 snapshot 수를 세고, 최대 3개를 완전
+관측으로 본다.
+
+~~~text
+snapshot_factor(p) = min(1, n_snapshot(p) / 3)
+C_snapshot =
+  sum(priority_weight(account(p)) × snapshot_factor(p))
+  /
+  sum(priority_weight(account(p)))
+~~~
+
+member post가 없거나 분모가 0이면 0이다. field null 여부는 C_api에서 별도로
+측정한다.
+
+### Followers availability
+
+cluster member가 있는 각 account a의 최신 member post가
+followers_count_at_collection IS NOT NULL AND > 0이면 F(a)=1, 아니면 F(a)=0이다.
+followers 0은 수집된 유효 상태지만 ER 분모로 사용할 수 없으므로 0으로
+분류한다.
+
+~~~text
+C_followers =
+  sum(priority_weight(a) × F(a))
+  /
+  sum(priority_weight(a) for accounts represented in cluster)
+~~~
+
+represented account가 없으면 0이다.
+
+### Source recognition
+
+cluster caption에서 추출된 source mention 전체를 m, registry row와 매칭된
+mention을 r이라 한다.
+
+~~~text
+C_source = r / m
+~~~
+
+mention이 하나도 없으면 0이다. 반복 인용도 mention 단위로 계산한다.
+
+### Cluster certainty
+
+~~~text
+deterministic high-confidence membership = 0.95
+AI accepted membership                   = classifier confidence
+singleton cluster                        = 0.60
+C_cluster =
+  sum(priority_weight(account(i)) × membership_confidence(i))
+  /
+  sum(priority_weight(account(i)))
+~~~
+
+manual_review post는 membership에 포함하지 않는다. membership가 없으면
+0이다. AI confidence는 C_cluster의 일부일 뿐 전체 Data Confidence와 동일하지
+않다.
+
+### API field availability
+
+score가 직접 사용하는 raw post field는 like_count, comments_count,
+followers_count_at_collection 세 개로 고정한다.
+
+~~~text
+api_factor(p) = available_non_null_fields(p) / 3
+C_api =
+  sum(priority_weight(account(p)) × api_factor(p))
+  /
+  sum(priority_weight(account(p)))
+~~~
+
+followers 0은 field가 존재하므로 available로 센다. member post가 없거나
+분모가 0이면 0이다. snapshot timestamp는 M3 schema constraint로 보장되므로
+중복하여 세지 않는다.
+
+### Confidence 합산
+
+~~~text
+data_confidence =
+round(100 × (
+  0.20 × C_account
+  + 0.20 × C_baseline
+  + 0.20 × C_snapshot
+  + 0.15 × C_followers
+  + 0.10 × C_source
+  + 0.10 × C_cluster
+  + 0.05 × C_api
+), 1)
+~~~
 
 ## 13. Candidate 생성, rank, reproducibility
 
@@ -417,14 +578,23 @@ service-role 전용 SECURITY INVOKER RPC를 제공한다.
 - `renew_intelligence_run(run_id, lease_until)`: 현재 run만 갱신
 - `release_intelligence_run(run_id)`: 현재 run만 해제
 
-권장 lease는 5분이며 intelligence가 30초마다 heartbeat한다. crash 시
-lease expiry 후 다음 실행이 회복한다. lock이 사용 중이면 함수는
-`already_running`을 반환하고 즉시 종료한다.
+lease duration과 heartbeat는 코드에 하드코딩하지 않고 다음 runtime config로
+분리한다.
+
+~~~text
+STORY_INTELLIGENCE_LEASE_SECONDS=300
+STORY_INTELLIGENCE_HEARTBEAT_SECONDS=30
+~~~
+
+config parser는 lease를 60~1800초, heartbeat를 10초 이상 lease의 절반
+미만으로만 허용한다. 실제 run은 config의 lease duration으로 acquire하고
+heartbeat interval로 renew한다. crash 시 lease expiry 후 다음 실행이 회복한다.
+lock이 사용 중이면 already_running을 반환하고 즉시 종료한다.
 
 동시 실행 보호는 lease만으로 끝내지 않고 다음 unique/upsert를 함께 사용한다.
 
 - `story_cluster_posts.raw_post_id` unique
-- AI evaluation pair + prompt version + input hash unique
+- AI evaluation pair + classifier version + input hash unique
 - `content_candidates(story_cluster_id, ranking_date, scoring_config_id)` unique
 - cluster signature와 aggregate 갱신의 atomic membership RPC
 
@@ -444,7 +614,7 @@ lease expiry 후 다음 실행이 회복한다. lock이 사용 중이면 함수�
 
 ## 16. 제안 schema 변경과 YAGNI 판단
 
-이번 구현에 필요한 최소 변경은 다음 세 가지다.
+이번 구현에 필요한 최소 변경은 다음 네 가지다.
 
 1. `story_clusters.signature_json`, `signature_version`: aggregated
    signature를 재실행 간 보존한다.
@@ -453,6 +623,11 @@ lease expiry 후 다음 실행이 회복한다. lock이 사용 중이면 함수�
 3. `app_private.story_cluster_evaluations`와
    `app_private.intelligence_run_lock`: AI audit/manual review와
    concurrent run lease를 가능하게 한다.
+   evaluation unique key에는 classifier_version
+   (model + prompt_version + dictionary_version)을 포함한다.
+4. STORY_INTELLIGENCE_LEASE_SECONDS,
+   STORY_INTELLIGENCE_HEARTBEAT_SECONDS: lease duration/heartbeat를
+   runtime config로 분리한다.
 
 baseline 전용 table, score history table, public AI table, 별도 player registry는
 이번 milestone에 추가하지 않는다. baseline은 기존 snapshots 기반 SQL
