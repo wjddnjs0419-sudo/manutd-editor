@@ -2,7 +2,7 @@
 
 맨체스터 유나이티드 관련 Instagram 콘텐츠를 수집·분석하고, 객관적인 우선순위 점수와 실행 가능한 콘텐츠 브리프를 만드는 시스템입니다.
 
-현재 구현 범위는 **Milestone 3 수집 파이프라인: 다계정 수집, metric refresh, private media cache**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. 모든 계정의 core transaction이 끝난 뒤 IMAGE·carousel child·Reel thumbnail을 private Storage에 보조 작업으로 저장합니다. n8n 스케줄링은 다음 구현 단계이며, 스토리 클러스터링·점수 계산 워커·Notion 동기화는 이후 마일스톤 범위입니다.
+현재 구현 범위는 **Milestone 3 수집 파이프라인과 Milestone 4 Content Intelligence**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. 모든 계정의 core transaction이 끝난 뒤 IMAGE·carousel child·Reel thumbnail을 private Storage에 보조 작업으로 저장합니다. 이어서 intelligence Edge Function이 최근 게시물을 story cluster로 묶고 결정론적인 Priority Score·Data Confidence·FIRST_MOVER/MUST_COVER 결과를 생성합니다. n8n 스케줄링과 Notion 동기화는 별도 범위입니다.
 
 ## 핵심 원칙
 
@@ -133,6 +133,48 @@ supabase db lint --local --schema public,app_private --level warning
 ```
 
 로컬 Studio는 `http://127.0.0.1:55323`에서 확인할 수 있습니다.
+
+## Milestone 4 Content Intelligence 검증
+
+로컬 함수 실행에는 `supabase/functions/.env.local`을 사용합니다. 다음 값은 로컬
+환경에만 설정하며 문서·workflow export·smoke 결과에는 남기지 않습니다.
+
+```text
+SUPABASE_URL=http://127.0.0.1:55321
+SUPABASE_SECRET_KEY=<local-service-role-secret>
+COLLECTOR_INVOKE_SECRET=<local-invoke-secret>
+STORY_CLUSTER_AI_ENABLED=false
+```
+
+DB reset 후 intelligence 함수를 별도 터미널에서 실행합니다.
+
+```bash
+supabase functions serve intelligence --no-verify-jwt --env-file supabase/functions/.env.local
+```
+
+전체 검증과 TOP 5 smoke는 다음 순서로 실행합니다. `LOCAL_SUPABASE_URL`과
+`LOCAL_SUPABASE_SECRET_KEY`는 로컬 환경의 URL·service-role secret이며, runner는
+함수 호출에 `COLLECTOR_INVOKE_SECRET`을 사용합니다.
+
+```bash
+supabase db reset --local
+supabase seed buckets
+supabase test db
+supabase db lint --local --schema public,app_private --level warning
+docker run --rm --add-host=host.docker.internal:host-gateway \
+  --env SUPABASE_URL="$LOCAL_SUPABASE_URL" \
+  --env SUPABASE_SECRET_KEY="$LOCAL_SUPABASE_SECRET_KEY" \
+  -v "$PWD/supabase:/workspace" -w /workspace \
+  denoland/deno:2.1.4 deno test --allow-env --allow-net functions/tests
+node scripts/validate-n8n-workflow.mjs n8n/workflows/instagram-collector-schedule.json
+./scripts/run-milestone-4-smoke.sh --output /tmp/milestone-4-smoke.json
+```
+
+`run-milestone-4-smoke.sh`는 intelligence Edge Function을 한 번 호출한 뒤
+최근 후보 중 TOP 5의 `title`, member username, GLOBAL/KR region count, score
+components, confidence, flags, Korea status만 출력합니다. token, secret, raw
+payload, upstream error 본문은 응답·로그·파일에 출력하지 않습니다. 후보가 없거나
+검증 assertion이 실패하면 runner도 실패합니다.
 
 ## 원격 Supabase
 
