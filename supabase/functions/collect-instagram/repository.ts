@@ -23,7 +23,7 @@ export class RepositoryError extends Error {
 
 export interface IngestRepositoryConfig {
   supabaseUrl: string;
-  serviceRoleKey: string;
+  secretKey: string;
   fetch?: typeof globalThis.fetch;
   sleep?: (milliseconds: number) => Promise<void>;
 }
@@ -117,7 +117,7 @@ async function decodeResult(response: Response): Promise<IngestResult> {
 export function createIngestRepository(
   config: IngestRepositoryConfig,
 ): IngestRepository {
-  if (!config.supabaseUrl || !config.serviceRoleKey) {
+  if (!config.supabaseUrl || !config.secretKey) {
     throw new Error("Ingest repository configuration is incomplete");
   }
 
@@ -137,8 +137,7 @@ export function createIngestRepository(
           response = await fetchImpl(url, {
             method: "POST",
             headers: {
-              apikey: config.serviceRoleKey,
-              Authorization: `Bearer ${config.serviceRoleKey}`,
+              apikey: config.secretKey,
               "content-type": "application/json",
             },
             body: JSON.stringify(requestBody(batch)),

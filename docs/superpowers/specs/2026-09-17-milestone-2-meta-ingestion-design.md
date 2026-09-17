@@ -112,20 +112,20 @@ The function uses `SET search_path = ''` and fully qualifies every schema object
 
 ## Edge Function Authentication and Secrets
 
-The function is an external service-to-service endpoint. n8n will not receive the Supabase service-role key.
+The function is an external service-to-service endpoint. n8n will not receive a Supabase secret key.
 
-The function is configured with `verify_jwt = false` because the caller does not receive a Supabase JWT or service-role key. The caller sends `Authorization: Bearer <COLLECTOR_INVOKE_SECRET>`. The function performs a timing-safe comparison with the environment secret before any Meta or database call. A missing, malformed, or incorrect credential returns `401` without identifying which check failed.
+The function is configured with `verify_jwt = false` because the caller does not receive a Supabase JWT or secret key. The caller sends `Authorization: Bearer <COLLECTOR_INVOKE_SECRET>`. The function performs a timing-safe comparison with the environment secret before any Meta or database call. A missing, malformed, or incorrect credential returns `401` without identifying which check failed.
 
-The Edge Function alone reads `SUPABASE_SERVICE_ROLE_KEY` from its Supabase environment and uses it only for the internal RPC call. Other required secrets and configuration are:
+The Edge Function alone reads the `default` key from the runtime-injected `SUPABASE_SECRET_KEYS` JSON dictionary and uses it only for the internal RPC call. A singular `SUPABASE_SECRET_KEY` is accepted as a local/CI fallback. The opaque `sb_secret_...` value is sent only in PostgREST's `apikey` header, never as an `Authorization` bearer token. Supabase maps it to the PostgreSQL `service_role`. Other required secrets and configuration are:
 
 - `COLLECTOR_INVOKE_SECRET`;
 - `META_ACCESS_TOKEN`;
 - `META_BUSINESS_ACCOUNT_ID`;
 - `META_API_VERSION`;
 - `SUPABASE_URL`; and
-- `SUPABASE_SERVICE_ROLE_KEY`.
+- `SUPABASE_SECRET_KEYS` (or local/CI fallback `SUPABASE_SECRET_KEY`).
 
-Secrets and tokens are never returned or logged. Structured logs contain only safe request IDs, attempt counts, HTTP status classes, normalized error codes, account username, and aggregate item counts. Raw authorization headers, access tokens, service-role keys, and complete Meta error bodies are excluded.
+Secrets and tokens are never returned or logged. Structured logs contain only safe request IDs, attempt counts, HTTP status classes, normalized error codes, account username, and aggregate item counts. Raw authorization headers, access tokens, Supabase secret keys, and complete Meta error bodies are excluded.
 
 The n8n workflow and secret provisioning in n8n remain outside Milestone 2.
 

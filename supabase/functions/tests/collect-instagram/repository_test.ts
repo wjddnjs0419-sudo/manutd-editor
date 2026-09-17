@@ -47,12 +47,12 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-Deno.test("calls the ingest RPC with service credentials and maps its summary", async () => {
+Deno.test("calls the ingest RPC with a secret key only in apikey", async () => {
   let requestUrl = "";
   let requestInit: RequestInit | undefined;
   const repository = createIngestRepository({
     supabaseUrl: "http://127.0.0.1:55321/",
-    serviceRoleKey: "service-role-secret",
+    secretKey: "sb_secret_test_value",
     fetch: (input, init) => {
       requestUrl = String(input);
       requestInit = init;
@@ -80,8 +80,8 @@ Deno.test("calls the ingest RPC with service credentials and maps its summary", 
   );
   assert.equal(requestInit?.method, "POST");
   const headers = new Headers(requestInit?.headers);
-  assert.equal(headers.get("apikey"), "service-role-secret");
-  assert.equal(headers.get("authorization"), "Bearer service-role-secret");
+  assert.equal(headers.get("apikey"), "sb_secret_test_value");
+  assert.equal(headers.get("authorization"), null);
   assert.equal(headers.get("content-type"), "application/json");
   assert.deepEqual(JSON.parse(String(requestInit?.body)), {
     p_username: "utdreport",
@@ -119,7 +119,7 @@ Deno.test("retries one ambiguous 5xx response and returns the second result", as
   let attempts = 0;
   const repository = createIngestRepository({
     supabaseUrl: "http://127.0.0.1:55321",
-    serviceRoleKey: "service-role-secret",
+    secretKey: "sb_secret_test_value",
     fetch: () => {
       attempts += 1;
       return Promise.resolve(
@@ -146,7 +146,7 @@ Deno.test("retries one thrown network failure after ambiguous commit state", asy
   let attempts = 0;
   const repository = createIngestRepository({
     supabaseUrl: "http://127.0.0.1:55321",
-    serviceRoleKey: "service-role-secret",
+    secretKey: "sb_secret_test_value",
     fetch: () => {
       attempts += 1;
       return attempts === 1
@@ -170,12 +170,12 @@ Deno.test("does not retry deterministic database errors and redacts details", as
   let attempts = 0;
   const repository = createIngestRepository({
     supabaseUrl: "http://127.0.0.1:55321",
-    serviceRoleKey: "service-role-secret",
+    secretKey: "sb_secret_test_value",
     fetch: () => {
       attempts += 1;
       return Promise.resolve(
         jsonResponse(
-          { message: "constraint detail includes service-role-secret" },
+          { message: "constraint detail includes sb_secret_test_value" },
           400,
         ),
       );
@@ -192,7 +192,7 @@ Deno.test("does not retry deterministic database errors and redacts details", as
       assert.equal(error.retriable, false);
       assert.doesNotMatch(
         error.message,
-        /service-role-secret|constraint detail/,
+        /sb_secret_test_value|constraint detail/,
       );
       return true;
     },
@@ -203,7 +203,7 @@ Deno.test("does not retry deterministic database errors and redacts details", as
 Deno.test("rejects a malformed successful RPC response safely", async () => {
   const repository = createIngestRepository({
     supabaseUrl: "http://127.0.0.1:55321",
-    serviceRoleKey: "service-role-secret",
+    secretKey: "sb_secret_test_value",
     fetch: () =>
       Promise.resolve(jsonResponse({ inserted_posts: "not-a-number" })),
     sleep: () => Promise.resolve(),

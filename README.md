@@ -50,7 +50,7 @@ AI는 게시물에서 이 엔티티를 추출할 수 있지만, 숫자 신뢰도
 - 모든 애플리케이션 테이블에 RLS가 활성화되어 있습니다.
 - Milestone 1에서는 `anon`, `authenticated` 역할의 테이블 권한을 모두 제거했습니다.
 - 서버 전용 `service_role`만 CRUD를 수행합니다.
-- `SUPABASE_SERVICE_ROLE_KEY`는 브라우저나 공개 클라이언트에 절대 노출하지 않습니다.
+- `SUPABASE_SECRET_KEYS`의 secret key는 브라우저나 공개 클라이언트에 절대 노출하지 않습니다.
 - 실제 키와 Meta 토큰은 커밋하지 않습니다. `.env.example`에는 빈 변수명만 제공합니다.
 
 ## Milestone 2 수집 경로
@@ -67,7 +67,7 @@ n8n Schedule (Milestone 3)
 
 Meta 응답 전체가 검증된 후에만 RPC를 호출합니다. RPC는 계정 행을 잠그고 계정 업데이트, `raw_posts` upsert, 최초 snapshot 생성을 한 트랜잭션으로 수행합니다. `(source_account_id, external_post_id)`가 게시물 중복을 막고, 기존 snapshot 존재 여부가 재실행 시 최초 snapshot 중복을 막습니다.
 
-RPC는 `SECURITY INVOKER`이며 `PUBLIC`, `anon`, `authenticated`의 실행 권한을 제거하고 `service_role`에만 허용합니다. 외부 caller에는 service-role key를 주지 않습니다. Edge Function은 `verify_jwt = false`로 gateway JWT 검사를 사용하지 않는 대신 `Authorization: Bearer <COLLECTOR_INVOKE_SECRET>`을 함수 내부에서 timing-safe 방식으로 검증합니다.
+RPC는 `SECURITY INVOKER`이며 `PUBLIC`, `anon`, `authenticated`의 실행 권한을 제거하고 `service_role`에만 허용합니다. Supabase secret key는 PostgREST에서 이 DB 역할로 매핑되지만 외부 caller에는 전달하지 않습니다. Edge Function은 `verify_jwt = false`로 gateway JWT 검사를 사용하지 않는 대신 `Authorization: Bearer <COLLECTOR_INVOKE_SECRET>`을 함수 내부에서 timing-safe 방식으로 검증합니다.
 
 Milestone 2에서는 malformed/unsupported media 하나가 전체 batch를 실패시키는 것이 의도된 제한입니다. Milestone 3의 다계정 수집에서는 normalizer 경계를 유지한 채 rejected-item/quarantine 저장으로 바꿔, 항목 하나가 계정 전체나 다른 계정 수집을 막지 않게 합니다.
 
@@ -81,10 +81,12 @@ META_ACCESS_TOKEN
 META_BUSINESS_ACCOUNT_ID
 META_API_VERSION
 SUPABASE_URL
-SUPABASE_SERVICE_ROLE_KEY
+SUPABASE_SECRET_KEYS={"default":"<sb_secret_...>"}
 ```
 
-n8n에는 이후 `COLLECTOR_INVOKE_SECRET`만 전달하며 `SUPABASE_SERVICE_ROLE_KEY`는 전달하지 않습니다.
+hosted Edge Runtime에서는 `SUPABASE_SECRET_KEYS`가 자동 주입됩니다. 로컬/CI에서 단일 키를 쓰는 경우 `SUPABASE_SECRET_KEY`도 지원합니다. 이 opaque secret key는 JWT가 아니므로 내부 RPC 요청의 `apikey` 헤더에만 넣으며 `Authorization` 헤더에는 넣지 않습니다.
+
+n8n에는 이후 `COLLECTOR_INVOKE_SECRET`만 전달하며 Supabase secret key는 전달하지 않습니다.
 
 ### 로컬 함수 실행
 
@@ -95,7 +97,7 @@ curl --request POST 'http://127.0.0.1:55321/functions/v1/collect-instagram' \
   --header 'Authorization: Bearer <COLLECTOR_INVOKE_SECRET>'
 ```
 
-토큰, secret, service-role key, 전체 upstream 오류 본문은 응답이나 구조화 로그에 남기지 않습니다.
+토큰, secret key, 전체 upstream 오류 본문은 응답이나 구조화 로그에 남기지 않습니다.
 
 ## 로컬 개발
 
