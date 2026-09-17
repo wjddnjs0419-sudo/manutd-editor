@@ -199,3 +199,24 @@ set
   is_active = excluded.is_active,
   effective_from = excluded.effective_from,
   effective_to = null;
+
+update public.scoring_configs
+set
+  description = 'Approved deterministic Priority Score configuration for Milestone 4.',
+  config = config || jsonb_build_object(
+    'score_version', version::text,
+    'data_confidence_weights', jsonb_build_object(
+      'account_coverage', 20,
+      'baseline_evidence', 20,
+      'metric_snapshots', 20,
+      'followers', 15,
+      'source_recognition', 10,
+      'cluster_certainty', 10,
+      'api_fields', 5
+    )
+  )
+where is_active;
+
+insert into app_private.intelligence_run_lock (lock_name)
+values ('story-intelligence')
+on conflict (lock_name) do nothing;
