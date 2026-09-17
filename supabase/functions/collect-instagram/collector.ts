@@ -3,11 +3,13 @@ import type {
   CollectionSummary,
   IngestRepository,
   MetaClient,
+  SourceAccount,
 } from "./types.ts";
 
 export interface CollectInstagramDependencies {
-  username: string;
+  sourceAccount: SourceAccount;
   collectedAt: Date;
+  signal?: AbortSignal;
   metaClient: MetaClient;
   repository: IngestRepository;
 }
@@ -16,17 +18,21 @@ export async function collectInstagram(
   dependencies: CollectInstagramDependencies,
 ): Promise<CollectionSummary> {
   const rawPayload = await dependencies.metaClient.fetchAccount(
-    dependencies.username,
+    dependencies.sourceAccount.username,
+    { signal: dependencies.signal },
   );
   const batch = normalizeBusinessDiscovery(
     rawPayload,
-    dependencies.username,
+    dependencies.sourceAccount.username,
     dependencies.collectedAt,
   );
-  const persisted = await dependencies.repository.ingest(batch);
+  const persisted = await dependencies.repository.ingest(
+    dependencies.sourceAccount.id,
+    batch,
+  );
 
   return {
-    username: dependencies.username,
+    username: dependencies.sourceAccount.username,
     ...persisted,
     receivedMedia: batch.receivedMedia,
     deduplicatedMedia: batch.posts.length,

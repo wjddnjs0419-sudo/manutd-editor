@@ -8,6 +8,10 @@ import type {
 } from "../../collect-instagram/types.ts";
 
 const collectedAt = new Date("2026-09-17T01:00:00.000Z");
+const sourceAccount = {
+  id: "00000000-0000-4000-8000-000000000001",
+  username: "utdreport",
+};
 
 function payload(username = "utdreport"): Record<string, unknown> {
   return {
@@ -34,37 +38,55 @@ function payload(username = "utdreport"): Record<string, unknown> {
 
 Deno.test("collects, normalizes, persists, and summarizes one account batch", async () => {
   const savedBatches: NormalizedBatch[] = [];
+  const savedAccountIds: string[] = [];
+  const controller = new AbortController();
+  let receivedSignal: AbortSignal | undefined;
   const metaClient: MetaClient = {
-    fetchAccount: () => Promise.resolve(payload()),
+    fetchAccount: (_username, options) => {
+      receivedSignal = options?.signal;
+      return Promise.resolve(payload());
+    },
   };
   const repository: IngestRepository = {
-    ingest: (batch) => {
+    ingest: (sourceAccountId, batch) => {
+      savedAccountIds.push(sourceAccountId);
       savedBatches.push(batch);
       return Promise.resolve({
-        accountId: "17841400000000001",
+        accountId: sourceAccount.id,
         insertedPosts: 1,
         updatedPosts: 0,
         insertedSnapshots: 1,
+        posts: [{
+          externalPostId: "image-1",
+          rawPostId: "00000000-0000-4000-8000-000000000002",
+        }],
       });
     },
   };
 
   const result = await collectInstagram({
-    username: "utdreport",
+    sourceAccount,
     collectedAt,
+    signal: controller.signal,
     metaClient,
     repository,
   });
 
   assert.deepEqual(result, {
     username: "utdreport",
-    accountId: "17841400000000001",
+    accountId: sourceAccount.id,
     receivedMedia: 1,
     deduplicatedMedia: 1,
     insertedPosts: 1,
     updatedPosts: 0,
     insertedSnapshots: 1,
+    posts: [{
+      externalPostId: "image-1",
+      rawPostId: "00000000-0000-4000-8000-000000000002",
+    }],
   });
+  assert.deepEqual(savedAccountIds, [sourceAccount.id]);
+  assert.equal(receivedSignal, controller.signal);
   assert.equal(savedBatches.length, 1);
   assert.equal(savedBatches[0].posts[0].externalPostId, "image-1");
 });
@@ -84,7 +106,7 @@ Deno.test("does not call the repository after a Meta failure", async () => {
 
   await assert.rejects(
     collectInstagram({
-      username: "utdreport",
+      sourceAccount,
       collectedAt,
       metaClient,
       repository,
@@ -108,7 +130,7 @@ Deno.test("does not call the repository when normalization rejects the batch", a
 
   await assert.rejects(
     collectInstagram({
-      username: "utdreport",
+      sourceAccount,
       collectedAt,
       metaClient,
       repository,
@@ -129,7 +151,7 @@ Deno.test("propagates a safe repository failure after normalization", async () =
 
   await assert.rejects(
     collectInstagram({
-      username: "utdreport",
+      sourceAccount,
       collectedAt,
       metaClient,
       repository,

@@ -73,7 +73,10 @@ export interface CollectionSummary extends IngestResult {
 }
 
 export interface MetaClient {
-  fetchAccount(username: string): Promise<unknown>;
+  fetchAccount(
+    username: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown>;
 }
 
 export interface IngestRepository {

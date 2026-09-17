@@ -174,11 +174,108 @@ Deno.test("does not retry permanent Meta errors and redacts secret material", as
       assert.equal(error.code, "META_HTTP_ERROR");
       assert.equal(error.status, 401);
       assert.equal(error.retriable, false);
+      assert.equal(error.category, "permission");
       assert.doesNotMatch(error.message, /meta-secret-token|private detail/);
       return true;
     },
   );
   assert.equal(attempts, 1);
+});
+
+Deno.test("classifies Meta failures from safe status and numeric error fields", async () => {
+  const cases = [
+    {
+      status: 400,
+      body: { error: { code: 100, message: "secret unsupported detail" } },
+      category: "unsupported_account",
+      retriable: false,
+    },
+    {
+      status: 403,
+      body: { error: { code: 10, message: "secret permission detail" } },
+      category: "permission",
+      retriable: false,
+    },
+    {
+      status: 429,
+      body: { error: { code: 4, message: "secret rate detail" } },
+      category: "rate_limited",
+      retriable: true,
+    },
+    {
+      status: 503,
+      body: { error: { message: "secret upstream detail" } },
+      category: "temporary_upstream",
+      retriable: true,
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    const client = createMetaClient({
+      accessToken: "meta-secret-token",
+      businessAccountId: "business-account-id",
+      apiVersion: "v99.0",
+      mediaLimit: 25,
+      fetch: () =>
+        Promise.resolve(jsonResponse(testCase.body, testCase.status)),
+      sleep: () => Promise.resolve(),
+      random: () => 0,
+    });
+
+    await assert.rejects(
+      client.fetchAccount("utdreport"),
+      (error: unknown) => {
+        assert.ok(error instanceof MetaApiError);
+        assert.equal(error.category, testCase.category);
+        assert.equal(error.retriable, testCase.retriable);
+        assert.doesNotMatch(
+          JSON.stringify({
+            name: error.name,
+            message: error.message,
+            code: error.code,
+            category: error.category,
+          }),
+          /meta-secret-token|secret .* detail/,
+        );
+        return true;
+      },
+    );
+  }
+});
+
+Deno.test("an aborted account request stops without retry or sleep", async () => {
+  let attempts = 0;
+  let sleeps = 0;
+  const controller = new AbortController();
+  controller.abort();
+  const client = createMetaClient({
+    accessToken: "meta-secret-token",
+    businessAccountId: "business-account-id",
+    apiVersion: "v99.0",
+    mediaLimit: 25,
+    fetch: () => {
+      attempts += 1;
+      return Promise.reject(
+        new DOMException("private abort detail", "AbortError"),
+      );
+    },
+    sleep: () => {
+      sleeps += 1;
+      return Promise.resolve();
+    },
+    random: () => 0,
+  });
+
+  await assert.rejects(
+    client.fetchAccount("utdreport", { signal: controller.signal }),
+    (error: unknown) =>
+      error instanceof MetaApiError &&
+      error.category === "temporary_upstream" &&
+      error.retriable === false &&
+      !error.message.includes("private abort detail"),
+  );
+  assert.equal(attempts, 0);
+  assert.equal(sleeps, 0);
 });
 
 Deno.test("stops after three transient failures with a safe error", async () => {
