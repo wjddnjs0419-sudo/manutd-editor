@@ -72,6 +72,29 @@ export interface CollectionSummary extends IngestResult {
   deduplicatedMedia: number;
 }
 
+export interface AccountCollectionResult {
+  sourceAccountId: string;
+  status: "success" | "failed";
+  errorCategory?: AccountFailureCategory;
+  insertedPosts: number;
+  updatedPosts: number;
+  insertedSnapshots: number;
+  assetsStored: number;
+  assetsFailed: number;
+}
+
+export interface CollectionRunSummary {
+  accountsRequested: number;
+  accountsSuccess: number;
+  accountsFailed: number;
+  postsCreated: number;
+  postsUpdated: number;
+  snapshotsCreated: number;
+  assetsStored: number;
+  assetsFailed: number;
+  accounts: AccountCollectionResult[];
+}
+
 export interface MetaClient {
   fetchAccount(
     username: string,
