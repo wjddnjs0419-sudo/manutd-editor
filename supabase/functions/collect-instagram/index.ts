@@ -1,11 +1,24 @@
+import { createClient } from "@supabase/supabase-js";
 import { collectInstagram } from "./collector.ts";
-import { integerEnv, requiredEnv, resolveSupabaseSecretKey } from "./config.ts";
+import {
+  integerEnv,
+  requiredEnv,
+  resolveMediaConfig,
+  resolveSupabaseSecretKey,
+} from "./config.ts";
 import { createHandler } from "./handler.ts";
+import {
+  createMediaStorage,
+  storageClientFromSupabase,
+} from "./media_storage.ts";
 import { createMetaClient } from "./meta_client.ts";
 import { runInstagramCollection } from "./orchestrator.ts";
 import { createIngestRepository } from "./repository.ts";
 
 const readEnv = (name: string) => Deno.env.get(name);
+const supabaseUrl = requiredEnv(readEnv, "SUPABASE_URL");
+const secretKey = resolveSupabaseSecretKey(readEnv);
+const mediaConfig = resolveMediaConfig(readEnv);
 const concurrency = integerEnv(
   readEnv,
   "COLLECTOR_CONCURRENCY",
@@ -34,8 +47,20 @@ const metaClient = createMetaClient({
   mediaLimit: 25,
 });
 const repository = createIngestRepository({
-  supabaseUrl: requiredEnv(readEnv, "SUPABASE_URL"),
-  secretKey: resolveSupabaseSecretKey(readEnv),
+  supabaseUrl,
+  secretKey,
+});
+const supabase = createClient(supabaseUrl, secretKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
+  },
+});
+const mediaStorage = createMediaStorage({
+  bucket: mediaConfig.bucket,
+  maxBytes: mediaConfig.maxBytes,
+  storageClient: storageClientFromSupabase(supabase),
 });
 const handler = createHandler({
   collectorSecret: requiredEnv(readEnv, "COLLECTOR_INVOKE_SECRET"),
@@ -47,6 +72,10 @@ const handler = createHandler({
       runBudgetMs,
       accountBudgetMs,
       accountRepository: repository,
+      mediaRepository: repository,
+      mediaStorage,
+      mediaConcurrency: mediaConfig.concurrency,
+      mediaLimitPerRun: mediaConfig.assetsPerRun,
       collectAccount: (sourceAccount, accountCollectedAt, signal) =>
         collectInstagram({
           sourceAccount,

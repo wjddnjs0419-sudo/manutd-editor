@@ -31,6 +31,38 @@ export function integerEnv(
   return parsed;
 }
 
+export interface MediaConfig {
+  bucket: "instagram-analysis";
+  concurrency: number;
+  assetsPerRun: number;
+  maxBytes: number;
+}
+
+export function resolveMediaConfig(readEnv: EnvReader): MediaConfig {
+  const bucket = readEnv("MEDIA_STORAGE_BUCKET") ?? "instagram-analysis";
+  if (bucket !== "instagram-analysis") {
+    throw new Error("Invalid configuration: MEDIA_STORAGE_BUCKET");
+  }
+  return {
+    bucket,
+    concurrency: integerEnv(
+      readEnv,
+      "MEDIA_DOWNLOAD_CONCURRENCY",
+      1,
+      2,
+      2,
+    ),
+    assetsPerRun: integerEnv(readEnv, "MEDIA_ASSETS_PER_RUN", 1, 100, 20),
+    maxBytes: integerEnv(
+      readEnv,
+      "MEDIA_MAX_BYTES",
+      1,
+      20 * 1024 * 1024,
+      20 * 1024 * 1024,
+    ),
+  };
+}
+
 export function resolveSupabaseSecretKey(readEnv: EnvReader): string {
   const keySet = readEnv("SUPABASE_SECRET_KEYS");
   if (nonEmptyString(keySet)) {

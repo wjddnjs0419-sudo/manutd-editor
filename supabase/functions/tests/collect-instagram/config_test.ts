@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   integerEnv,
+  resolveMediaConfig,
   resolveSupabaseSecretKey,
 } from "../../collect-instagram/config.ts";
 
@@ -13,6 +14,44 @@ Deno.test("selects the default key from the hosted SUPABASE_SECRET_KEYS dictiona
   );
 
   assert.equal(key, "sb_secret_hosted");
+});
+
+Deno.test("resolves bounded private media configuration", () => {
+  const values: Record<string, string> = {
+    MEDIA_STORAGE_BUCKET: "instagram-analysis",
+    MEDIA_DOWNLOAD_CONCURRENCY: "2",
+    MEDIA_ASSETS_PER_RUN: "20",
+    MEDIA_MAX_BYTES: "20971520",
+  };
+  assert.deepEqual(resolveMediaConfig((name) => values[name]), {
+    bucket: "instagram-analysis",
+    concurrency: 2,
+    assetsPerRun: 20,
+    maxBytes: 20_971_520,
+  });
+});
+
+Deno.test("rejects unsafe media configuration without echoing values", () => {
+  const cases: Array<[string, string]> = [
+    ["MEDIA_STORAGE_BUCKET", "public-secret-bucket"],
+    ["MEDIA_DOWNLOAD_CONCURRENCY", "3"],
+    ["MEDIA_ASSETS_PER_RUN", "101"],
+    ["MEDIA_MAX_BYTES", "20971521"],
+  ];
+  for (const [name, invalid] of cases) {
+    assert.throws(
+      () =>
+        resolveMediaConfig((candidate) =>
+          candidate === name ? invalid : undefined
+        ),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, new RegExp(name));
+        assert.doesNotMatch(error.message, new RegExp(invalid));
+        return true;
+      },
+    );
+  }
 });
 
 Deno.test("reads bounded integer configuration and uses its default", () => {

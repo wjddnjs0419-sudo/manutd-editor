@@ -2,7 +2,7 @@
 
 맨체스터 유나이티드 관련 Instagram 콘텐츠를 수집·분석하고, 객관적인 우선순위 점수와 실행 가능한 콘텐츠 브리프를 만드는 시스템입니다.
 
-현재 구현 범위는 **Milestone 3 Core: 다계정 수집과 metric refresh**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. media asset 저장과 n8n 스케줄링은 다음 구현 단계이며, 스토리 클러스터링·점수 계산 워커·Notion 동기화는 이후 마일스톤 범위입니다.
+현재 구현 범위는 **Milestone 3 수집 파이프라인: 다계정 수집, metric refresh, private media cache**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. 모든 계정의 core transaction이 끝난 뒤 IMAGE·carousel child·Reel thumbnail을 private Storage에 보조 작업으로 저장합니다. n8n 스케줄링은 다음 구현 단계이며, 스토리 클러스터링·점수 계산 워커·Notion 동기화는 이후 마일스톤 범위입니다.
 
 ## 핵심 원칙
 
@@ -61,6 +61,7 @@ n8n Schedule (후속 연결)
   → Meta Business Discovery API
   → ingest_instagram_account_batch RPC
   → source_accounts + raw_posts + post_metric_snapshots
+  → prepare media assets → private Storage → finalize media assets
 ```
 
 body 없이 호출하면 DB의 모든 active 계정을 수집합니다. 필요하면 caller가 `source_account_ids` UUID 배열로 active 계정의 subset만 제한할 수 있지만 username은 지정할 수 없습니다. 한 계정의 Meta·validation·DB 실패는 다른 계정 commit을 막지 않으며, aggregate 응답은 계정별 성공/실패와 안전한 오류 category를 반환합니다. `IMAGE`, `CAROUSEL_ALBUM`, `VIDEO` + `REELS`를 처리하고, Meta가 Reel 조회수를 제공하지 않으면 `view_count`를 `NULL`로 보존합니다.
@@ -70,6 +71,8 @@ Meta 응답 전체가 검증된 후에만 계정별 RPC를 호출합니다. RPC�
 RPC는 `SECURITY INVOKER`이며 `PUBLIC`, `anon`, `authenticated`의 실행 권한을 제거하고 `service_role`에만 허용합니다. Supabase secret key는 PostgREST에서 이 DB 역할로 매핑되지만 외부 caller에는 전달하지 않습니다. Edge Function은 `verify_jwt = false`로 gateway JWT 검사를 사용하지 않는 대신 `Authorization: Bearer <COLLECTOR_INVOKE_SECRET>`을 함수 내부에서 timing-safe 방식으로 검증합니다.
 
 malformed/unsupported media 하나는 해당 계정 batch 전체를 실패시키는 보수적 경계를 유지합니다. 다른 계정 worker는 계속 실행되며 별도의 quarantine 원문 저장은 하지 않습니다.
+
+media cache는 `instagram-analysis` private bucket만 사용합니다. 원본 이미지 형식을 변환하지 않고 `image/jpeg`, `image/png`, `image/webp`, `image/gif`만 asset당 최대 20MiB로 저장합니다. Storage path는 계정·게시물·media ID로 결정되며 duplicate upload는 안전한 재시도로 처리합니다. Storage 실패는 완료된 raw post와 metric transaction을 롤백하지 않습니다. 성공한 asset만 `storage_path`, MIME, fetch 시각과 30일 retention metadata를 기록하며 자동 삭제 job은 아직 없습니다.
 
 ### 환경 변수
 
@@ -83,6 +86,10 @@ META_API_VERSION
 COLLECTOR_CONCURRENCY=2
 COLLECTOR_ACCOUNT_BUDGET_MS=20000
 COLLECTOR_RUN_BUDGET_MS=100000
+MEDIA_STORAGE_BUCKET=instagram-analysis
+MEDIA_DOWNLOAD_CONCURRENCY=2
+MEDIA_ASSETS_PER_RUN=20
+MEDIA_MAX_BYTES=20971520
 SUPABASE_URL
 SUPABASE_SECRET_KEYS={"default":"<sb_secret_...>"}
 ```
@@ -120,6 +127,7 @@ curl --request POST 'http://127.0.0.1:55321/functions/v1/collect-instagram' \
 ```bash
 supabase start
 supabase db reset --local
+supabase seed buckets
 supabase test db
 supabase db lint --local --schema public,app_private --level warning
 ```
@@ -167,6 +175,8 @@ pgTAP 테스트는 다음을 검증합니다.
 - 계정·게시물·cadence snapshot의 원자적 저장과 30분 bucket 멱등성
 - DB active 계정 조회, account-ID ingest, 안전한 probe failure 기록
 - concurrency 2, 계정 실패 격리, 계정별 timeout과 전체 run budget
+- private bucket, MIME/20MiB 제한, deterministic path와 duplicate retry
+- media prepare/upload/finalize 실패 격리와 30일 retention metadata
 - IMAGE, CAROUSEL_ALBUM, REELS 정규화와 nullable Reel 조회수
 - Meta/API 및 DB transient retry와 영구 오류 비재시도
 - collector secret 인증과 오류 응답의 비밀값 비노출
@@ -180,4 +190,4 @@ docker run --rm -v "$PWD/supabase:/workspace" -w /workspace \
 
 ## 다음 구현 단계
 
-Milestone 3의 다음 slice에서는 private Storage 기반 media asset 저장을 추가하고, 그 뒤 30분 n8n Schedule과 smoke verification을 연결합니다.
+Milestone 3의 다음 slice에서는 30분 n8n Schedule과 smoke verification을 연결합니다.
