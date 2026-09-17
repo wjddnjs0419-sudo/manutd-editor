@@ -12,6 +12,25 @@ export function requiredEnv(readEnv: EnvReader, name: string): string {
   return value;
 }
 
+export function integerEnv(
+  readEnv: EnvReader,
+  name: string,
+  minimum: number,
+  maximum: number,
+  defaultValue: number,
+): number {
+  const value = readEnv(name);
+  if (value === undefined) return defaultValue;
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new Error(`Invalid integer configuration: ${name}`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`Invalid integer configuration: ${name}`);
+  }
+  return parsed;
+}
+
 export function resolveSupabaseSecretKey(readEnv: EnvReader): string {
   const keySet = readEnv("SUPABASE_SECRET_KEYS");
   if (nonEmptyString(keySet)) {

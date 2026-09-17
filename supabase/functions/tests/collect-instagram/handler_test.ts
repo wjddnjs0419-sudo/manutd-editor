@@ -1,20 +1,54 @@
 import assert from "node:assert/strict";
 
 import { createHandler } from "../../collect-instagram/handler.ts";
-import { MetaApiError } from "../../collect-instagram/meta_client.ts";
 import { RepositoryError } from "../../collect-instagram/repository.ts";
-import type { CollectionSummary } from "../../collect-instagram/types.ts";
+import type { CollectionRunSummary } from "../../collect-instagram/types.ts";
 
 const url = "http://localhost/functions/v1/collect-instagram";
-const summary: CollectionSummary = {
-  username: "utdreport",
-  accountId: "17841400000000001",
-  receivedMedia: 3,
-  deduplicatedMedia: 3,
-  insertedPosts: 3,
-  updatedPosts: 0,
-  insertedSnapshots: 3,
+const validUuid1 = "00000000-0000-4000-8000-000000000001";
+const validUuid2 = "00000000-0000-4000-8000-000000000002";
+const summary: CollectionRunSummary = {
+  accountsRequested: 2,
+  accountsSuccess: 1,
+  accountsFailed: 1,
+  postsCreated: 3,
+  postsUpdated: 2,
+  snapshotsCreated: 4,
+  assetsStored: 0,
+  assetsFailed: 0,
+  accounts: [
+    {
+      sourceAccountId: validUuid1,
+      status: "success",
+      insertedPosts: 3,
+      updatedPosts: 2,
+      insertedSnapshots: 4,
+      assetsStored: 0,
+      assetsFailed: 0,
+    },
+    {
+      sourceAccountId: validUuid2,
+      status: "failed",
+      errorCategory: "permission",
+      insertedPosts: 0,
+      updatedPosts: 0,
+      insertedSnapshots: 0,
+      assetsStored: 0,
+      assetsFailed: 0,
+    },
+  ],
 };
+
+function authorizedRequest(body?: string): Request {
+  return new Request(url, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer collector-secret",
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+    body,
+  });
+}
 
 Deno.test("rejects non-POST methods without invoking collection", async () => {
   let collectCalls = 0;
@@ -71,82 +105,135 @@ Deno.test("rejects missing, malformed, and incorrect collector credentials", asy
   }
 });
 
-Deno.test("authenticates the exact bearer secret and returns a request-scoped summary", async () => {
-  let collectedAt: Date | undefined;
-  const logs: unknown[] = [];
+Deno.test("body omission collects all active accounts", async () => {
+  let receivedIds: string[] | undefined = ["not-reset"];
   const handler = createHandler({
     collectorSecret: "collector-secret",
-    collect: (date) => {
-      collectedAt = date;
+    collect: (_date, ids) => {
+      receivedIds = ids;
+      return Promise.resolve(summary);
+    },
+    requestId: () => "req-all",
+    log: () => undefined,
+  });
+
+  const response = await handler(authorizedRequest());
+
+  assert.equal(response.status, 200);
+  assert.equal(receivedIds, undefined);
+});
+
+Deno.test("valid source_account_ids are passed to collection in request order", async () => {
+  let receivedIds: string[] | undefined;
+  const handler = createHandler({
+    collectorSecret: "collector-secret",
+    collect: (_date, ids) => {
+      receivedIds = ids;
       return Promise.resolve(summary);
     },
     now: () => new Date("2026-09-17T01:00:00.000Z"),
-    requestId: () => "req-success",
-    log: (entry) => logs.push(entry),
+    requestId: () => "req-subset",
+    log: () => undefined,
   });
 
-  const response = await handler(
-    new Request(url, {
-      method: "POST",
-      headers: { authorization: "Bearer collector-secret" },
-    }),
-  );
+  const response = await handler(authorizedRequest(JSON.stringify({
+    source_account_ids: [validUuid2, validUuid1],
+  })));
 
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("content-type"), "application/json");
-  assert.deepEqual(await response.json(), {
-    requestId: "req-success",
-    ...summary,
-  });
-  assert.equal(collectedAt?.toISOString(), "2026-09-17T01:00:00.000Z");
-  assert.equal(logs.length, 1);
-  assert.doesNotMatch(JSON.stringify(logs), /collector-secret/);
+  assert.deepEqual(receivedIds, [validUuid2, validUuid1]);
 });
 
-Deno.test("maps Meta failures to a safe 502 response and log entry", async () => {
+Deno.test("invalid request bodies return 400 without invoking collection", async (test) => {
+  const bodies: Array<[string, string]> = [
+    ["malformed JSON", "{"],
+    ["array root", "[]"],
+    ["missing key", "{}"],
+    ["empty IDs", JSON.stringify({ source_account_ids: [] })],
+    [
+      "duplicate IDs",
+      JSON.stringify({
+        source_account_ids: [validUuid1, validUuid1],
+      }),
+    ],
+    ["non-string ID", JSON.stringify({ source_account_ids: [7] })],
+    ["malformed UUID", JSON.stringify({ source_account_ids: ["account-1"] })],
+    [
+      "unknown key",
+      JSON.stringify({
+        source_account_ids: [validUuid1],
+        username: "utdreport",
+      }),
+    ],
+  ];
+
+  for (const [name, body] of bodies) {
+    await test.step(name, async () => {
+      let collectCalls = 0;
+      const handler = createHandler({
+        collectorSecret: "collector-secret",
+        collect: () => {
+          collectCalls += 1;
+          return Promise.resolve(summary);
+        },
+        requestId: () => "req-invalid",
+        log: () => undefined,
+      });
+
+      const response = await handler(authorizedRequest(body));
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        requestId: "req-invalid",
+        error: { code: "INVALID_REQUEST", message: "Invalid request body" },
+      });
+      assert.equal(collectCalls, 0);
+    });
+  }
+});
+
+Deno.test("returns a partial-failure aggregate as HTTP 200 with safe logs", async () => {
   const logs: unknown[] = [];
   const handler = createHandler({
     collectorSecret: "collector-secret",
-    collect: () =>
-      Promise.reject(new MetaApiError("META_HTTP_ERROR", 401, false)),
-    requestId: () => "req-meta",
+    collect: () => Promise.resolve(summary),
+    requestId: () => "req-partial",
     log: (entry) => logs.push(entry),
   });
 
-  const response = await handler(
-    new Request(url, {
-      method: "POST",
-      headers: { authorization: "Bearer collector-secret" },
-    }),
-  );
-  const body = await response.text();
+  const response = await handler(authorizedRequest());
 
-  assert.equal(response.status, 502);
-  assert.deepEqual(JSON.parse(body), {
-    requestId: "req-meta",
-    error: { code: "META_HTTP_ERROR", message: "Meta collection failed" },
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    requestId: "req-partial",
+    ...summary,
   });
-  assert.doesNotMatch(body, /collector-secret|401/);
+  assert.deepEqual(logs, [{
+    requestId: "req-partial",
+    event: "collection_completed",
+    accountsRequested: 2,
+    accountsSuccess: 1,
+    accountsFailed: 1,
+    failureCategories: { permission: 1 },
+    postsCreated: 3,
+    postsUpdated: 2,
+    snapshotsCreated: 4,
+    assetsStored: 0,
+    assetsFailed: 0,
+  }]);
+  assert.doesNotMatch(JSON.stringify(logs), new RegExp(validUuid1));
   assert.doesNotMatch(JSON.stringify(logs), /collector-secret/);
 });
 
-Deno.test("maps database failures to a safe 500 response", async () => {
+Deno.test("maps account-list database failures to a safe 500 response", async () => {
   const handler = createHandler({
     collectorSecret: "collector-secret",
     collect: () =>
-      Promise.reject(
-        new RepositoryError("DATABASE_HTTP_ERROR", 400, false),
-      ),
+      Promise.reject(new RepositoryError("DATABASE_HTTP_ERROR", 400, false)),
     requestId: () => "req-database",
     log: () => undefined,
   });
 
-  const response = await handler(
-    new Request(url, {
-      method: "POST",
-      headers: { authorization: "Bearer collector-secret" },
-    }),
-  );
+  const response = await handler(authorizedRequest());
   const body = await response.text();
 
   assert.equal(response.status, 500);

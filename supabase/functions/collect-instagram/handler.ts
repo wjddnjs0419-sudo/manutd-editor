@@ -1,17 +1,23 @@
-import { MetaApiError } from "./meta_client.ts";
-import { ValidationError } from "./normalizer.ts";
+import { CollectionInputError } from "./orchestrator.ts";
 import { RepositoryError } from "./repository.ts";
-import type { CollectionSummary } from "./types.ts";
+import type { AccountFailureCategory, CollectionRunSummary } from "./types.ts";
 
 export interface HandlerDependencies {
   collectorSecret: string;
-  collect: (collectedAt: Date) => Promise<CollectionSummary>;
+  collect: (
+    collectedAt: Date,
+    requestedSourceAccountIds?: string[],
+  ) => Promise<CollectionRunSummary>;
   now?: () => Date;
   requestId?: () => string;
   log?: (entry: Record<string, unknown>) => void;
 }
 
 const encoder = new TextEncoder();
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+class InvalidRequestError extends Error {}
 
 async function digest(value: string): Promise<Uint8Array> {
   return new Uint8Array(
@@ -46,6 +52,53 @@ function json(body: unknown, status: number, headers?: HeadersInit): Response {
 
 function statusClass(status: number | null): string | null {
   return status === null ? null : `${Math.floor(status / 100)}xx`;
+}
+
+async function requestedAccountIds(
+  request: Request,
+): Promise<string[] | undefined> {
+  if (request.body === null) return undefined;
+  const text = await request.text();
+  if (text.trim() === "") return undefined;
+
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new InvalidRequestError();
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new InvalidRequestError();
+  }
+
+  const object = value as Record<string, unknown>;
+  if (
+    Object.keys(object).length !== 1 ||
+    !Array.isArray(object.source_account_ids) ||
+    object.source_account_ids.length === 0 ||
+    object.source_account_ids.some((id) =>
+      typeof id !== "string" || !UUID_PATTERN.test(id)
+    )
+  ) {
+    throw new InvalidRequestError();
+  }
+
+  const ids = object.source_account_ids as string[];
+  if (new Set(ids).size !== ids.length) throw new InvalidRequestError();
+  return ids;
+}
+
+function failureCategories(
+  result: CollectionRunSummary,
+): Partial<Record<AccountFailureCategory, number>> {
+  const categories: Partial<Record<AccountFailureCategory, number>> = {};
+  for (const account of result.accounts) {
+    if (account.errorCategory !== undefined) {
+      categories[account.errorCategory] =
+        (categories[account.errorCategory] ?? 0) + 1;
+    }
+  }
+  return categories;
 }
 
 export function createHandler(
@@ -93,52 +146,33 @@ export function createHandler(
     }
 
     try {
-      const result = await dependencies.collect(now());
+      const accountIds = await requestedAccountIds(request);
+      const result = await dependencies.collect(now(), accountIds);
       log({
         requestId: id,
-        event: "collection_succeeded",
-        username: result.username,
-        receivedMedia: result.receivedMedia,
-        deduplicatedMedia: result.deduplicatedMedia,
-        insertedPosts: result.insertedPosts,
-        updatedPosts: result.updatedPosts,
-        insertedSnapshots: result.insertedSnapshots,
+        event: "collection_completed",
+        accountsRequested: result.accountsRequested,
+        accountsSuccess: result.accountsSuccess,
+        accountsFailed: result.accountsFailed,
+        failureCategories: failureCategories(result),
+        postsCreated: result.postsCreated,
+        postsUpdated: result.postsUpdated,
+        snapshotsCreated: result.snapshotsCreated,
+        assetsStored: result.assetsStored,
+        assetsFailed: result.assetsFailed,
       });
       return json({ requestId: id, ...result }, 200);
     } catch (error) {
-      if (error instanceof MetaApiError) {
-        log({
-          requestId: id,
-          event: "collection_failed",
-          code: error.code,
-          upstreamStatusClass: statusClass(error.status),
-          retriable: error.retriable,
-        });
+      if (
+        error instanceof InvalidRequestError ||
+        error instanceof CollectionInputError
+      ) {
         return json(
           {
             requestId: id,
-            error: { code: error.code, message: "Meta collection failed" },
+            error: { code: "INVALID_REQUEST", message: "Invalid request body" },
           },
-          502,
-        );
-      }
-      if (error instanceof ValidationError) {
-        log({
-          requestId: id,
-          event: "collection_failed",
-          code: "INVALID_META_PAYLOAD",
-          itemId: error.itemId,
-          field: error.field,
-        });
-        return json(
-          {
-            requestId: id,
-            error: {
-              code: "INVALID_META_PAYLOAD",
-              message: "Meta payload validation failed",
-            },
-          },
-          502,
+          400,
         );
       }
       if (error instanceof RepositoryError) {

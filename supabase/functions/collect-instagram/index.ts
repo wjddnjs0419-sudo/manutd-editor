@@ -1,11 +1,32 @@
 import { collectInstagram } from "./collector.ts";
-import { requiredEnv, resolveSupabaseSecretKey } from "./config.ts";
+import { integerEnv, requiredEnv, resolveSupabaseSecretKey } from "./config.ts";
 import { createHandler } from "./handler.ts";
 import { createMetaClient } from "./meta_client.ts";
+import { runInstagramCollection } from "./orchestrator.ts";
 import { createIngestRepository } from "./repository.ts";
 
-const username = "utdreport";
 const readEnv = (name: string) => Deno.env.get(name);
+const concurrency = integerEnv(
+  readEnv,
+  "COLLECTOR_CONCURRENCY",
+  1,
+  3,
+  2,
+);
+const accountBudgetMs = integerEnv(
+  readEnv,
+  "COLLECTOR_ACCOUNT_BUDGET_MS",
+  1,
+  120_000,
+  20_000,
+);
+const runBudgetMs = integerEnv(
+  readEnv,
+  "COLLECTOR_RUN_BUDGET_MS",
+  1,
+  120_000,
+  100_000,
+);
 const metaClient = createMetaClient({
   accessToken: requiredEnv(readEnv, "META_ACCESS_TOKEN"),
   businessAccountId: requiredEnv(readEnv, "META_BUSINESS_ACCOUNT_ID"),
@@ -18,12 +39,22 @@ const repository = createIngestRepository({
 });
 const handler = createHandler({
   collectorSecret: requiredEnv(readEnv, "COLLECTOR_INVOKE_SECRET"),
-  collect: (collectedAt) =>
-    collectInstagram({
-      username,
+  collect: (collectedAt, requestedSourceAccountIds) =>
+    runInstagramCollection({
+      requestedSourceAccountIds,
       collectedAt,
-      metaClient,
-      repository,
+      concurrency,
+      runBudgetMs,
+      accountBudgetMs,
+      accountRepository: repository,
+      collectAccount: (sourceAccount, accountCollectedAt, signal) =>
+        collectInstagram({
+          sourceAccount,
+          collectedAt: accountCollectedAt,
+          signal,
+          metaClient,
+          repository,
+        }),
     }),
 });
 
