@@ -1,6 +1,7 @@
 begin;
 
 set role postgres;
+create extension if not exists pgtap with schema extensions;
 set search_path = pgtap, extensions, public;
 select plan(27);
 

@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from "npm:@supabase/supabase-js@2.116.0";
 import { collectInstagram } from "./collector.ts";
 import {
   integerEnv,
