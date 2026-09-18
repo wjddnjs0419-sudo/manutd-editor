@@ -19,6 +19,8 @@ assert.deepEqual(
     "n8n-nodes-base.httpRequest",
     "n8n-nodes-base.httpRequest",
     "n8n-nodes-base.httpRequest",
+    "n8n-nodes-base.httpRequest",
+    "n8n-nodes-base.httpRequest",
     "n8n-nodes-base.scheduleTrigger",
   ].sort(),
 );
@@ -40,10 +42,18 @@ const intelligence = nodes.find((node) =>
 const notion = nodes.find((node) =>
   node.name === "Sync Daily Intelligence to Notion"
 );
-assert.equal(httpNodes.length, 3, "workflow must have exactly three HTTP nodes");
+const priority = nodes.find((node) =>
+  node.name === "Trigger Priority Creative Generation"
+);
+const selected = nodes.find((node) =>
+  node.name === "Poll Selected Creative Generation"
+);
+assert.equal(httpNodes.length, 5, "workflow must have exactly five HTTP nodes");
 assert.ok(collector, "collector HTTP node is required");
 assert.ok(intelligence, "intelligence HTTP node is required");
 assert.ok(notion, "Notion sync HTTP node is required");
+assert.ok(priority, "priority creative generation HTTP node is required");
+assert.ok(selected, "selected creative generation HTTP node is required");
 
 function responseOptions(node) {
   return node.parameters?.options?.response?.response ?? {};
@@ -132,6 +142,16 @@ assert.equal(
   120000,
   "Notion sync must use a 120-second timeout",
 );
+assertHttpContract(priority, "priority creative generation", "creative-generation-priority");
+assert.equal(priority.continueOnFail, true, "priority creative generation must continue-on-failure");
+assert.equal(responseOptions(priority).neverError, true, "priority creative generation must not invalidate upstream success");
+assert.equal(responseOptions(priority).includeResponseHeadersAndStatus, true, "priority creative generation must expose response status");
+assert.equal(priority.parameters?.options?.timeout, 120000, "priority creative generation must use a 120-second timeout");
+assertHttpContract(selected, "selected creative generation", "creative-generation-selected-poll");
+assert.equal(selected.continueOnFail, true, "selected creative generation must continue-on-failure");
+assert.equal(responseOptions(selected).neverError, true, "selected creative generation must not invalidate upstream success");
+assert.equal(responseOptions(selected).includeResponseHeadersAndStatus, true, "selected creative generation must expose response status");
+assert.equal(selected.parameters?.options?.timeout, 120000, "selected creative generation must use a 120-second timeout");
 
 function outgoingTargets(sourceName) {
   return (workflow.connections?.[sourceName]?.main ?? [])
@@ -171,15 +191,37 @@ assert.equal(
 );
 assert.equal(
   intelligenceTargets[0].node,
-  notion.name,
-  "intelligence must connect to Notion sync",
+  priority.name,
+  "intelligence must connect to priority creative generation",
 );
 
-const notionTargets = outgoingTargets(notion.name);
 assert.equal(
-  notionTargets.length,
+  outgoingTargets(priority.name).length,
+  1,
+  "priority creative generation must have exactly one Notion sync edge",
+);
+assert.equal(
+  outgoingTargets(priority.name)[0].node,
+  notion.name,
+  "priority creative generation must connect to Notion sync",
+);
+
+assert.equal(
+  outgoingTargets(notion.name).length,
+  1,
+  "Notion sync must have exactly one selected creative generation edge",
+);
+assert.equal(
+  outgoingTargets(notion.name)[0].node,
+  selected.name,
+  "Notion sync must connect to selected creative generation",
+);
+
+const selectedTargets = outgoingTargets(selected.name);
+assert.equal(
+  selectedTargets.length,
   0,
-  "Notion sync must be the final node in this workflow",
+  "selected creative generation must be the final node in this workflow",
 );
 
 const serialized = JSON.stringify(workflow);

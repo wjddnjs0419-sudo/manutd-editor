@@ -29,6 +29,10 @@ function intelligence(workflow) {
   return workflow.nodes.find((node) => node.name === "Run Content Intelligence");
 }
 
+function priority(workflow) {
+  return workflow.nodes.find((node) => node.name === "Trigger Priority Creative Generation");
+}
+
 function notion(workflow) {
   return workflow.nodes.find((node) => node.name === "Sync Daily Intelligence to Notion");
 }
@@ -124,10 +128,10 @@ test("rejects an intelligence request that does not continue on failure", () => 
 
 test("rejects a workflow without the intelligence-to-notion edge", () => {
   const workflow = readFixture();
-  delete workflow.connections[intelligence(workflow).name];
+  delete workflow.connections[priority(workflow).name];
   const result = runValidator(workflow);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /intelligence.*notion sync edge/i);
+  assert.match(result.stderr, /priority creative generation.*notion sync edge/i);
 });
 
 test("rejects a Notion request that is not configured to preserve upstream success", () => {

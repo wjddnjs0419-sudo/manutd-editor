@@ -99,6 +99,64 @@
         }
       },
       "position": [780, 0]
+    },
+    {
+      "name": "Trigger Priority Creative Generation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "parameters": {
+        "method": "POST",
+        "url": "https://byymtttpwmllqvggnddm.supabase.co/functions/v1/creative-generation-priority",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": false,
+        "options": {
+          "response": {
+            "response": {
+              "includeResponseHeadersAndStatus": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Instagram Collector Invoke Secret"
+        }
+      },
+      "position": [1040, 0]
+    },
+    {
+      "name": "Poll Selected Creative Generation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "parameters": {
+        "method": "POST",
+        "url": "https://byymtttpwmllqvggnddm.supabase.co/functions/v1/creative-generation-selected-poll",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": false,
+        "options": {
+          "response": {
+            "response": {
+              "includeResponseHeadersAndStatus": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Instagram Collector Invoke Secret"
+        }
+      },
+      "position": [1300, 0]
     }
   ],
   "connections": {
@@ -128,7 +186,29 @@
       "main": [
         [
           {
+            "node": "Trigger Priority Creative Generation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Priority Creative Generation": {
+      "main": [
+        [
+          {
             "node": "Sync Daily Intelligence to Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sync Daily Intelligence to Notion": {
+      "main": [
+        [
+          {
+            "node": "Poll Selected Creative Generation",
             "type": "main",
             "index": 0
           }

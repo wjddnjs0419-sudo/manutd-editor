@@ -22,9 +22,13 @@ export class NotionClientError extends Error {
   }
 }
 
-interface NotionPageResult {
+export interface NotionPageResult {
   id: string;
   url?: string;
+}
+
+export interface NotionDatabasePage extends NotionPageResult {
+  properties: Record<string, unknown>;
 }
 
 interface NotionClientOptions {
@@ -42,9 +46,11 @@ export interface NotionClient {
   createPage(payload: NotionPagePayload): Promise<NotionPageResult>;
   updatePage(
     pageId: string,
-    payload: { properties: Record<string, unknown>; children?: NotionBlock[] },
+    payload: { properties: Record<string, unknown> },
   ): Promise<NotionPageResult>;
+  appendBlockChildren(pageId: string, children: NotionBlock[]): Promise<NotionPageResult>;
   retrievePage(pageId: string): Promise<NotionPageResult>;
+  queryDatabase(body?: Record<string, unknown>): Promise<NotionDatabasePage[]>;
 }
 
 const API_BASE = "https://api.notion.com/v1";
@@ -88,6 +94,18 @@ function parsePage(body: unknown): NotionPageResult {
   };
 }
 
+function parseDatabase(body: unknown): NotionDatabasePage[] {
+  if (!body || typeof body !== "object") throw new NotionClientError("MALFORMED_RESPONSE");
+  const results = (body as Record<string, unknown>).results;
+  if (!Array.isArray(results)) throw new NotionClientError("MALFORMED_RESPONSE");
+  return results.map((value) => {
+    const page = parsePage(value);
+    const properties = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).properties : null;
+    if (!properties || typeof properties !== "object" || Array.isArray(properties)) throw new NotionClientError("MALFORMED_RESPONSE");
+    return { ...page, properties: properties as Record<string, unknown> };
+  });
+}
+
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
@@ -104,11 +122,12 @@ export function createNotionClient(options: NotionClientOptions): NotionClient {
   const timeoutMs = options.timeoutMs ?? 10_000;
   const now = options.now ?? Date.now;
 
-  async function request(
+  async function request<T>(
     method: "GET" | "POST" | "PATCH",
     path: string,
-    body?: Record<string, unknown>,
-  ): Promise<NotionPageResult> {
+    body: Record<string, unknown> | undefined,
+    parse: (body: unknown) => T,
+  ): Promise<T> {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -131,7 +150,7 @@ export function createNotionClient(options: NotionClientOptions): NotionClient {
           } catch {
             throw new NotionClientError("MALFORMED_RESPONSE", response.status);
           }
-          return parsePage(decoded);
+          return parse(decoded);
         }
 
         const category = statusCategory(response.status);
@@ -164,10 +183,12 @@ export function createNotionClient(options: NotionClientOptions): NotionClient {
       parent: { database_id: options.databaseId },
       properties: payload.properties,
       children: payload.children,
-    }),
+    }, parsePage),
     updatePage: (pageId, payload) => request("PATCH", `/pages/${encodeURIComponent(pageId)}`, {
       properties: payload.properties,
-    }),
-    retrievePage: (pageId) => request("GET", `/pages/${encodeURIComponent(pageId)}`),
+    }, parsePage),
+    appendBlockChildren: (pageId, children) => request("PATCH", `/blocks/${encodeURIComponent(pageId)}/children`, { children }, () => ({ id: pageId })),
+    retrievePage: (pageId) => request("GET", `/pages/${encodeURIComponent(pageId)}`, undefined, parsePage),
+    queryDatabase: (body = {}) => request("POST", `/databases/${encodeURIComponent(options.databaseId)}/query`, body, parseDatabase),
   };
 }

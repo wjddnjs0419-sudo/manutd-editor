@@ -48,6 +48,7 @@ const CANDIDATE_FIELDS = [
   "freshness_score",
   "score_inputs",
   "calculated_at",
+  "creative_briefs(id,version,status)",
 ].join(",");
 
 function object(value: unknown): value is JsonObject {
@@ -147,6 +148,11 @@ export function createNotionSyncRepository(
       freshness_score: nullableNumber(row.freshness_score),
       score_inputs: object(row.score_inputs) ? row.score_inputs : {},
       calculated_at: stringValue(row.calculated_at, "calculated_at"),
+      creative: (() => {
+        const values = Array.isArray(row.creative_briefs) ? row.creative_briefs.filter(object) : [];
+        const latest = values.sort((left, right) => (typeof right.version === "number" ? right.version : 0) - (typeof left.version === "number" ? left.version : 0))[0];
+        return { status: typeof latest?.status === "string" ? latest.status : "NOT_REQUESTED", revision: typeof latest?.version === "number" ? latest.version : null, content_pipeline_url: null };
+      })(),
     }));
     const ids = clusterIds(rows.map((candidate) => ({ candidate, cluster: {} as never, references: [] })));
     if (ids.length === 0) return [];

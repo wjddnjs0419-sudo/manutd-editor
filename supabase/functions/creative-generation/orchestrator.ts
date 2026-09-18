@@ -4,7 +4,7 @@ import { buildEvidenceSnapshot } from "./evidence.ts";
 import { canonicalJson, hashGenerationInput, sha256 } from "./fingerprint.ts";
 import { generateWithOneRepair } from "./quality_gate.ts";
 import type { CreativeGenerationProvider } from "./provider.ts";
-import type { GenerationRepository, GenerationJob, TriggerType } from "./repository.ts";
+import type { GenerationRepository, GenerationJob, StoredCreativeBrief, TriggerType } from "./repository.ts";
 import type { ContentMode, CreativeBriefOutput, EvidenceSnapshot } from "./types.ts";
 
 export interface GenerationTrigger {
@@ -29,7 +29,7 @@ export interface GenerationDependencies {
   readonly workerId: string;
   readonly now?: () => Date;
   readonly leaseSeconds?: number;
-  readonly projectReady?: (briefId: string) => Promise<void>;
+  readonly projectReady?: (brief: StoredCreativeBrief) => Promise<void>;
 }
 
 function evidenceText(snapshot: EvidenceSnapshot): string {
@@ -86,7 +86,13 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
   }
   const fingerprint = await hashGenerationInput({ candidate_id: trigger.candidate_id, evidence_snapshot: snapshot, content_mode: mode, match_phase: classification.match_phase, generation_config_version: config.version, classifier_config_version: config.classifier_config.version, generator_model_config: config.generation_config });
   const ready = await dependencies.repository.findReadyBrief(trigger.candidate_id, fingerprint);
-  if (ready) return { status: "NOOP", candidate_id: trigger.candidate_id, creative_brief_id: ready.id, revision: ready.version, input_fingerprint: fingerprint };
+  if (ready) {
+    if (dependencies.projectReady && dependencies.repository.getPipelineState) {
+      const state = await dependencies.repository.getPipelineState(trigger.candidate_id);
+      if (!state || state.current_revision !== ready.version) await dependencies.projectReady(ready).catch(() => undefined);
+    }
+    return { status: "NOOP", candidate_id: trigger.candidate_id, creative_brief_id: ready.id, revision: ready.version, input_fingerprint: fingerprint };
+  }
   const job = await dependencies.repository.insertJob(jobInput({ candidate_id: trigger.candidate_id, input_fingerprint: fingerprint, trigger_type: trigger.trigger_type, status: "QUEUED", lease_owner: null, lease_expires_at: null, attempt_count: 0, repair_attempted: false, creative_brief_id: null, last_error_category: null, created_at: "", updated_at: "", completed_at: null }, runAt));
   const leaseUntil = new Date(runAt.getTime() + (dependencies.leaseSeconds ?? 300) * 1000);
   if (!(await dependencies.repository.acquireLease(job.id, dependencies.workerId, runAt, leaseUntil))) return { status: "CONCURRENT", candidate_id: trigger.candidate_id, input_fingerprint: fingerprint };
@@ -110,6 +116,13 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
     slides_json: { slides: output.slides, key_takeaway: output.key_takeaway }, design_json: { slides: output.slides.map((slide) => ({ slide_number: slide.slide_number, visual_direction: slide.visual_direction })) }, caption_draft: output.caption.body, cta: output.caption.cta, status: "READY", content_mode: output.content_mode, match_phase: output.match_phase, generation_config_id: config.id, input_fingerprint: fingerprint, evidence_snapshot: snapshot, hooks_json: output.hooks, grounding_json: { claims: output.slides.flatMap((slide) => slide.claims) }, generation_metadata: { config_version: config.version, classifier_config_version: config.classifier_config.version, classification_source: classification.source, trigger_type: trigger.trigger_type }, generation_quality: output.generation_quality, model_name: String(config.generation_config.model), generated_at: runAt.toISOString(),
   });
   await dependencies.repository.updateJob(job.id, { status: "READY", creative_brief_id: brief.id, repair_attempted: checked.repair_attempted, completed_at: runAt.toISOString(), lease_owner: null, lease_expires_at: null });
-  if (dependencies.projectReady) await dependencies.projectReady(brief.id).catch(() => undefined);
+  if (dependencies.projectReady) await dependencies.projectReady(brief).catch(() => undefined);
   return { status: "READY", candidate_id: trigger.candidate_id, creative_brief_id: brief.id, revision, input_fingerprint: fingerprint };
+}
+
+export async function runPriorityCreativeGeneration(dependencies: GenerationDependencies): Promise<readonly GenerationResult[]> {
+  const ids = await dependencies.repository.listPriorityCandidateIds?.() ?? [];
+  const results: GenerationResult[] = [];
+  for (const candidateId of ids) results.push(await runCreativeGeneration({ candidate_id: candidateId, trigger_type: "AUTO_PRIORITY" }, dependencies));
+  return results;
 }

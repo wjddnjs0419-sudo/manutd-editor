@@ -132,3 +132,20 @@ test("sends the token only in authorization and the database parent on create", 
   const body = await request!.clone().json() as Record<string, unknown>;
   assert.deepEqual(body.parent, { database_id: "database-id" });
 });
+
+test("queries a database with the configured Notion client and preserves page properties", async () => {
+  let request: Request | undefined;
+  const client = createNotionClient({
+    token: "secret-token",
+    databaseId: "daily-database",
+    fetch: async (input, init) => {
+      request = new Request(input, init);
+      return response(200, { results: [{ id: "page-1", url: "https://notion.example/page-1", properties: { Selected: { checkbox: true } } }] });
+    },
+    sleep: async () => undefined,
+  });
+  const pages = await client.queryDatabase({ page_size: 100 });
+  assert.equal(pages[0]?.id, "page-1");
+  assert.deepEqual(pages[0]?.properties, { Selected: { checkbox: true } });
+  assert.equal(request?.url, "https://api.notion.com/v1/databases/daily-database/query");
+});

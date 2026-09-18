@@ -1,5 +1,6 @@
 import { validateGenerationConfig, type GenerationConfig } from "./config.ts";
 import type { CandidateEvidenceInput, JsonValue } from "./types.ts";
+import type { ExistingPipelineState } from "./notion_projection.ts";
 
 export type GenerationJobStatus = "QUEUED" | "GENERATING" | "READY" | "BLOCKED_EVIDENCE" | "CLASSIFICATION_UNCERTAIN" | "FAILED_VALIDATION" | "FAILED_PROVIDER";
 export type TriggerType = "AUTO_PRIORITY" | "NOTION_SELECTED" | "MANUAL";
@@ -60,6 +61,10 @@ export interface GenerationRepository {
   updateJob(jobId: string, patch: Partial<GenerationJob>): Promise<void>;
   nextRevision(candidateId: string): Promise<number>;
   insertCreativeBrief(input: CreativeBriefInsert): Promise<StoredCreativeBrief>;
+  listPriorityCandidateIds?(): Promise<readonly string[]>;
+  getPipelineState?(candidateId: string): Promise<ExistingPipelineState | null>;
+  savePipelineState?(state: { candidate_id: string; creative_brief_id: string; revision: number; notion_page_id: string; sync_hash: string | null; production_status: ExistingPipelineState["production_status"] }): Promise<void>;
+  getDailyIntelligencePageId?(candidateId: string): Promise<string | null>;
 }
 
 interface RestRepositoryOptions {
@@ -183,6 +188,25 @@ export function createRestGenerationRepository(options: RestRepositoryOptions): 
     async insertCreativeBrief(input) {
       const value = await request("/creative_briefs", { method: "POST", headers: { prefer: "return=representation" }, body: JSON.stringify(input) });
       return object(Array.isArray(value) ? value[0] : value) as unknown as StoredCreativeBrief;
+    },
+    async listPriorityCandidateIds() {
+      const value = await request("/content_candidates?select=id&or=(first_mover_flag.eq.true,must_cover_flag.eq.true)&order=priority_score.desc&limit=100");
+      return Array.isArray(value) ? value.map((entry) => string(object(entry).id)).filter(Boolean) : [];
+    },
+    async getPipelineState(candidateId) {
+      const value = await request(`/creative_pipeline_sync_state?select=notion_page_id,production_status,revision&candidate_id=eq.${encodeURIComponent(candidateId)}&order=revision.desc&limit=1`, {}, "app_private");
+      const row = Array.isArray(value) ? object(value[0]) : {};
+      if (!row.notion_page_id || typeof row.notion_page_id !== "string") return null;
+      const status = row.production_status === "EDITABLE" || row.production_status === "LOCKED" || row.production_status === "APPROVED" ? row.production_status : "UNKNOWN";
+      return { notion_page_id: row.notion_page_id, production_status: status, current_revision: number(row.revision) };
+    },
+    async savePipelineState(state) {
+      await request("/creative_pipeline_sync_state?on_conflict=creative_brief_id", { method: "POST", headers: { prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(state) }, "app_private");
+    },
+    async getDailyIntelligencePageId(candidateId) {
+      const value = await request(`/notion_sync_state?select=notion_page_id&candidate_id=eq.${encodeURIComponent(candidateId)}&limit=1`, {}, "app_private");
+      const row = Array.isArray(value) ? object(value[0]) : {};
+      return typeof row.notion_page_id === "string" ? row.notion_page_id : null;
     },
   };
 }

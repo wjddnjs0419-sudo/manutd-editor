@@ -39,11 +39,16 @@ export interface CandidateProjectionInput {
     published_at?: string | null;
     source_name?: string | null;
   }>;
+  creative?: {
+    status: string;
+    revision: number | null;
+    content_pipeline_url?: string | null;
+  };
   lifecycle?: SyncLifecycle;
 }
 
-type RichText = { type: "text"; text: { content: string } };
-type NotionProperty =
+export type RichText = { type: "text"; text: { content: string } };
+export type NotionProperty =
   | { title: RichText[] }
   | { rich_text: RichText[] }
   | { number: number | null }
@@ -138,30 +143,36 @@ export function buildNotionPagePayload(
     .filter((value, index, values) => values.indexOf(value) === index)
     .join(", ");
 
+  const properties: Record<string, NotionProperty> = {
+    Title: title(input.cluster.canonical_title ?? input.cluster.representative_title ?? "Untitled story"),
+    "Sync Identity": rich(syncIdentity(input)),
+    "Candidate ID": rich(candidate.id),
+    "Story Cluster ID": rich(candidate.story_cluster_id),
+    "Ranking Date": date(candidate.ranking_date),
+    Rank: number(candidate.rank),
+    "Priority Score": number(candidate.priority_score),
+    "Data Confidence": number(candidate.data_confidence),
+    FIRST_MOVER: checkbox(candidate.first_mover_flag),
+    MUST_COVER: checkbox(candidate.must_cover_flag),
+    "Korea Coverage Status": select(candidate.korea_coverage_status),
+    "Global Coverage": number(globalCoverage),
+    "Korean Coverage": number(koreanCoverage),
+    "Engagement Outperformance": number(candidate.engagement_outperformance_score),
+    "Velocity Ratio": number(velocityRatio),
+    Reliability: number(candidate.reliability_score),
+    "Source Diversity": number(candidate.source_diversity_score),
+    "First Seen": date(input.cluster.first_seen_at),
+    "Sync Lifecycle": select(lifecycle),
+    "Supabase Updated At": date(candidate.calculated_at),
+    "Last Synced At": date(null),
+  };
+  if (input.creative) Object.assign(properties, {
+    "Creative Status": select(input.creative.status),
+    "Current Brief Revision": number(input.creative.revision),
+    "Content Pipeline URL": rich(input.creative.content_pipeline_url ?? ""),
+  });
   return {
-    properties: {
-      Title: title(input.cluster.canonical_title ?? input.cluster.representative_title ?? "Untitled story"),
-      "Sync Identity": rich(syncIdentity(input)),
-      "Candidate ID": rich(candidate.id),
-      "Story Cluster ID": rich(candidate.story_cluster_id),
-      "Ranking Date": date(candidate.ranking_date),
-      Rank: number(candidate.rank),
-      "Priority Score": number(candidate.priority_score),
-      "Data Confidence": number(candidate.data_confidence),
-      FIRST_MOVER: checkbox(candidate.first_mover_flag),
-      MUST_COVER: checkbox(candidate.must_cover_flag),
-      "Korea Coverage Status": select(candidate.korea_coverage_status),
-      "Global Coverage": number(globalCoverage),
-      "Korean Coverage": number(koreanCoverage),
-      "Engagement Outperformance": number(candidate.engagement_outperformance_score),
-      "Velocity Ratio": number(velocityRatio),
-      Reliability: number(candidate.reliability_score),
-      "Source Diversity": number(candidate.source_diversity_score),
-      "First Seen": date(input.cluster.first_seen_at),
-      "Sync Lifecycle": select(lifecycle),
-      "Supabase Updated At": date(candidate.calculated_at),
-      "Last Synced At": date(null),
-    },
+    properties,
     children: [
       block("heading_2", "Score component breakdown"),
       block("bulleted_list_item", `Priority ${candidate.priority_score ?? "n/a"} · Confidence ${candidate.data_confidence ?? "n/a"}`),
