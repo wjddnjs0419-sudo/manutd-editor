@@ -105,7 +105,7 @@ function block(
 }
 
 function evidence(input: CandidateProjectionInput): string {
-  return JSON.stringify(input.candidate.score_inputs, Object.keys(input.candidate.score_inputs).sort());
+  return canonicalJson(input.candidate.score_inputs);
 }
 
 export function syncIdentity(input: CandidateProjectionInput): string {

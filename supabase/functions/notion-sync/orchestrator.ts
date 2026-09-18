@@ -41,6 +41,7 @@ export interface NotionSyncOptions {
   readonly notion: NotionSyncClientLike;
   readonly now?: () => Date;
   readonly rankingDate?: string;
+  readonly log?: (entry: Record<string, unknown>) => void;
 }
 
 export interface NotionSyncSummary {
@@ -76,6 +77,9 @@ function lifecycleProperty(lifecycle: SyncLifecycle, syncedAt: string) {
 
 function errorCategory(error: unknown): string {
   if (error instanceof NotionClientError) return error.category;
+  if (error instanceof Error && error.name === "NotionSyncRepositoryError") {
+    return error.message;
+  }
   return "UNKNOWN";
 }
 
@@ -127,8 +131,17 @@ export async function runNotionSync(options: NotionSyncOptions): Promise<NotionS
     options.repository.listCandidates(),
     options.repository.listStates(),
   ]);
+  const uniqueCandidates = new Map<string, CandidateProjectionInput>();
+  for (const input of candidates) {
+    const identity = syncIdentity(input);
+    const previous = uniqueCandidates.get(identity);
+    if (!previous || input.candidate.calculated_at > previous.candidate.calculated_at) {
+      uniqueCandidates.set(identity, input);
+    }
+  }
+  const projections = [...uniqueCandidates.values()];
   const byIdentity = new Map(states.map((state) => [state.sync_identity, state]));
-  const inputsByIdentity = new Map(candidates.map((input) => [syncIdentity(input), input]));
+  const inputsByIdentity = new Map(projections.map((input) => [syncIdentity(input), input]));
   const currentIdentities = new Set<string>();
   const summary = {
     rankingDate,
@@ -141,7 +154,7 @@ export async function runNotionSync(options: NotionSyncOptions): Promise<NotionS
     failed: 0,
   } satisfies NotionSyncSummary;
 
-  for (const input of candidates) {
+  for (const input of projections) {
     const identity = syncIdentity(input);
     const state = byIdentity.get(identity);
     const isToday = input.candidate.ranking_date === rankingDate;
@@ -155,9 +168,12 @@ export async function runNotionSync(options: NotionSyncOptions): Promise<NotionS
     if (lifecycle === "CURRENT") summary.considered += 1;
     if (lifecycle !== "CURRENT" && !state?.notion_page_id) continue;
 
+    let stage = "start";
     try {
       if (lifecycle === "CURRENT") {
+        stage = "map";
         const payload = buildNotionPagePayload({ ...input, lifecycle });
+        stage = "hash";
         const hash = await hashNotionPayload(payload);
         if (
           state?.notion_page_id && state.sync_status === "CURRENT" &&
@@ -167,9 +183,11 @@ export async function runNotionSync(options: NotionSyncOptions): Promise<NotionS
           continue;
         }
         payload.properties["Last Synced At"] = { date: { start: syncedAt } };
+        stage = "notion";
         const page = state?.notion_page_id
           ? await options.notion.updatePage(state.notion_page_id, payload)
           : await options.notion.createPage(payload);
+        stage = "save";
         await options.repository.saveState(successfulState(input, page.id, hash, syncedAt, lifecycle));
         if (state?.notion_page_id) summary.updated += 1;
         else summary.created += 1;
@@ -177,6 +195,7 @@ export async function runNotionSync(options: NotionSyncOptions): Promise<NotionS
       }
 
       if (state?.notion_page_id) {
+        stage = "notion_lifecycle";
         await options.notion.updatePage(
           state.notion_page_id,
           { properties: lifecycleProperty(lifecycle, syncedAt) },
@@ -192,8 +211,10 @@ export async function runNotionSync(options: NotionSyncOptions): Promise<NotionS
         else summary.expired += 1;
       }
     } catch (error) {
-      summary.failed += 1;
-      await options.repository.saveState(failedState(state, input, errorCategory(error)));
+        summary.failed += 1;
+      const category = errorCategory(error);
+      options.log?.({ event: "notion_candidate_failed", category, stage });
+      await options.repository.saveState(failedState(state, input, category));
     }
   }
 
@@ -216,7 +237,9 @@ export async function runNotionSync(options: NotionSyncOptions): Promise<NotionS
       summary.expired += 1;
     } catch (error) {
       summary.failed += 1;
-      await options.repository.saveState({ ...state, sync_status: "FAILED", last_error_category: errorCategory(error) });
+      const category = errorCategory(error);
+      options.log?.({ event: "notion_candidate_failed", category });
+      await options.repository.saveState({ ...state, sync_status: "FAILED", last_error_category: category });
     }
   }
 

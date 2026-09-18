@@ -7,13 +7,16 @@ project_id = "manutd_editor"
 [functions.collect-instagram]
 verify_jwt = false
 
+[functions.sync-notion-intelligence]
+verify_jwt = false
+
 [api]
 enabled = true
 # Port to use for the API URL.
 port = 55321
 # Schemas to expose in your API. Tables, views and stored procedures in this schema will get API
 # endpoints. `public` and `graphql_public` schemas are included by default.
-schemas = ["public", "graphql_public"]
+schemas = ["public", "graphql_public", "app_private"]
 # Extra schemas to add to the search_path of every request.
 extra_search_path = ["public", "extensions"]
 # The maximum number of rows returns from a view, table, or stored procedure. Limits payload size

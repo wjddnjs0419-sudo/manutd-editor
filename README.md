@@ -2,7 +2,7 @@
 
 맨체스터 유나이티드 관련 Instagram 콘텐츠를 수집·분석하고, 객관적인 우선순위 점수와 실행 가능한 콘텐츠 브리프를 만드는 시스템입니다.
 
-현재 구현 범위는 **Milestone 3 수집 파이프라인과 Milestone 4 Content Intelligence**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. 모든 계정의 core transaction이 끝난 뒤 IMAGE·carousel child·Reel thumbnail을 private Storage에 보조 작업으로 저장합니다. 이어서 intelligence Edge Function이 최근 게시물을 story cluster로 묶고 결정론적인 Priority Score·Data Confidence·FIRST_MOVER/MUST_COVER 결과를 생성합니다. n8n 스케줄링과 Notion 동기화는 별도 범위입니다.
+현재 구현 범위는 **Milestone 3 수집 파이프라인, Milestone 4 Content Intelligence, Milestone 4.5 Notion Editorial Sync**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. 이어서 intelligence Edge Function이 최근 게시물을 story cluster로 묶고 결정론적인 Priority Score·Data Confidence·FIRST_MOVER/MUST_COVER 결과를 생성합니다. Notion sync Edge Function은 Supabase 후보를 `📡 Daily Intelligence` 데이터베이스에 editorial projection으로 upsert하며, Supabase가 canonical source이고 Notion의 human-owned 편집 필드는 보존합니다.
 
 ## 핵심 원칙
 
@@ -30,6 +30,7 @@
 | `creative_briefs` | 슬라이드·디자인·캡션 실행안 |
 | `published_posts` | 브리프와 실제 발행 Instagram 게시물의 연결 |
 | `performance_metrics` | 발행 콘텐츠의 성과 스냅숏 |
+| `app_private.notion_sync_state` | `story_cluster_id + ranking_date` 기준 Notion page identity·hash·lifecycle 상태 |
 
 `content_candidates.priority_score`는 열 개 구성요소의 합으로 생성되는 Postgres generated column입니다. 계산 당시의 활성 계정, 기준선, 원시 비율과 결측 상태는 `score_inputs`에 보존해야 합니다.
 
@@ -97,6 +98,34 @@ SUPABASE_SECRET_KEYS={"default":"<sb_secret_...>"}
 hosted Edge Runtime에서는 `SUPABASE_SECRET_KEYS`가 자동 주입됩니다. 로컬/CI에서 단일 키를 쓰는 경우 `SUPABASE_SECRET_KEY`도 지원합니다. 이 opaque secret key는 JWT가 아니므로 내부 RPC 요청의 `apikey` 헤더에만 넣으며 `Authorization` 헤더에는 넣지 않습니다.
 
 n8n에는 이후 `COLLECTOR_INVOKE_SECRET`만 전달하며 Supabase secret key는 전달하지 않습니다.
+
+### Milestone 4.5 Notion Editorial Sync
+
+Notion의 `📡 MU Intelligence Hub` 아래에 생성한 `📡 Daily Intelligence` database를
+`NOTION_DAILY_INTELLIGENCE_DATABASE_ID`로 주입합니다. database schema에는 다음 두
+종류의 필드가 있습니다.
+
+- 시스템 projection: Title, Sync Identity, Candidate/Cluster ID, Ranking Date, Rank,
+  Priority Score, Data Confidence, FIRST_MOVER/MUST_COVER, Korea/Global coverage,
+  score components, First Seen, Sync Lifecycle, Supabase Updated At, Last Synced At
+- 사람 소유 필드: Editorial Status, Selected, Editor Headline, Editor Notes
+
+sync identity는 `story_cluster_id:ranking_date`이며, 오늘의 `rank <= 10` 또는
+`FIRST_MOVER`/`MUST_COVER` 후보만 `CURRENT`로 투영합니다. 기존 identity가 오늘
+선정에서 빠지면 `DROPPED`, 이전 ranking date는 `EXPIRED`로 표시하고 Notion page는
+삭제하지 않습니다. 업데이트 payload에는 사람 소유 필드를 넣지 않습니다.
+
+로컬 함수는 다음처럼 실행합니다.
+
+```bash
+supabase functions serve sync-notion-intelligence --no-verify-jwt \
+  --env-file supabase/functions/.env.local
+```
+
+환경에는 `NOTION_TOKEN`,
+`NOTION_DAILY_INTELLIGENCE_DATABASE_ID`, `SUPABASE_URL`,
+`SUPABASE_SECRET_KEY`/`SUPABASE_SECRET_KEYS`, `COLLECTOR_INVOKE_SECRET`을 설정합니다.
+Notion token과 database ID는 workflow export나 git에 넣지 않습니다.
 
 ### 로컬 함수 실행
 
@@ -168,6 +197,7 @@ docker run --rm --add-host=host.docker.internal:host-gateway \
   denoland/deno:2.1.4 deno test --allow-env --allow-net functions/tests
 node scripts/validate-n8n-workflow.mjs n8n/workflows/instagram-collector-schedule.json
 ./scripts/run-milestone-4-smoke.sh --output /tmp/milestone-4-smoke.json
+./scripts/run-milestone-4-5-smoke.sh --output /tmp/milestone-4-5-smoke.json
 ```
 
 `run-milestone-4-smoke.sh`는 intelligence Edge Function을 한 번 호출한 뒤
@@ -230,6 +260,22 @@ docker run --rm -v "$PWD/supabase:/workspace" -w /workspace \
   denoland/deno:2.1.4 deno test functions/tests
 ```
 
-## 다음 구현 단계
+## n8n 운영 흐름
 
-Milestone 3의 다음 slice에서는 30분 n8n Schedule과 smoke verification을 연결합니다.
+`n8n/workflows/instagram-collector-schedule.json`은 `Asia/Seoul` 30분 Schedule에서
+다음 invoke-only chain을 실행합니다.
+
+```text
+Schedule → collect-instagram → intelligence → sync-notion-intelligence
+```
+
+Collector와 Intelligence의 성공 경로가 보장되어야 다음 단계로 진행합니다.
+Notion sync HTTP node만 `continueOnFail`/`neverError`를 사용하므로 Notion 장애가
+collector·intelligence 결과를 실패로 바꾸지 않습니다. 모든 HTTP node는 기존
+`Instagram Collector Invoke Secret` Header Auth credential reference만 사용하며,
+workflow JSON에는 secret 값이 없습니다.
+
+```bash
+node scripts/validate-n8n-workflow.mjs n8n/workflows/instagram-collector-schedule.json
+node --test scripts/validate-n8n-workflow.test.mjs
+```

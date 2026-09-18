@@ -112,7 +112,8 @@ export function createNotionSyncRepository(
     if (!response.ok) throw new NotionSyncRepositoryError("DATABASE_HTTP_ERROR", response.status);
     if (response.status === 204) return null;
     try {
-      return await response.json();
+      const body = await response.text();
+      return body.trim() === "" ? null : JSON.parse(body);
     } catch {
       throw new NotionSyncRepositoryError("DATABASE_RESPONSE_ERROR", response.status);
     }

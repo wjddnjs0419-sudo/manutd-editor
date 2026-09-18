@@ -23,8 +23,12 @@ const notion = createNotionClient({
 });
 const handler = createNotionSyncHandler({
   collectorSecret: requiredEnv(readEnv, "COLLECTOR_INVOKE_SECRET"),
-  run: (runAt) => runNotionSync({ repository, notion, now: () => runAt }),
+  run: (runAt) => runNotionSync({
+    repository,
+    notion,
+    now: () => runAt,
+    log: (entry) => console.log(JSON.stringify(entry)),
+  }),
 });
 
 Deno.serve(handler);
-
