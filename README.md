@@ -2,7 +2,7 @@
 
 맨체스터 유나이티드 관련 Instagram 콘텐츠를 수집·분석하고, 객관적인 우선순위 점수와 실행 가능한 콘텐츠 브리프를 만드는 시스템입니다.
 
-현재 구현 범위는 **Milestone 3 수집 파이프라인, Milestone 4 Content Intelligence, Milestone 4.5 Notion Editorial Sync**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. 이어서 intelligence Edge Function이 최근 게시물을 story cluster로 묶고 결정론적인 Priority Score·Data Confidence·FIRST_MOVER/MUST_COVER 결과를 생성합니다. Notion sync Edge Function은 Supabase 후보를 `📡 Daily Intelligence` 데이터베이스에 editorial projection으로 upsert하며, Supabase가 canonical source이고 Notion의 human-owned 편집 필드는 보존합니다.
+현재 구현 범위는 **Milestone 3 수집 파이프라인, Milestone 4 Content Intelligence, Milestone 4.5 Notion Editorial Sync, Milestone 5 Grounded Creative Generation**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. 이어서 intelligence Edge Function이 최근 게시물을 story cluster로 묶고 결정론적인 Priority Score·Data Confidence·FIRST_MOVER/MUST_COVER 결과를 생성합니다. M5는 M4 canonical evidence snapshot만 사용해 deterministic-first content mode를 분류하고, OpenAI Responses structured output을 검증한 뒤 append-only Creative Brief revision을 저장합니다. Notion sync Edge Function은 Supabase 후보를 `📡 Daily Intelligence` 데이터베이스에 editorial projection으로 upsert하며, Supabase가 canonical source이고 Notion의 human-owned 편집 필드는 보존합니다.
 
 ## 핵심 원칙
 
@@ -123,9 +123,21 @@ supabase functions serve sync-notion-intelligence --no-verify-jwt \
 ```
 
 환경에는 `NOTION_TOKEN`,
-`NOTION_DAILY_INTELLIGENCE_DATABASE_ID`, `SUPABASE_URL`,
+`NOTION_DAILY_INTELLIGENCE_DATABASE_ID`, `NOTION_CONTENT_PIPELINE_DATABASE_ID`, `OPENAI_API_KEY`, `SUPABASE_URL`,
 `SUPABASE_SECRET_KEY`/`SUPABASE_SECRET_KEYS`, `COLLECTOR_INVOKE_SECRET`을 설정합니다.
 Notion token과 database ID는 workflow export나 git에 넣지 않습니다.
+
+### Milestone 5 Grounded Creative Generation
+
+M5는 `creative-generation`, `creative-generation-priority`, `creative-generation-selected-poll` server-only Edge Function으로 구성됩니다. 우선순위 후보와 Daily Intelligence의 `Selected` 후보가 같은 orchestrator를 통과하며, 성공한 브리프만 Content Pipeline에 투영됩니다. `EDITABLE` 페이지는 시스템 속성과 본문 블록을 갱신하고, `LOCKED`/`APPROVED` 페이지는 새 페이지로 만들어 사람의 편집 내용을 보존합니다.
+
+로컬 구조·grounding·Notion 분기 스모크는 다음으로 실행합니다.
+
+```bash
+./scripts/run-milestone-5-smoke.sh
+```
+
+이 runner는 local DB assertion과 fixture integration test를 수행하며, `OPENAI_API_KEY`가 없으면 외부 OpenAI 호출을 명시적으로 건너뜁니다. 실제 OpenAI/Notion smoke는 배포된 함수와 해당 credential이 준비된 환경에서 별도로 실행해야 합니다.
 
 ### 로컬 함수 실행
 
