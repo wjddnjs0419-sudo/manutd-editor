@@ -1,4 +1,4 @@
-import type { NotionPagePayload } from "./mapper.ts";
+import type { NotionBlock, NotionPagePayload } from "./mapper.ts";
 
 export type NotionErrorCategory =
   | "RATE_LIMITED"
@@ -40,7 +40,10 @@ interface NotionClientOptions {
 
 export interface NotionClient {
   createPage(payload: NotionPagePayload): Promise<NotionPageResult>;
-  updatePage(pageId: string, payload: NotionPagePayload): Promise<NotionPageResult>;
+  updatePage(
+    pageId: string,
+    payload: { properties: Record<string, unknown>; children?: NotionBlock[] },
+  ): Promise<NotionPageResult>;
   retrievePage(pageId: string): Promise<NotionPageResult>;
 }
 
