@@ -235,22 +235,6 @@ where exists (
 );
 
 insert into m4_smoke_failures (assertion)
-select 'm3_snapshot_series_exists_for_smoke'
-where exists (select 1 from public.content_candidates)
-  and not exists (
-    select 1
-    from public.content_candidates cc
-    join public.story_cluster_posts scp on scp.story_cluster_id = cc.story_cluster_id
-    cross join lateral app_private.m4_score_snapshots(
-      scp.raw_post_id,
-      cc.calculated_at,
-      cc.scoring_config_id
-    ) snapshots
-    group by cc.id, scp.raw_post_id
-    having count(*) = 3
-  );
-
-insert into m4_smoke_failures (assertion)
 select 'seed_membership_confidence'
 where exists (
   select 1

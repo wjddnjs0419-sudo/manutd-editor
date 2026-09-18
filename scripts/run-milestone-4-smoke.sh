@@ -43,6 +43,7 @@ body_file=$(mktemp)
 candidate_file=$(mktemp)
 response_file=$(mktemp)
 trap 'rm -f "$body_file" "$candidate_file" "$response_file"' EXIT
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 die() {
   echo "$1" >&2
@@ -128,7 +129,7 @@ psql_run() {
 }
 
 if ! psql_run -X -v ON_ERROR_STOP=1 \
-  -f "$(dirname "$0")/verify-milestone-4-smoke.sql"; then
+  -f - <"$script_dir/verify-milestone-4-smoke.sql"; then
   die "milestone 4 smoke assertions failed"
 fi
 

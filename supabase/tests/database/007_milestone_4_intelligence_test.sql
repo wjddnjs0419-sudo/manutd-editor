@@ -3,7 +3,7 @@ begin;
 set role postgres;
 create extension if not exists pgtap with schema extensions;
 set search_path = pgtap, extensions, public;
-select plan(42);
+select plan(45);
 
 -- A production change that removes an M4 boundary, changes a half-open time
 -- predicate, includes the evaluated post in its baseline, or weakens lease
@@ -22,6 +22,7 @@ select has_function('public', 'calculate_priority_candidates', array['timestamp 
 select has_function('public', 'get_todays_candidates', array['date'], 'candidate read RPC exists');
 select has_function('app_private', 'm4_score_snapshots', array['uuid', 'timestamp with time zone', 'uuid'], 'M3 snapshot selection helper exists');
 select has_function('app_private', 'm4_baseline', array['uuid', 'uuid', 'uuid[]', 'timestamp with time zone', 'uuid'], 'baseline helper exists');
+select has_function('app_private', 'm4_refresh_lifecycle', array['timestamp with time zone'], 'lifecycle refresh helper exists');
 
 select ok(
   coalesce((
@@ -35,6 +36,12 @@ select ok(
   coalesce(has_function_privilege('service_role', to_regprocedure('public.try_acquire_intelligence_run(uuid,timestamptz,timestamptz)'), 'EXECUTE'), false)
   and not coalesce(has_function_privilege('anon', to_regprocedure('public.try_acquire_intelligence_run(uuid,timestamptz,timestamptz)'), 'EXECUTE'), false),
   'lease acquire is service-role-only'
+);
+select ok(
+  coalesce(has_function_privilege('service_role', to_regprocedure('app_private.m4_refresh_lifecycle(timestamptz)'), 'EXECUTE'), false)
+  and not coalesce(has_function_privilege('anon', to_regprocedure('app_private.m4_refresh_lifecycle(timestamptz)'), 'EXECUTE'), false)
+  and not coalesce(has_function_privilege('authenticated', to_regprocedure('app_private.m4_refresh_lifecycle(timestamptz)'), 'EXECUTE'), false),
+  'lifecycle refresh is service-role-only'
 );
 
 select skip(26, 'M4 behavior assertions wait for the M4 SQL boundary')
@@ -58,6 +65,8 @@ declare
   v_seed_cluster uuid;
   v_seed_target uuid;
   v_seed_remaining uuid;
+  v_archived_sentinel uuid;
+  v_archived_updated_at timestamptz;
   v_lease_a uuid := '11111111-1111-1111-1111-111111111111';
   v_lease_b uuid := '22222222-2222-2222-2222-222222222222';
   v_snapshot jsonb;
@@ -153,11 +162,15 @@ begin
          ('M4 exactly stale', v_run_at - interval '8 days', v_run_at - interval '7 days'),
          ('M4 archived', v_run_at - interval '8 days', v_run_at - interval '7 days 1 second'),
          ('M4 old candidate', v_run_at - interval '24 hours 1 second', v_run_at - interval '1 hour');
+  insert into public.story_clusters (canonical_title, first_seen_at, last_seen_at, status, updated_at)
+  values ('M4 archived sentinel', v_run_at - interval '8 days', v_run_at - interval '7 days 1 second', 'ARCHIVED', '2020-01-01 00:00:00+00')
+  returning id, updated_at into v_archived_sentinel, v_archived_updated_at;
   select public.calculate_priority_candidates(v_run_at, v_run_at::date) into v_candidate_count;
   return next is((select status from public.story_clusters where canonical_title = 'M4 exactly recent'), 'OPEN'::public.story_cluster_status, 'exactly six hours is recent, not stale');
   return next is((select status from public.story_clusters where canonical_title = 'M4 exactly stale'), 'STALE'::public.story_cluster_status, 'exactly seven days is stale, not archived');
   return next is((select status from public.story_clusters where canonical_title = 'M4 archived'), 'ARCHIVED'::public.story_cluster_status, 'older than seven days is archived');
   return next is((select count(*)::integer from public.content_candidates cc join public.story_clusters sc on sc.id = cc.story_cluster_id where sc.canonical_title = 'M4 old candidate' and cc.ranking_date = v_run_at::date), 0, 'candidate window excludes a cluster older than exactly 24 hours');
+  return next is((select updated_at from public.story_clusters where id = v_archived_sentinel), v_archived_updated_at, 'lifecycle refresh does not rewrite already archived clusters');
 
   return next ok(public.try_acquire_intelligence_run(v_lease_a, v_run_at, v_run_at + interval '5 minutes'), 'first run acquires an unleased singleton');
   return next ok(not public.try_acquire_intelligence_run(v_lease_b, v_run_at + interval '1 minute', v_run_at + interval '6 minutes'), 'second run cannot acquire a live lease');

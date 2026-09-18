@@ -131,6 +131,7 @@ end $$;
 
 create or replace function app_private.m4_refresh_lifecycle(p_run_at timestamptz) returns void language sql security invoker set search_path = '' as $$
   update public.story_clusters sc set status=(case when status='ARCHIVED' then 'ARCHIVED' when last_seen_at < p_run_at-interval '7 days' then 'ARCHIVED' when last_seen_at < p_run_at-interval '6 hours' and last_seen_at >= p_run_at-interval '7 days' then 'STALE' when last_seen_at >= p_run_at-interval '6 hours' and last_seen_at <=p_run_at and (select count(*) from public.story_cluster_posts where story_cluster_id=sc.id)>=2 then 'ACTIVE' else 'OPEN' end)::public.story_cluster_status
+  where sc.status <> 'ARCHIVED'
 $$;
 
 create or replace function public.calculate_priority_candidates(p_run_at timestamptz,p_ranking_date date) returns integer
@@ -156,5 +157,6 @@ language sql stable security invoker set search_path = '' as $$
 $$;
 
 revoke all on function app_private.m4_age_bucket(timestamptz,timestamptz),app_private.m4_score_snapshots(uuid,timestamptz,uuid),app_private.m4_baseline(uuid,uuid,uuid[],timestamptz,uuid),app_private.m4_refresh_lifecycle(timestamptz) from public,anon,authenticated;
+grant execute on function app_private.m4_refresh_lifecycle(timestamptz) to service_role;
 revoke all on function public.try_acquire_intelligence_run(uuid,timestamptz,timestamptz),public.renew_intelligence_run(uuid,timestamptz),public.release_intelligence_run(uuid),public.upsert_story_cluster_member(uuid,uuid,text,numeric,jsonb),public.reassign_story_cluster_post(uuid,uuid,text),public.calculate_priority_candidates(timestamptz,date),public.get_todays_candidates(date) from public,anon,authenticated;
 grant execute on function public.try_acquire_intelligence_run(uuid,timestamptz,timestamptz),public.renew_intelligence_run(uuid,timestamptz),public.release_intelligence_run(uuid),public.upsert_story_cluster_member(uuid,uuid,text,numeric,jsonb),public.reassign_story_cluster_post(uuid,uuid,text),public.calculate_priority_candidates(timestamptz,date),public.get_todays_candidates(date) to service_role;
