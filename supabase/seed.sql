@@ -227,3 +227,78 @@ where is_active;
 insert into app_private.intelligence_run_lock (lock_name)
 values ('story-intelligence')
 on conflict (lock_name) do nothing;
+
+update public.creative_generation_configs
+set is_active = false
+where version <> 'm5-v1' and is_active;
+
+insert into public.creative_generation_configs (
+  version,
+  description,
+  classifier_config,
+  generation_config,
+  mode_configs,
+  quality_gate_config,
+  is_active,
+  effective_from
+)
+values (
+  'm5-v1',
+  'Grounded Instagram Carousel generation configuration for Milestone 5.',
+  $json$
+  {
+    "version": "classifier-v1",
+    "model": "gpt-5.6-luna",
+    "reasoning": "low",
+    "confidence_threshold": 0.75,
+    "keywords": {
+      "match": ["official lineup", "starting xi", "full time", "full-time", "goal", "red card", "var", "half-time", "final score", "라인업", "선발", "골", "퇴장", "전반 종료", "경기 종료", "최종 스코어"],
+      "news": ["ruled out", "injury", "transfer", "contract", "official announcement", "six weeks", "부상", "이적", "계약", "공식 발표", "결장"],
+      "analysis": ["why", "tactical", "stats", "form", "comparison", "trend", "전술", "통계", "폼", "비교", "트렌드", "왜"]
+    },
+    "phase_keywords": {
+      "PRE_MATCH": ["lineup", "starting xi", "squad", "matchup", "라인업", "선발", "스쿼드", "매치업"],
+      "LIVE": ["goal", "red card", "var", "half-time", "골", "퇴장", "전반 종료", "부상 교체"],
+      "POST_MATCH": ["full time", "full-time", "final score", "match stats", "경기 종료", "최종 스코어", "경기 통계"]
+    }
+  }
+  $json$::jsonb,
+  $json$
+  {
+    "model": "gpt-5.6-terra",
+    "reasoning": "medium",
+    "max_output_tokens": 5000,
+    "response_format": "strict_json_schema",
+    "max_retries": 2,
+    "timeout_ms": 30000
+  }
+  $json$::jsonb,
+  $json$
+  {
+    "NEWS_UPDATE": {"evidence_policy": "STRICT", "prompt_version": "news-v1"},
+    "ANALYSIS_CONTEXT": {"evidence_policy": "PARTIAL_ALLOWED", "prompt_version": "analysis-v1"},
+    "MATCH_CONTENT": {"evidence_policy": "PARTIAL_ALLOWED", "prompt_version": "match-v1"}
+  }
+  $json$::jsonb,
+  $json$
+  {
+    "min_slides": 4,
+    "max_slides": 7,
+    "hook_count": 3,
+    "max_repair_attempts": 1,
+    "require_visual_direction": true
+  }
+  $json$::jsonb,
+  true,
+  '2026-09-18T00:00:00+09:00'::timestamptz
+)
+on conflict (version) do update
+set
+  description = excluded.description,
+  classifier_config = excluded.classifier_config,
+  generation_config = excluded.generation_config,
+  mode_configs = excluded.mode_configs,
+  quality_gate_config = excluded.quality_gate_config,
+  is_active = excluded.is_active,
+  effective_from = excluded.effective_from,
+  effective_to = null;
