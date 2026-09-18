@@ -29,13 +29,17 @@ function intelligence(workflow) {
   return workflow.nodes.find((node) => node.name === "Run Content Intelligence");
 }
 
+function notion(workflow) {
+  return workflow.nodes.find((node) => node.name === "Sync Daily Intelligence to Notion");
+}
+
 function collector(workflow) {
   return workflow.nodes.find((node) =>
     node.name === "Collect Active Instagram Accounts"
   );
 }
 
-test("accepts the collector-to-intelligence workflow contract", () => {
+test("accepts the collector-to-intelligence-to-notion workflow contract", () => {
   const result = runValidator(readFixture());
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
@@ -112,10 +116,35 @@ test("rejects an intelligence request without the existing credential reference"
 
 test("rejects an intelligence request that does not continue on failure", () => {
   const workflow = readFixture();
-  delete intelligence(workflow).continueOnFail;
+  intelligence(workflow).continueOnFail = true;
   const result = runValidator(workflow);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /continue.?on.?failure/i);
+  assert.match(result.stderr, /intelligence.*succeed|continue.?on.?failure/i);
+});
+
+test("rejects a workflow without the intelligence-to-notion edge", () => {
+  const workflow = readFixture();
+  delete workflow.connections[intelligence(workflow).name];
+  const result = runValidator(workflow);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /intelligence.*notion sync edge/i);
+});
+
+test("rejects a Notion request that is not configured to preserve upstream success", () => {
+  const workflow = readFixture();
+  notion(workflow).continueOnFail = false;
+  const result = runValidator(workflow);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /notion.*continue.?on.?failure/i);
+});
+
+test("rejects a Notion request that does not target the sync endpoint", () => {
+  const workflow = readFixture();
+  notion(workflow).parameters.url =
+    "https://byymtttpwmllqvggnddm.supabase.co/functions/v1/intelligence";
+  const result = runValidator(workflow);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /notion.*endpoint/i);
 });
 
 test("rejects exported credential values or secret-like markers", () => {

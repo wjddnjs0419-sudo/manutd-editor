@@ -18,6 +18,7 @@ assert.deepEqual(
   [
     "n8n-nodes-base.httpRequest",
     "n8n-nodes-base.httpRequest",
+    "n8n-nodes-base.httpRequest",
     "n8n-nodes-base.scheduleTrigger",
   ].sort(),
 );
@@ -36,9 +37,13 @@ const collector = nodes.find((node) =>
 const intelligence = nodes.find((node) =>
   node.name === "Run Content Intelligence"
 );
-assert.equal(httpNodes.length, 2, "workflow must have exactly two HTTP nodes");
+const notion = nodes.find((node) =>
+  node.name === "Sync Daily Intelligence to Notion"
+);
+assert.equal(httpNodes.length, 3, "workflow must have exactly three HTTP nodes");
 assert.ok(collector, "collector HTTP node is required");
 assert.ok(intelligence, "intelligence HTTP node is required");
+assert.ok(notion, "Notion sync HTTP node is required");
 
 function responseOptions(node) {
   return node.parameters?.options?.response?.response ?? {};
@@ -87,9 +92,9 @@ function assertHttpContract(node, label, endpoint) {
 assertHttpContract(collector, "collector", "collect-instagram");
 assertHttpContract(intelligence, "intelligence", "intelligence");
 assert.equal(
-  intelligence.continueOnFail,
-  true,
-  "intelligence must continue-on-failure",
+  intelligence.continueOnFail ?? false,
+  false,
+  "intelligence must succeed before Notion sync",
 );
 assert.equal(
   intelligence.parameters?.options?.timeout,
@@ -105,6 +110,27 @@ assert.equal(
   responseOptions(intelligence).includeResponseHeadersAndStatus,
   true,
   "intelligence must expose HTTP status for already_running handling",
+);
+assertHttpContract(notion, "Notion sync", "sync-notion-intelligence");
+assert.equal(
+  notion.continueOnFail,
+  true,
+  "Notion sync must continue-on-failure",
+);
+assert.equal(
+  responseOptions(notion).neverError,
+  true,
+  "Notion sync must not invalidate upstream success",
+);
+assert.equal(
+  responseOptions(notion).includeResponseHeadersAndStatus,
+  true,
+  "Notion sync must expose response status",
+);
+assert.equal(
+  notion.parameters?.options?.timeout,
+  120000,
+  "Notion sync must use a 120-second timeout",
 );
 
 function outgoingTargets(sourceName) {
@@ -140,8 +166,20 @@ assert.equal(
 const intelligenceTargets = outgoingTargets(intelligence.name);
 assert.equal(
   intelligenceTargets.length,
+  1,
+  "intelligence must have exactly one Notion sync edge",
+);
+assert.equal(
+  intelligenceTargets[0].node,
+  notion.name,
+  "intelligence must connect to Notion sync",
+);
+
+const notionTargets = outgoingTargets(notion.name);
+assert.equal(
+  notionTargets.length,
   0,
-  "intelligence must be the final node in this workflow",
+  "Notion sync must be the final node in this workflow",
 );
 
 const serialized = JSON.stringify(workflow);

@@ -47,7 +47,6 @@
       "name": "Run Content Intelligence",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "continueOnFail": true,
       "parameters": {
         "method": "POST",
         "url": "https://byymtttpwmllqvggnddm.supabase.co/functions/v1/intelligence",
@@ -71,6 +70,35 @@
         }
       },
       "position": [520, 0]
+    },
+    {
+      "name": "Sync Daily Intelligence to Notion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "parameters": {
+        "method": "POST",
+        "url": "https://byymtttpwmllqvggnddm.supabase.co/functions/v1/sync-notion-intelligence",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": false,
+        "options": {
+          "response": {
+            "response": {
+              "includeResponseHeadersAndStatus": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Instagram Collector Invoke Secret"
+        }
+      },
+      "position": [780, 0]
     }
   ],
   "connections": {
@@ -90,6 +118,17 @@
         [
           {
             "node": "Run Content Intelligence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Content Intelligence": {
+      "main": [
+        [
+          {
+            "node": "Sync Daily Intelligence to Notion",
             "type": "main",
             "index": 0
           }
