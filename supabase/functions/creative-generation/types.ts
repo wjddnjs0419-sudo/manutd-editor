@@ -79,3 +79,40 @@ export interface FingerprintInput {
   readonly generator_model_config: JsonValue;
   readonly [key: string]: unknown;
 }
+
+export interface CreativeBriefClaim {
+  readonly claim_id: string;
+  readonly type: "FACT" | "INFERENCE";
+  readonly text: string;
+  readonly evidence_ids: readonly string[];
+}
+
+export interface VisualDirection {
+  readonly subject: string;
+  readonly image_type: string;
+  readonly layout_intent: string;
+  readonly stat_emphasis: string | null;
+  readonly text_hierarchy: readonly string[];
+}
+
+export interface CreativeBriefSlide {
+  readonly slide_number: number;
+  readonly purpose: string;
+  readonly headline: string;
+  readonly body: string;
+  readonly claims: readonly CreativeBriefClaim[];
+  readonly visual_direction: VisualDirection;
+}
+
+export interface CreativeBriefOutput {
+  readonly schema_version: "1.0";
+  readonly content_mode: ContentMode;
+  readonly match_phase: MatchPhase | null;
+  readonly generation_quality: GenerationQuality;
+  readonly angle: string;
+  readonly key_takeaway: string;
+  readonly hooks: readonly { id: string; text: string }[];
+  readonly slides: readonly CreativeBriefSlide[];
+  readonly caption: { body: string; cta: string };
+  readonly sources: readonly { evidence_id: string; label: string }[];
+}
