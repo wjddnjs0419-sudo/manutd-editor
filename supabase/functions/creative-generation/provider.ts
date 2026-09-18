@@ -3,17 +3,12 @@ import { classifierPrompt, generationPrompt, repairPrompt } from "./prompts.ts";
 import type {
   AiClassification,
 } from "./classifier.ts";
-import type {
-  ContentMode,
-  CreativeBriefOutput,
-  JsonValue,
-  MatchPhase,
-} from "./types.ts";
+import type { ContentMode, CreativeBriefOutput, MatchPhase } from "./types.ts";
 
 export interface ProviderPromptInput {
   readonly content_mode: ContentMode;
   readonly match_phase: MatchPhase | null;
-  readonly evidence_snapshot: JsonValue;
+  readonly evidence_snapshot: unknown;
 }
 
 export interface OpenAIProviderOptions {
