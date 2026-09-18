@@ -196,3 +196,16 @@ Deno.test("isolates a Notion failure to one candidate and records a safe categor
   assertStringIncludes(JSON.stringify(repo.saved), "FAILED");
   assertFalse(JSON.stringify(repo.saved).includes("must-not-leak"));
 });
+
+Deno.test("deduplicates multiple scoring rows to the stable cluster-date identity", async () => {
+  const older = candidate({ id: "older", calculated_at: "2026-09-18T02:00:00.000Z" });
+  const newer = candidate({ id: "newer", calculated_at: "2026-09-18T04:00:00.000Z" });
+  const repo = repository([older, newer]);
+  const api = notion();
+
+  const result = await runNotionSync({ repository: repo, notion: api, now: () => new Date("2026-09-18T05:00:00.000Z") });
+
+  assertEquals(result.considered, 1);
+  assertEquals(result.created, 1);
+  assertEquals(repo.saved[0]?.candidate_id, "newer");
+});
