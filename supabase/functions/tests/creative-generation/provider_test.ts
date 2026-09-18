@@ -65,7 +65,7 @@ Deno.test("classifies through the configured classifier model and parses structu
     apiKey: "test-key",
     sleep: async () => {},
     fetchImpl: async (_input, init) => {
-      body = JSON.parse(String(init?.body));
+      body = JSON.parse(String((init as RequestInit | undefined)?.body));
       return response({ output_text: JSON.stringify({ content_mode: "NEWS_UPDATE", match_phase: null, confidence: 0.9, reason_code: "MODEL" }) });
     },
   });

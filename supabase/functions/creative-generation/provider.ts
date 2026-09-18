@@ -1,4 +1,4 @@
-import type { ClassifierConfig } from "./config.ts";
+import type { ClassifierConfig, GenerationConfig } from "./config.ts";
 import { classifierPrompt, generationPrompt, repairPrompt } from "./prompts.ts";
 import type {
   AiClassification,
@@ -9,6 +9,13 @@ export interface ProviderPromptInput {
   readonly content_mode: ContentMode;
   readonly match_phase: MatchPhase | null;
   readonly evidence_snapshot: unknown;
+}
+
+export interface CreativeGenerationProvider {
+  classify(text: string, config: ClassifierConfig): Promise<AiClassification>;
+  generate(input: ProviderPromptInput): Promise<CreativeBriefOutput>;
+  repair(input: ProviderPromptInput, output: CreativeBriefOutput, errors: readonly string[]): Promise<CreativeBriefOutput>;
+  configure?(config: GenerationConfig): void;
 }
 
 export interface OpenAIProviderOptions {
@@ -185,9 +192,9 @@ export function createOpenAIProvider(options: OpenAIProviderOptions) {
   if (!options.apiKey) throw new Error("OPENAI_API_KEY is required");
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleep = options.sleep ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
-  const model = options.model ?? "gpt-5.6-terra";
-  const reasoning = options.reasoning ?? "medium";
-  const maxOutputTokens = options.maxOutputTokens ?? 5000;
+  let model = options.model ?? "gpt-5.6-terra";
+  let reasoning = options.reasoning ?? "medium";
+  let maxOutputTokens = options.maxOutputTokens ?? 5000;
   const maxRetries = Math.max(0, options.maxRetries ?? 2);
   const timeoutMs = options.timeoutMs ?? 30_000;
   const baseUrl = options.baseUrl ?? "https://api.openai.com/v1/responses";
@@ -227,6 +234,12 @@ export function createOpenAIProvider(options: OpenAIProviderOptions) {
   }
 
   return {
+    configure(config: GenerationConfig) {
+      const configured = config.generation_config;
+      if (typeof configured.model === "string" && configured.model.trim()) model = configured.model;
+      if (typeof configured.reasoning === "string" && configured.reasoning.trim()) reasoning = configured.reasoning;
+      if (typeof configured.max_output_tokens === "number") maxOutputTokens = configured.max_output_tokens;
+    },
     async classify(text: string, config: ClassifierConfig): Promise<AiClassification> {
       return await request<AiClassification>(requestBody(config.model, config.reasoning, classifierPrompt(text), "content_classification", CLASSIFIER_SCHEMA, 500));
     },
