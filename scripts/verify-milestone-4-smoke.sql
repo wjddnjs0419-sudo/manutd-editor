@@ -66,6 +66,122 @@ where exists (
 );
 
 insert into m4_smoke_failures (assertion)
+select 'scoring_contract_evidence_is_persisted'
+where exists (
+  select 1
+  from public.content_candidates cc
+  where not (
+    cc.score_inputs ?& array[
+      'eligible_account_ids',
+      'global_coverage',
+      'korean_coverage',
+      'korea_coverage_status',
+      'global_outperformance_ratio',
+      'global_velocity_ratio',
+      'acceleration_ratio',
+      'korean_outperformance_ratio',
+      'data_confidence_components',
+      'member_post_ids',
+      'baseline_inputs',
+      'missing_inputs'
+    ]
+  )
+);
+
+insert into m4_smoke_failures (assertion)
+select 'curve_scores_match_persisted_ratios'
+where exists (
+  select 1
+  from public.content_candidates cc
+  join public.scoring_configs cfg on cfg.id = cc.scoring_config_id
+  where cc.engagement_outperformance_score is distinct from round(coalesce(app_private.m4_curve_score((cc.score_inputs ->> 'global_outperformance_ratio')::numeric, cfg.config -> 'outperformance_curve'), 0), 3)
+     or cc.engagement_velocity_score is distinct from round(coalesce(app_private.m4_curve_score((cc.score_inputs ->> 'global_velocity_ratio')::numeric, cfg.config -> 'velocity_curve'), 0), 3)
+     or cc.velocity_acceleration_score is distinct from round(coalesce(app_private.m4_curve_score((cc.score_inputs ->> 'acceleration_ratio')::numeric, cfg.config -> 'acceleration_curve'), 0), 3)
+);
+
+insert into m4_smoke_failures (assertion)
+select 'remaining_component_scores_match_contract'
+where exists (
+  select 1
+  from public.content_candidates cc
+  join public.story_clusters sc on sc.id = cc.story_cluster_id
+  join public.scoring_configs cfg on cfg.id = cc.scoring_config_id
+  where cc.global_spread_score is distinct from round(sc.global_weight_coverage * 12, 3)
+     or cc.korea_gap_score is distinct from round(case when cc.korea_coverage_status = 'KNOWN' then 15 * least((cc.score_inputs ->> 'global_coverage')::numeric / 0.60, 1) * (1 - (cc.score_inputs ->> 'korean_coverage')::numeric) else 0 end, 3)
+     or cc.first_mover_score is distinct from round(coalesce(app_private.m4_age_curve_score((cc.score_inputs ->> 'story_age_minutes')::numeric, cfg.config -> 'first_mover_curve_minutes'), 0), 3)
+     or cc.korean_saturation_score is distinct from round(case when cc.score_inputs ->> 'korean_outperformance_ratio' is null then 0 else 10 * (1 - least(greatest((cc.score_inputs ->> 'korean_outperformance_ratio')::numeric / 2.5, 0), 1)) end, 3)
+     or cc.reliability_score is distinct from coalesce(sc.highest_source_reliability, 0)
+     or cc.source_diversity_score is distinct from case when sc.independent_source_count >= 3 then 5 when sc.independent_source_count = 2 then 3 when sc.independent_source_count = 1 then 1 else 0 end
+     or cc.freshness_score is distinct from round(coalesce(app_private.m4_age_curve_score((cc.score_inputs ->> 'story_age_minutes')::numeric, cfg.config -> 'freshness_curve_minutes'), 0), 3)
+);
+
+insert into m4_smoke_failures (assertion)
+select 'data_confidence_matches_persisted_components'
+where exists (
+  select 1
+  from public.content_candidates cc
+  where cc.data_confidence is distinct from round(100 * (
+    0.20 * (cc.score_inputs -> 'data_confidence_components' ->> 'account_coverage')::numeric
+    + 0.20 * (cc.score_inputs -> 'data_confidence_components' ->> 'baseline_evidence')::numeric
+    + 0.20 * (cc.score_inputs -> 'data_confidence_components' ->> 'metric_snapshots')::numeric
+    + 0.15 * (cc.score_inputs -> 'data_confidence_components' ->> 'followers')::numeric
+    + 0.10 * (cc.score_inputs -> 'data_confidence_components' ->> 'source_recognition')::numeric
+    + 0.10 * (cc.score_inputs -> 'data_confidence_components' ->> 'cluster_certainty')::numeric
+    + 0.05 * (cc.score_inputs -> 'data_confidence_components' ->> 'api_fields')::numeric
+  ), 1)
+);
+
+insert into m4_smoke_failures (assertion)
+select 'priority_score_matches_component_sum'
+where exists (
+  select 1
+  from public.content_candidates cc
+  where cc.priority_score is distinct from round(
+    cc.global_spread_score
+    + cc.engagement_outperformance_score
+    + cc.engagement_velocity_score
+    + cc.velocity_acceleration_score
+    + cc.korea_gap_score
+    + cc.first_mover_score
+    + cc.korean_saturation_score
+    + cc.reliability_score
+    + cc.source_diversity_score
+    + cc.freshness_score,
+    3
+  )
+);
+
+insert into m4_smoke_failures (assertion)
+select 'rank_is_deterministic_and_contiguous'
+where exists (
+  with ordered as (
+    select cc.id,
+           cc.rank,
+           row_number() over (
+             partition by cc.ranking_date, cc.scoring_config_id
+             order by cc.priority_score desc,
+                      cc.data_confidence desc,
+                      sc.first_seen_at desc,
+                      cc.story_cluster_id asc
+           )::integer as expected_rank
+    from public.content_candidates cc
+    join public.story_clusters sc on sc.id = cc.story_cluster_id
+  )
+  select 1
+  from ordered
+  where rank is null or rank <> expected_rank
+);
+
+insert into m4_smoke_failures (assertion)
+select 'korea_uncertainty_suppresses_gap_and_first_mover'
+where exists (
+  select 1
+  from public.content_candidates cc
+  where cc.korea_coverage_status = 'UNCERTAIN'
+    and (cc.korea_gap_score <> 0 or cc.first_mover_flag)
+);
+
+insert into m4_smoke_failures (assertion)
 select 'korea_status_is_conservative'
 where exists (
   select 1

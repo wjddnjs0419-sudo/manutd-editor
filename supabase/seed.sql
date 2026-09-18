@@ -141,6 +141,13 @@ values (
       {"ratio": 2.0, "score": 9},
       {"ratio": 2.5, "score": 12}
     ],
+    "velocity_curve": [
+      {"ratio": 0.5, "score": 0},
+      {"ratio": 1.0, "score": 2.5},
+      {"ratio": 1.5, "score": 5},
+      {"ratio": 2.0, "score": 7.5},
+      {"ratio": 2.5, "score": 10}
+    ],
     "acceleration_curve": [
       {"ratio": 1.0, "score": 0},
       {"ratio": 1.25, "score": 1.5},
