@@ -14,6 +14,8 @@ A successful M6 run supports this complete workflow:
 2. At 09:00 KST, Telegram receives a concise morning briefing with:
    - today's or upcoming Manchester United match context,
    - deterministic Top 3 content candidates,
+   - one representative reference thumbnail per candidate when media is available,
+   - the representative Instagram post permalink and source account for direct human verification,
    - FIRST_MOVER / MUST_COVER flags,
    - Creative Brief production status,
    - blocked or failed items,
@@ -269,13 +271,29 @@ Example:
 ```json
 {
   "items": [
-    {"position": 1, "candidate_id": "...", "priority_score": 88},
-    {"position": 2, "candidate_id": "...", "priority_score": 81}
+    {
+      "position": 1,
+      "candidate_id": "...",
+      "priority_score": 88,
+      "reference_post_id": "...",
+      "reference_username": "utdreport",
+      "reference_permalink": "https://www.instagram.com/p/...",
+      "reference_media_asset_id": "..."
+    },
+    {
+      "position": 2,
+      "candidate_id": "...",
+      "priority_score": 81,
+      "reference_post_id": "...",
+      "reference_username": "utddistrict",
+      "reference_permalink": "https://www.instagram.com/p/...",
+      "reference_media_asset_id": "..."
+    }
   ]
 }
 ```
 
-Later score changes do not alter the meaning of `/open 2`.
+Later score changes do not alter the meaning of `/open 2`. The representative reference identity is frozen with the briefing as well, so reopening an item can show the same post the operator saw that morning.
 
 ### 5.5 Alert event state
 
@@ -369,10 +387,16 @@ Normal format:
 - date and match-day state,
 - overnight collection/intelligence summary,
 - Top 3 candidates,
+- one representative thumbnail for each Top candidate when available,
+- representative source account and direct Instagram permalink for human verification,
 - flags and Priority Score,
 - creative production status,
 - blocked/failed items,
 - short action hint.
+
+Representative-reference selection is deterministic. Prefer a cluster post with an available cached media asset, then higher match confidence, higher source/account reliability where available, newer published time, and stable ID ordering as the final tie-breaker. Image posts use the image asset, carousels use the first carousel image, and video/Reel posts use a cached thumbnail when available. If no cached asset exists, send the candidate as text-only while retaining its permalink when available.
+
+Telegram must not depend on expiring upstream Instagram media URLs. Thumbnail delivery uses the existing private Supabase Storage asset and a short-lived server-generated signed URL; the human-verification link uses the canonical `raw_posts.permalink`.
 
 If no meaningful changes exist, a short “특이사항 없음” style briefing is still sent so the operator knows the system is healthy.
 
@@ -587,6 +611,9 @@ Implementation follows TDD.
 ### Morning briefing tests
 
 - deterministic Top 3 order,
+- deterministic representative-reference selection,
+- thumbnail fallback when no cached asset exists,
+- representative Instagram permalink preserved in the frozen briefing snapshot,
 - correct FIRST_MOVER/MUST_COVER display,
 - match-day mode behavior,
 - no-news-day short briefing,
@@ -637,8 +664,8 @@ Implementation follows TDD.
 A completion smoke must demonstrate:
 
 1. fixture sync,
-2. 09:00 briefing generation and Telegram delivery,
-3. `/open 1`,
+2. 09:00 briefing generation and Telegram delivery with representative thumbnail + source permalink where available,
+3. `/open 1` reopening the same frozen representative reference,
 4. read-only active-context question,
 5. historical retrieval question,
 6. `/brief`,
