@@ -162,7 +162,10 @@ select isnt_empty(
   $$select 1 from pg_indexes where schemaname='app_private' and indexname='telegram_messages_update_id_key'$$
 );
 select isnt_empty(
-  $$select 1 from pg_indexes where schemaname='app_private' and indexname='telegram_alert_events_fingerprint_key'$$
+  $select 1 from pg_indexes where schemaname='app_private' and indexname='telegram_alert_events_fingerprint_key'$
+);
+select isnt_empty(
+  $select 1 from pg_indexes where schemaname='app_private' and indexname='telegram_briefings_thread_date_key'$
 );
 
 select ok((select relrowsecurity from pg_class where oid='public.matches'::regclass), 'matches RLS');
@@ -285,6 +288,9 @@ create unique index telegram_messages_update_id_key
 
 create unique index telegram_alert_events_fingerprint_key
   on app_private.telegram_alert_events(event_fingerprint);
+
+create unique index telegram_briefings_thread_date_key
+  on app_private.telegram_briefings(thread_id, briefing_date);
 ```
 
 Enable RLS on every new table, revoke `public, anon, authenticated`, grant only `service_role`, and reuse `app_private.set_updated_at()` triggers.
@@ -428,7 +434,7 @@ assertEquals(normalizeApiFootballFixture(raw, 33), {
 ```
 
 Add mappings:
-- `NS/TBD -> SCHEDULED`
+- `NS` and the provider's documented second not-started short code -> `SCHEDULED`
 - `1H/HT/2H/ET/BT/P/INT/LIVE -> LIVE`
 - `FT/AET/PEN/AWD/WO -> FINISHED`
 - `PST/SUSP -> POSTPONED`
@@ -807,9 +813,12 @@ interface PhrasedBriefing {
 Validator rejects:
 - unknown position,
 - duplicate position,
-- added URL,
-- changed score/flag encoded into note,
+- any URL,
+- any ASCII digit in a candidate note,
+- canonical status/flag tokens such as `Priority`, `FIRST_MOVER`, or `MUST_COVER` inside the generated note,
 - note longer than configured bound.
+
+This keeps all scores, flags, statuses, source links, and positions code-rendered rather than model-authored.
 
 The final renderer always inserts canonical score/status/link itself.
 
@@ -836,6 +845,8 @@ No web-search tool is available to the M6 provider.
 8. send compact totals/issues footer,
 9. write all outbound messages to `telegram_messages` as `BRIEFING`,
 10. set `sent_at` only after successful delivery.
+
+The `(thread_id, briefing_date)` unique key is the morning-delivery idempotency boundary. A duplicate scheduler invocation for the same day returns the stored briefing and must not send a second morning package.
 
 Partial fixture failure adds a warning but does not suppress the briefing.
 
@@ -1047,6 +1058,8 @@ Malformed commands return stable user-safe validation codes and never call OpenA
 
 `/back` pops one entry.
 
+`/today` returns the latest stored morning briefing without creating a new briefing. `/brief` renders the latest active Creative Brief. `/status` loads current candidate score/flags, latest brief revision, pipeline state, and match context fresh from Supabase. `/help` returns the static v1 command reference.
+
 `/reset` clears active pointers, context history, and pending action only; conversation messages/summary remain.
 
 - [ ] **Step 3: Write RED revision immutability/grounding tests**
@@ -1079,6 +1092,8 @@ For `/caption`, require only:
 ```
 
 Then reconstruct/validate the full brief.
+
+A successful `/hook`, `/slide`, or `/caption` insert creates `status = DRAFT`, preserves the original `evidence_snapshot`, records `generation_metadata.origin = "TELEGRAM_COMMAND"`, and then reuses the existing M5 Content Pipeline projection. If the current production item is EDITABLE, update its system-owned content. If it is LOCKED/APPROVED, projection occurs only through the confirmed protected branch and creates a new production item. Projection failure is recorded as a warning and never rolls back the new canonical revision.
 
 - [ ] **Step 5: Implement append-only command fingerprint/idempotency**
 
@@ -1135,12 +1150,13 @@ Input is the Telegram update forwarded from n8n. Handler must:
 1. authenticate `TELEGRAM_AGENT_INVOKE_SECRET`,
 2. validate `from.id == TELEGRAM_OWNER_USER_ID`,
 3. validate/initialize owner user + chat thread using server env and DB,
-4. dedupe by `telegram_update_id`,
-5. persist user message,
+4. atomically claim the inbound `telegram_update_id` by inserting the USER message first,
+5. if the unique claim already exists, return `ALREADY_PROCESSED` without a second model call or send,
 6. route slash command or read-only conversation,
-7. send reply through server-side Telegram client,
-8. persist assistant message,
-9. roll summary when due.
+7. persist the assistant reply with `metadata.in_reply_to_update_id`,
+8. send reply through server-side Telegram client,
+9. update assistant delivery metadata after send,
+10. roll summary when due.
 
 Unauthorized user receives no project context and no mutation.
 
@@ -1149,6 +1165,7 @@ Unauthorized user receives no project context and no mutation.
 Explicitly test:
 - same update id twice -> one user row, one command event, one revision,
 - same non-command update twice -> one assistant response recorded/sent,
+- same morning scheduler invocation twice -> one stored/sent morning package,
 - protected command proposed on r4, r5 created elsewhere, then `/confirm` -> `STALE_PENDING_ACTION`,
 - confirmation after 10 minutes -> `PENDING_ACTION_EXPIRED`.
 
@@ -1233,7 +1250,7 @@ Do not place memory, prompt, command parsing, candidate ranking, or alert finger
 
 - [ ] **Step 3: Add candidate-alert invocation to the existing collector flow**
 
-After the M4/M5 success segment, invoke `telegram-alerts` as a non-blocking integration branch. Existing core pipeline order and failure semantics remain unchanged.
+After the M4/M5 success segment, invoke `telegram-alerts` as a non-blocking integration branch. Existing core pipeline order and failure semantics remain unchanged. The alert service itself performs the candidate false→true transition scan before dispatch, so n8n contains no flag-diff logic.
 
 - [ ] **Step 4: Write RED integration smoke fixtures**
 
@@ -1336,7 +1353,7 @@ git log --oneline --decorate -12
 
 Confirm:
 - no secret values,
-- no TODO/TBD implementation placeholders,
+- no unresolved implementation placeholders,
 - all M6 spec requirements map to tests,
 - existing M4/M4.5/M5 regressions are green.
 
