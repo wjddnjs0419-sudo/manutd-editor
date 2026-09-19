@@ -12,6 +12,9 @@ export interface FrozenBriefingItem {
   reference_media_asset_id: string | null;
   reference_username: string | null;
   reference_permalink: string | null;
+  title?: string | null;
+  /** Ephemeral signed URL; never persist this field in the briefing snapshot. */
+  reference_media_url?: string | null;
 }
 
 export interface MorningBriefingSnapshot {
