@@ -147,12 +147,13 @@ Supported statuses:
 
 Default behavior:
 
-- normal period: sync upcoming 60 days twice daily,
-- D-1 through kickoff: refresh approximately hourly,
-- LIVE: refresh approximately every 10–15 minutes,
+- normal period: sync upcoming 60 days at 03:00 and 15:00 KST,
+- every morning briefing run performs a fixture refresh immediately before briefing compilation,
+- D-1 through kickoff: refresh hourly,
+- LIVE: refresh every 15 minutes,
 - after FINISHED: persist final state and return to normal cadence.
 
-This is an editorial context service, not a real-time score product.
+This is an editorial context service, not a real-time score product. Background schedule values may later move into config, but these are the M6 v1 defaults.
 
 ### 4.4 Match lifecycle context
 
@@ -216,7 +217,7 @@ M6 v1 allows only the configured owner user, but the schema supports adding edit
 - `last_message_at timestamptz null`
 - timestamps
 
-The conversation is persistent. Current work is represented by explicit active-context pointers. `context_history` retains only a small bounded recent stack, such as five entries, for `/back`.
+The conversation is persistent. Current work is represented by explicit active-context pointers. `context_history` retains at most five entries for `/back`; pushing a sixth discards the oldest entry.
 
 ### 5.3 Message history
 
@@ -329,11 +330,11 @@ Conceptual fields:
 - `briefing_top_n integer not null default 3`
 - `recent_message_limit integer not null default 12`
 - `summary_trigger_count integer not null default 20`
-- `alert_cooldown_minutes integer not null`
+- `alert_cooldown_minutes integer not null default 60`
 - `model_config jsonb not null`
 - timestamps
 
-The initial operating time is 09:00 KST. Config changes must not require code changes.
+The initial operating time is 09:00 KST. The initial alert cooldown is 60 minutes, applied only where fingerprint identity alone does not suppress an equivalent repeated alert. Config changes must not require code changes.
 
 ## 7. Morning Briefing
 
@@ -413,8 +414,8 @@ Example context:
 
 Default policy:
 
-- keep roughly the most recent 12 messages raw in prompt context,
-- after roughly 20 unsummarized messages, fold older content into a new summary,
+- keep the most recent 12 messages raw in prompt context,
+- when 20 unsummarized messages have accumulated, fold the oldest messages into a new rolling summary while retaining the newest 12 raw messages,
 - retain all raw messages in `telegram_messages`,
 - do not delete source history when `/reset` is called.
 
@@ -444,7 +445,7 @@ Primary retrieval sources:
 - `creative_briefs`
 - `matches`
 
-M6 v1 does not require a dedicated vector database.
+M6 v1 does not require a dedicated vector database. The conversational agent does not use external web search in v1; factual answers are grounded in current Supabase project state and retrieved project history.
 
 ## 10. Telegram command contract
 
@@ -502,7 +503,7 @@ Command parsing is deterministic. The command determines the action type; only t
 
 If the active production item is LOCKED or APPROVED, a mutation command must not overwrite it. The requested operation becomes a short-lived pending action and requires `/confirm`. `/cancel` discards it.
 
-Pending actions expire after a bounded period such as ten minutes.
+Pending actions expire exactly ten minutes after creation.
 
 M6 v1 does not expose `/publish`, `/delete`, or direct Instagram posting.
 
