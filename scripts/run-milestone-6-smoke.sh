@@ -15,7 +15,14 @@ fi
 : "${SUPABASE_SECRET_KEY:?SUPABASE_SECRET_KEY is required for M6 smoke}"
 db_url="${SUPABASE_DB_URL:-postgresql://postgres:postgres@127.0.0.1:55322/postgres}"
 
-docker run --rm --add-host=host.docker.internal:host-gateway \
+docker_env_args=()
+if [[ -f "$env_file" ]]; then
+  docker_env_args+=(--env-file "$env_file")
+else
+  docker_env_args+=(--env "SUPABASE_URL=$SUPABASE_URL" --env "SUPABASE_SECRET_KEY=$SUPABASE_SECRET_KEY")
+fi
+
+docker run --rm "${docker_env_args[@]}" --add-host=host.docker.internal:host-gateway \
   -v "$repo_dir/supabase:/workspace/supabase" -w /workspace/supabase \
   denoland/deno:2.1.4 deno test --allow-env --allow-net \
   tests/integration/milestone_6_telegram_integration_test.ts
