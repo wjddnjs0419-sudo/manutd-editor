@@ -1,0 +1,10 @@
+{
+  "name": "Fixture Sync Schedule",
+  "nodes": [
+    { "name": "Every 15 Minutes", "type": "n8n-nodes-base.scheduleTrigger", "parameters": { "rule": { "interval": [{ "field": "minutes", "minutesInterval": 15 }] } } },
+    { "name": "Run Fixture Sync", "type": "n8n-nodes-base.httpRequest", "parameters": { "method": "POST", "url": "https://example.supabase.co/functions/v1/fixture-sync", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "jsonBody": "{\"mode\":\"AUTO\"}" }, "credentials": { "httpHeaderAuth": { "name": "Telegram Agent Invoke Secret" } } },
+    { "name": "Dispatch Telegram Alerts", "type": "n8n-nodes-base.httpRequest", "continueOnFail": true, "parameters": { "method": "POST", "url": "https://example.supabase.co/functions/v1/telegram-alerts", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": false }, "credentials": { "httpHeaderAuth": { "name": "Telegram Agent Invoke Secret" } } }
+  ],
+  "connections": { "Every 15 Minutes": { "main": [[{ "node": "Run Fixture Sync" }]] }, "Run Fixture Sync": { "main": [[{ "node": "Dispatch Telegram Alerts" }]] } },
+  "settings": { "timezone": "Asia/Seoul" }, "active": false
+}

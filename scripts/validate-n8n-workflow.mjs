@@ -10,19 +10,64 @@ const httpNodes = nodes.filter((node) =>
   node.type === "n8n-nodes-base.httpRequest"
 );
 
+function assertNoSecrets(value) {
+  const serialized = JSON.stringify(value);
+  for (const forbidden of [
+    "FOOTBALL_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_AGENT_INVOKE_SECRET",
+    "OPENAI_API_KEY", "NOTION_TOKEN", "SUPABASE_SECRET_KEY", "sb_secret_", "Bearer ",
+  ]) assert.equal(serialized.includes(forbidden), false, `forbidden secret marker: ${forbidden}`);
+}
+
+function validateMilestone6() {
+  assert.equal(workflow.active, false, "M6 workflows must be inactive in git");
+  assert.equal(workflow.settings?.timezone, "Asia/Seoul");
+  assert.equal(nodes.some((node) => node.type === "n8n-nodes-base.code"), false, "M6 workflows must not contain Code nodes");
+  assertNoSecrets(workflow);
+  const http = nodes.filter((node) => node.type === "n8n-nodes-base.httpRequest");
+  for (const node of http) {
+    assert.equal(node.parameters?.method, "POST", `${node.name} method must be POST`);
+    assert.match(node.parameters?.url ?? "", /\/functions\/v1\/(fixture-sync|telegram-alerts|telegram-morning-brief|telegram-agent)$/u);
+    assert.equal(node.parameters?.authentication, "genericCredentialType");
+    assert.equal(node.parameters?.genericAuthType, "httpHeaderAuth");
+    assert.equal(node.credentials?.httpHeaderAuth?.name, "Telegram Agent Invoke Secret");
+    assert.deepEqual(Object.keys(node.credentials.httpHeaderAuth).sort(), ["name"], "credential references cannot contain values");
+  }
+  if (workflow.name === "Fixture Sync Schedule") {
+    const schedule = nodes.find((node) => node.type === "n8n-nodes-base.scheduleTrigger");
+    assert.deepEqual(schedule?.parameters?.rule?.interval, [{ field: "minutes", minutesInterval: 15 }]);
+    assert.equal(http.length, 2);
+    assert.match(http[0].parameters.url, /\/fixture-sync$/u);
+    assert.equal(http[0].parameters.jsonBody, "{\"mode\":\"AUTO\"}");
+    assert.match(http[1].parameters.url, /\/telegram-alerts$/u);
+    assert.equal(http[1].continueOnFail, true, "Telegram alert dispatch must continue-on-failure");
+  } else if (workflow.name === "Telegram Morning Brief") {
+    const schedule = nodes.find((node) => node.type === "n8n-nodes-base.scheduleTrigger");
+    assert.deepEqual(schedule?.parameters?.rule?.interval, [{ field: "cron", expression: "0 9 * * *" }]);
+    assert.equal(http.length, 1);
+    assert.match(http[0].parameters.url, /\/telegram-morning-brief$/u);
+  } else if (workflow.name === "Telegram Editorial Agent") {
+    const trigger = nodes.find((node) => node.type === "n8n-nodes-base.telegramTrigger");
+    assert.ok(trigger, "Telegram Trigger is required");
+    assert.ok(trigger.credentials?.telegramApi?.name, "Telegram Trigger credential reference is required");
+    assert.equal(http.length, 1);
+    assert.match(http[0].parameters.url, /\/telegram-agent$/u);
+    assert.equal(http[0].parameters.sendBody, true);
+  } else throw new Error(`unknown M6 workflow: ${workflow.name}`);
+  console.log("workflow validation passed");
+}
+
+if (workflow.name !== "Instagram Collector Schedule") {
+  validateMilestone6();
+  process.exit(0);
+}
+
 assert.equal(workflow.name, "Instagram Collector Schedule");
 assert.equal(workflow.settings?.timezone, "Asia/Seoul");
 assert.equal(workflow.active, false);
+const hasAlertNode = nodes.some((node) => node.name === "Dispatch Telegram Alerts");
 assert.deepEqual(
   nodes.map((node) => node.type).sort(),
-  [
-    "n8n-nodes-base.httpRequest",
-    "n8n-nodes-base.httpRequest",
-    "n8n-nodes-base.httpRequest",
-    "n8n-nodes-base.httpRequest",
-    "n8n-nodes-base.httpRequest",
-    "n8n-nodes-base.scheduleTrigger",
-  ].sort(),
+  [...Array.from({ length: hasAlertNode ? 6 : 5 }, () => "n8n-nodes-base.httpRequest"), "n8n-nodes-base.scheduleTrigger"].sort(),
 );
 
 const schedule = nodes.find((node) =>
@@ -48,7 +93,8 @@ const priority = nodes.find((node) =>
 const selected = nodes.find((node) =>
   node.name === "Poll Selected Creative Generation"
 );
-assert.equal(httpNodes.length, 5, "workflow must have exactly five HTTP nodes");
+const alert = nodes.find((node) => node.name === "Dispatch Telegram Alerts");
+assert.ok(httpNodes.length === 5 || httpNodes.length === 6, "workflow must have five core HTTP nodes and an optional alert node");
 assert.ok(collector, "collector HTTP node is required");
 assert.ok(intelligence, "intelligence HTTP node is required");
 assert.ok(notion, "Notion sync HTTP node is required");
@@ -59,7 +105,7 @@ function responseOptions(node) {
   return node.parameters?.options?.response?.response ?? {};
 }
 
-function assertHttpContract(node, label, endpoint) {
+function assertHttpContract(node, label, endpoint, credentialName = "Instagram Collector Invoke Secret") {
   assert.equal(node.parameters?.method, "POST", `${label} method must be POST`);
   assert.match(
     node.parameters?.url ?? "",
@@ -89,7 +135,7 @@ function assertHttpContract(node, label, endpoint) {
   );
   assert.equal(
     credential.name,
-    "Instagram Collector Invoke Secret",
+    credentialName,
     `${label} credential reference must use the existing credential`,
   );
   assert.deepEqual(
@@ -218,26 +264,17 @@ assert.equal(
 );
 
 const selectedTargets = outgoingTargets(selected.name);
-assert.equal(
-  selectedTargets.length,
-  0,
-  "selected creative generation must be the final node in this workflow",
-);
-
-const serialized = JSON.stringify(workflow);
-for (const forbidden of [
-  "META_ACCESS_TOKEN",
-  "SUPABASE_SECRET_KEY",
-  "SUPABASE_SECRET_KEYS",
-  "sb_secret_",
-  "EAAB",
-  "Bearer ",
-]) {
-  assert.equal(
-    serialized.includes(forbidden),
-    false,
-    `forbidden secret marker: ${forbidden}`,
-  );
+if (alert) {
+  assert.equal(httpNodes.length, 6, "alert branch must be the sixth HTTP node");
+  assertHttpContract(alert, "Telegram alert dispatch", "telegram-alerts", "Telegram Agent Invoke Secret");
+  assert.equal(alert.continueOnFail, true, "Telegram alert dispatch must continue-on-failure");
+  assert.equal(selectedTargets.length, 1, "selected creative generation must connect to alert dispatch");
+  assert.equal(selectedTargets[0].node, alert.name, "selected creative generation must connect to alert dispatch");
+  assert.equal(outgoingTargets(alert.name).length, 0, "alert dispatch must be the final node");
+} else {
+  assert.equal(selectedTargets.length, 0, "selected creative generation must be the final node in this workflow");
 }
+
+assertNoSecrets(workflow);
 
 console.log("workflow validation passed");

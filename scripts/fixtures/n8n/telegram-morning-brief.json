@@ -1,0 +1,9 @@
+{
+  "name": "Telegram Morning Brief",
+  "nodes": [
+    { "name": "09:00 KST", "type": "n8n-nodes-base.scheduleTrigger", "parameters": { "rule": { "interval": [{ "field": "cron", "expression": "0 9 * * *" }] } } },
+    { "name": "Send Telegram Morning Brief", "type": "n8n-nodes-base.httpRequest", "parameters": { "method": "POST", "url": "https://example.supabase.co/functions/v1/telegram-morning-brief", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": false }, "credentials": { "httpHeaderAuth": { "name": "Telegram Agent Invoke Secret" } } }
+  ],
+  "connections": { "09:00 KST": { "main": [[{ "node": "Send Telegram Morning Brief" }]] } },
+  "settings": { "timezone": "Asia/Seoul" }, "active": false
+}

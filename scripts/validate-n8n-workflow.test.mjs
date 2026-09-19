@@ -11,9 +11,18 @@ const fixturePath = path.join(
   root,
   "scripts/fixtures/n8n/instagram-collector-task-7.json",
 );
+const m6Fixtures = {
+  fixture: path.join(root, "scripts/fixtures/n8n/fixture-sync-schedule.json"),
+  morning: path.join(root, "scripts/fixtures/n8n/telegram-morning-brief.json"),
+  agent: path.join(root, "scripts/fixtures/n8n/telegram-editorial-agent.json"),
+};
 
 function readFixture() {
   return JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+}
+
+function readM6(name) {
+  return JSON.parse(fs.readFileSync(m6Fixtures[name], "utf8"));
 }
 
 function runValidator(workflow) {
@@ -157,4 +166,35 @@ test("rejects exported credential values or secret-like markers", () => {
   const result = runValidator(workflow);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /secret|credential value/i);
+});
+
+test("accepts inactive Seoul-time M6 orchestration workflows", () => {
+  for (const name of Object.keys(m6Fixtures)) {
+    const result = runValidator(readM6(name));
+    assert.equal(result.status, 0, `${name}: ${result.stderr || result.stdout}`);
+  }
+});
+
+test("rejects a morning brief schedule that is not exactly 09:00 KST", () => {
+  const workflow = readM6("morning");
+  workflow.nodes[0].parameters.rule.interval[0].expression = "0 10 * * *";
+  const result = runValidator(workflow);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /09:00|deep.?equal/i);
+});
+
+test("rejects fixture alert dispatch without continue-on-failure", () => {
+  const workflow = readM6("fixture");
+  workflow.nodes[2].continueOnFail = false;
+  const result = runValidator(workflow);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /continue.?on.?failure/i);
+});
+
+test("rejects Telegram agent workflow containing a Code node", () => {
+  const workflow = readM6("agent");
+  workflow.nodes.push({ name: "Scoring Code", type: "n8n-nodes-base.code" });
+  const result = runValidator(workflow);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Code nodes/i);
 });

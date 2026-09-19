@@ -1,0 +1,11 @@
+{
+  "name": "Fixture Sync Schedule",
+  "nodes": [
+    { "name": "Every 15 Minutes", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.3, "parameters": { "rule": { "interval": [{ "field": "minutes", "minutesInterval": 15 }] } }, "position": [0, 0] },
+    { "name": "Run Fixture Sync", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "parameters": { "method": "POST", "url": "https://byymtttpwmllqvggnddm.supabase.co/functions/v1/fixture-sync", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "{\"mode\":\"AUTO\"}", "options": { "response": { "response": { "responseFormat": "json" } } } }, "credentials": { "httpHeaderAuth": { "name": "Telegram Agent Invoke Secret" } }, "position": [280, 0] },
+    { "name": "Dispatch Telegram Alerts", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "continueOnFail": true, "parameters": { "method": "POST", "url": "https://byymtttpwmllqvggnddm.supabase.co/functions/v1/telegram-alerts", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": false, "options": { "response": { "response": { "neverError": true, "responseFormat": "json" } } } }, "credentials": { "httpHeaderAuth": { "name": "Telegram Agent Invoke Secret" } }, "position": [560, 0] }
+  ],
+  "connections": { "Every 15 Minutes": { "main": [[{ "node": "Run Fixture Sync", "type": "main", "index": 0 }]] }, "Run Fixture Sync": { "main": [[{ "node": "Dispatch Telegram Alerts", "type": "main", "index": 0 }]] } },
+  "settings": { "timezone": "Asia/Seoul", "executionOrder": "v1" },
+  "active": false
+}

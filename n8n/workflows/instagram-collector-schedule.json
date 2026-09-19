@@ -157,6 +157,22 @@
         }
       },
       "position": [1300, 0]
+    },
+    {
+      "name": "Dispatch Telegram Alerts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "parameters": {
+        "method": "POST",
+        "url": "https://byymtttpwmllqvggnddm.supabase.co/functions/v1/telegram-alerts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": false,
+        "options": { "response": { "response": { "neverError": true, "responseFormat": "json" } }, "timeout": 120000 }
+      },
+      "credentials": { "httpHeaderAuth": { "name": "Telegram Agent Invoke Secret" } },
+      "position": [1560, 0]
     }
   ],
   "connections": {
@@ -212,6 +228,13 @@
             "type": "main",
             "index": 0
           }
+        ]
+      ]
+    },
+    "Poll Selected Creative Generation": {
+      "main": [
+        [
+          { "node": "Dispatch Telegram Alerts", "type": "main", "index": 0 }
         ]
       ]
     }

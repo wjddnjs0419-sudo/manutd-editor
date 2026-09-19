@@ -1,0 +1,10 @@
+{
+  "name": "Telegram Morning Brief",
+  "nodes": [
+    { "name": "09:00 KST", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.3, "parameters": { "rule": { "interval": [{ "field": "cron", "expression": "0 9 * * *" }] } }, "position": [0, 0] },
+    { "name": "Send Telegram Morning Brief", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "parameters": { "method": "POST", "url": "https://byymtttpwmllqvggnddm.supabase.co/functions/v1/telegram-morning-brief", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": false, "options": { "response": { "response": { "neverError": true, "responseFormat": "json" } } } }, "credentials": { "httpHeaderAuth": { "name": "Telegram Agent Invoke Secret" } }, "position": [320, 0] }
+  ],
+  "connections": { "09:00 KST": { "main": [[{ "node": "Send Telegram Morning Brief", "type": "main", "index": 0 }]] } },
+  "settings": { "timezone": "Asia/Seoul", "executionOrder": "v1" },
+  "active": false
+}

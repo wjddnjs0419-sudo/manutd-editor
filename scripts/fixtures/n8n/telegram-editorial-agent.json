@@ -1,0 +1,9 @@
+{
+  "name": "Telegram Editorial Agent",
+  "nodes": [
+    { "name": "Telegram Trigger", "type": "n8n-nodes-base.telegramTrigger", "parameters": { "updates": ["message"] }, "credentials": { "telegramApi": { "name": "Telegram Bot Credential" } } },
+    { "name": "Forward Raw Telegram Update", "type": "n8n-nodes-base.httpRequest", "parameters": { "method": "POST", "url": "https://example.supabase.co/functions/v1/telegram-agent", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "body": "={{ JSON.stringify($json) }}" }, "credentials": { "httpHeaderAuth": { "name": "Telegram Agent Invoke Secret" } } }
+  ],
+  "connections": { "Telegram Trigger": { "main": [[{ "node": "Forward Raw Telegram Update" }]] } },
+  "settings": { "timezone": "Asia/Seoul" }, "active": false
+}

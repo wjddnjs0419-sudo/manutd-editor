@@ -79,6 +79,33 @@ media cache는 `instagram-analysis` private bucket만 사용합니다. 원본 �
 
 실제 값은 로컬의 무시된 env 파일이나 Supabase secrets에만 둡니다.
 
+## Milestone 6 Telegram Editorial Agent
+
+M6는 Supabase를 canonical state로 유지하면서 Telegram을 운영 콘솔로 사용하는 계층입니다. API-Football 팀 ID 33(Manchester United) fixture를 match-day 상태에 따라 quota-aware cadence로 동기화하고, 매일 09:00 Asia/Seoul에 fixture 강제 갱신 후 상위 3개 후보의 frozen briefing을 보냅니다. private Storage thumbnail은 10분 signed URL로 전송하고, 사람 검증용 Instagram permalink는 canonical 원문 링크로 함께 표시합니다.
+
+자연어 대화는 read-only입니다. 상태 변경은 `/hook`, `/slide`, `/caption`, `/select` 같은 명시적 slash command만 수행하며, LOCKED/APPROVED 상태의 변경은 10분 보호 확인과 최신 revision 재검증을 거칩니다. 최근 raw Telegram 메시지 12개를 컨텍스트에 사용하고, 20개 시점에 오래된 부분만 요약합니다. 과거 검색은 `지난 경기`, `지난주`, `last match`처럼 명시적인 history 요청에서만 structured-first로 최대 5건을 조회합니다.
+
+주요 명령:
+
+`/today`, `/open <1..3|uuid|alert>`, `/brief`, `/hook <1..3>`, `/slide <1..7> <지시>`, `/caption <지시>`, `/select`, `/status`, `/back`, `/reset`, `/confirm`, `/cancel`, `/help`
+
+n8n은 `fixture-sync → telegram-alerts`, 09:00 `telegram-morning-brief`, Telegram Trigger → `telegram-agent` 호출만 담당합니다. 점수·선택·메모리·명령·dedupe 규칙은 Edge Function과 Supabase에 있습니다. 모든 M6 workflow는 git에서 `active: false`이며 credential value를 포함하지 않습니다.
+
+필수 로컬 설정은 `SUPABASE_URL`, `SUPABASE_SECRET_KEY`이며, 실제 연동에는 `FOOTBALL_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_AGENT_INVOKE_SECRET`, `TELEGRAM_OWNER_USER_ID`, `TELEGRAM_OWNER_CHAT_ID`, `TELEGRAM_OWNER_THREAD_ID`, `OPENAI_API_KEY`가 필요합니다. 키 값은 커밋하지 않습니다.
+
+로컬 검증:
+
+```bash
+supabase db reset --local
+supabase test db
+node scripts/validate-n8n-workflow.mjs n8n/workflows/fixture-sync-schedule.json
+node scripts/validate-n8n-workflow.mjs n8n/workflows/telegram-morning-brief.json
+node scripts/validate-n8n-workflow.mjs n8n/workflows/telegram-editorial-agent.json
+./scripts/run-milestone-6-smoke.sh
+```
+
+M6 범위에는 Telegram 발행/삭제, Instagram 자동 게시, 실시간 scorebot, vector-RAG 인프라, 복잡한 multi-user RBAC, 광범위한 Notion administration이 포함되지 않습니다.
+
 ```text
 COLLECTOR_INVOKE_SECRET
 META_ACCESS_TOKEN
