@@ -52,7 +52,7 @@ returns setof text
 language plpgsql
 as $m4$
 declare
-  v_run_at constant timestamptz := '2026-09-18 12:00:00+00';
+  v_run_at timestamptz := date_trunc('minute', clock_timestamp());
   v_config uuid;
   v_global uuid;
   v_kr uuid;
@@ -119,7 +119,15 @@ begin
   select jsonb_agg(jsonb_build_object('slot', slot, 'captured_at', captured_at) order by slot)
   into v_snapshot
   from app_private.m4_score_snapshots(v_target, v_run_at, v_config);
-  return next is(v_snapshot, '[{"slot":"s0","captured_at":"2026-09-18T11:31:00+00:00"},{"slot":"s1","captured_at":"2026-09-18T11:00:00+00:00"},{"slot":"s2","captured_at":"2026-09-18T10:30:00+00:00"}]'::jsonb, 'snapshot helper chooses s0/s1/s2 at or before run_at with at least 30-minute gaps');
+  return next is(
+    v_snapshot,
+    jsonb_build_array(
+      jsonb_build_object('slot', 's0', 'captured_at', to_jsonb(v_run_at - interval '29 minutes')),
+      jsonb_build_object('slot', 's1', 'captured_at', to_jsonb(v_run_at - interval '60 minutes')),
+      jsonb_build_object('slot', 's2', 'captured_at', to_jsonb(v_run_at - interval '90 minutes'))
+    ),
+    'snapshot helper chooses s0/s1/s2 at or before run_at with at least 30-minute gaps'
+  );
 
   insert into public.post_metric_snapshots (raw_post_id, captured_at, capture_bucket_start, followers_count, like_count, comments_count, post_age_minutes)
   values (v_oldest, v_run_at - interval '88 minutes', v_run_at - interval '90 minutes', 1000, 10, 1, 32), (v_oldest, v_run_at - interval '59 minutes', v_run_at - interval '60 minutes', 1000, 20, 2, 61), (v_oldest, v_run_at - interval '30 minutes', v_run_at - interval '30 minutes', 1000, 30, 3, 90);

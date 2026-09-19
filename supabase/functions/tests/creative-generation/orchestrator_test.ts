@@ -53,7 +53,7 @@ class MemoryRepository implements GenerationRepository {
   async getActiveConfig() { return this.config; }
   async findReadyBrief(candidateId: string, fingerprint: string) { return this.briefs.find((brief) => brief.candidate_id === candidateId && brief.input_fingerprint === fingerprint && brief.status === "READY") ?? null; }
   async getJob(candidateId: string, fingerprint: string) { return this.jobs.find((job) => job.candidate_id === candidateId && job.input_fingerprint === fingerprint) ?? null; }
-  async insertJob(input: Omit<GenerationJob, "id">) { const existing = await this.getJob(input.candidate_id, input.input_fingerprint); if (existing) return existing; const job = { ...input, id: `job-${this.jobs.length + 1}` }; this.jobs.push(job); return job; }
+  async insertJob(input: Omit<GenerationJob, "id">) { const existing = this.jobs.find((job) => job.candidate_id === input.candidate_id && job.input_fingerprint === input.input_fingerprint); if (existing) return existing; const job = { ...input, id: `job-${this.jobs.length + 1}` }; this.jobs.push(job); return job; }
   async acquireLease(jobId: string) { if (this.leaseOwners.has(jobId)) return false; this.leaseOwners.add(jobId); return true; }
   async updateJob(jobId: string, patch: Partial<GenerationJob>) { const job = this.jobs.find((entry) => entry.id === jobId)!; Object.assign(job, patch); }
   async nextRevision(candidateId: string) { return Math.max(0, ...this.briefs.filter((brief) => brief.candidate_id === candidateId).map((brief) => brief.version)) + 1; }
