@@ -33,7 +33,7 @@ export interface CreativeBriefInsert {
   readonly design_json: Record<string, unknown>;
   readonly caption_draft: string;
   readonly cta: string;
-  readonly status: "READY";
+  readonly status: "DRAFT" | "READY";
   readonly content_mode: string;
   readonly match_phase: string | null;
   readonly generation_config_id: string;
