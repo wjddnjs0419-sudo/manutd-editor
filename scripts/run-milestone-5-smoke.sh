@@ -3,6 +3,16 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_dir=$(cd -- "$script_dir/.." && pwd)
+env_file="${SUPABASE_FUNCTIONS_ENV_FILE:-$repo_dir/supabase/functions/.env.local}"
+if [[ ! -f "$env_file" && -f "$repo_dir/../../supabase/functions/.env.local" ]]; then
+  env_file="$repo_dir/../../supabase/functions/.env.local"
+fi
+if [[ -f "$env_file" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
 supabase_url="${SUPABASE_URL:-${LOCAL_SUPABASE_URL:-http://127.0.0.1:55321}}"
 db_url="${SUPABASE_DB_URL:-${LOCAL_SUPABASE_DB_URL:-postgresql://postgres:postgres@127.0.0.1:55322/postgres}}"
 

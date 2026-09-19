@@ -137,7 +137,7 @@ M5는 `creative-generation`, `creative-generation-priority`, `creative-generatio
 ./scripts/run-milestone-5-smoke.sh
 ```
 
-이 runner는 local DB assertion과 fixture integration test를 수행하며, `OPENAI_API_KEY`가 없으면 외부 OpenAI 호출을 명시적으로 건너뜁니다. 실제 OpenAI/Notion smoke는 배포된 함수와 해당 credential이 준비된 환경에서 별도로 실행해야 합니다.
+이 runner는 local DB assertion과 fixture integration test를 수행하며, 기본적으로 `supabase/functions/.env.local`을 자동 로드합니다. `OPENAI_API_KEY`가 없으면 외부 OpenAI 호출을 명시적으로 건너뜁니다. 실제 OpenAI/Notion smoke는 배포된 함수와 해당 credential 및 database ID가 준비된 환경에서 별도로 실행해야 합니다.
 
 ### 로컬 함수 실행
 
