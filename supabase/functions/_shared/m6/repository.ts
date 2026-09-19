@@ -1,10 +1,25 @@
 import type { CanonicalFixture, StoredMatch } from "./fixture_types.ts";
 import type { FixtureAlertEvent, FixtureSyncRepository, FixtureSyncState } from "./fixture_service.ts";
+import type { CandidateReferencePost } from "./reference_media.ts";
 
 export interface M6RepositoryOptions {
   supabaseUrl: string;
   serviceRoleKey: string;
   fetch?: typeof fetch;
+}
+
+export interface BriefingCandidateRow {
+  candidate_id: string;
+  rank: number | null;
+  priority_score: number | null;
+  first_mover_flag: boolean;
+  must_cover_flag: boolean;
+  creative_status: string;
+  reference_posts: readonly CandidateReferencePost[];
+}
+
+export interface M6Repository extends FixtureSyncRepository {
+  listBriefingCandidates(rankingDate: string): Promise<readonly BriefingCandidateRow[]>;
 }
 
 export class M6RepositoryError extends Error {
@@ -58,7 +73,7 @@ function parseMatch(value: unknown): StoredMatch {
   };
 }
 
-export function createM6Repository(options: M6RepositoryOptions): FixtureSyncRepository {
+export function createM6Repository(options: M6RepositoryOptions): M6Repository {
   if (!options.supabaseUrl.trim() || !options.serviceRoleKey.trim()) throw new M6RepositoryError("CONFIGURATION");
   const baseUrl = options.supabaseUrl.replace(/\/$/u, "");
   const fetchImpl = options.fetch ?? fetch;
@@ -124,6 +139,28 @@ export function createM6Repository(options: M6RepositoryOptions): FixtureSyncRep
     async insertAlertEventIfAbsent(event: FixtureAlertEvent) {
       const result = await request(`/rest/v1/telegram_alert_events?on_conflict=event_fingerprint`, { method: "POST", headers: { prefer: "resolution=ignore-duplicates,return=representation" }, body: JSON.stringify(event) }, "app_private");
       return Array.isArray(result) && result.length > 0;
+    },
+    async listBriefingCandidates(rankingDate) {
+      const rawCandidates = await request(`/rest/v1/content_candidates?select=id,rank,priority_score,first_mover_flag,must_cover_flag,story_cluster_id,creative_briefs(version,status)&ranking_date=eq.${encodeURIComponent(rankingDate)}&order=rank.asc.nullslast,priority_score.desc`);
+      if (!Array.isArray(rawCandidates)) throw new M6RepositoryError("RESPONSE");
+      const rawPosts = await request(`/rest/v1/story_cluster_posts?select=story_cluster_id,raw_post_id,match_confidence,raw_posts(permalink,published_at,media_type,media_product_type,source_accounts(username),media_assets(id,asset_type,carousel_index,storage_path))`);
+      if (!Array.isArray(rawPosts)) throw new M6RepositoryError("RESPONSE");
+      const postsByCluster = new Map<string, CandidateReferencePost[]>();
+      for (const value of rawPosts) {
+        if (!object(value) || typeof value.story_cluster_id !== "string" || typeof value.raw_post_id !== "string") continue;
+        const rawPost = object(value.raw_posts) ? value.raw_posts : null;
+        const account = rawPost && object(rawPost.source_accounts) ? rawPost.source_accounts : null;
+        if (!rawPost || !account || typeof account.username !== "string") continue;
+        const assets = Array.isArray(rawPost.media_assets) ? rawPost.media_assets.filter(object).flatMap((asset) => typeof asset.id === "string" && typeof asset.asset_type === "string" ? [{ id: asset.id, asset_type: asset.asset_type as CandidateReferencePost["media_assets"][number]["asset_type"], carousel_index: nullableNumber(asset.carousel_index), storage_path: nullableString(asset.storage_path) }] : []) : [];
+        const existing = postsByCluster.get(value.story_cluster_id) ?? [];
+        existing.push({ raw_post_id: value.raw_post_id, username: account.username, permalink: nullableString(rawPost.permalink), published_at: typeof rawPost.published_at === "string" ? rawPost.published_at : "1970-01-01T00:00:00Z", media_type: typeof rawPost.media_type === "string" ? rawPost.media_type : "UNKNOWN", media_product_type: nullableString(rawPost.media_product_type), match_confidence: nullableNumber(value.match_confidence), cited_source_reliability: null, media_assets: assets });
+        postsByCluster.set(value.story_cluster_id, existing);
+      }
+      return rawCandidates.filter(object).map((candidate) => {
+        const briefs = Array.isArray(candidate.creative_briefs) ? candidate.creative_briefs.filter(object) : [];
+        const latest = briefs.sort((left, right) => (typeof right.version === "number" ? right.version : 0) - (typeof left.version === "number" ? left.version : 0))[0];
+        return { candidate_id: typeof candidate.id === "string" ? candidate.id : "", rank: nullableNumber(candidate.rank), priority_score: nullableNumber(candidate.priority_score), first_mover_flag: candidate.first_mover_flag === true, must_cover_flag: candidate.must_cover_flag === true, creative_status: typeof latest?.status === "string" ? latest.status : "NOT_REQUESTED", reference_posts: postsByCluster.get(typeof candidate.story_cluster_id === "string" ? candidate.story_cluster_id : "") ?? [] };
+      }).filter((candidate) => candidate.candidate_id !== "");
     },
   };
 }
