@@ -232,6 +232,50 @@ update public.creative_generation_configs
 set is_active = false
 where version <> 'm5-v1' and is_active;
 
+insert into public.telegram_agent_configs (
+  version,
+  timezone,
+  morning_brief_time,
+  briefing_top_n,
+  recent_message_limit,
+  summary_trigger_count,
+  alert_cooldown_minutes,
+  model_config,
+  is_active
+)
+values (
+  1,
+  'Asia/Seoul',
+  '09:00',
+  3,
+  12,
+  20,
+  60,
+  $json$
+  {
+    "version": "m6-v1",
+    "conversation_model": "gpt-5.6-luna",
+    "summary_model": "gpt-5.6-luna",
+    "briefing_model": "gpt-5.6-luna",
+    "reasoning": "low",
+    "max_output_tokens": 1800,
+    "timeout_ms": 20000,
+    "max_retries": 2
+  }
+  $json$::jsonb,
+  true
+)
+on conflict (version) do update
+set
+  timezone = excluded.timezone,
+  morning_brief_time = excluded.morning_brief_time,
+  briefing_top_n = excluded.briefing_top_n,
+  recent_message_limit = excluded.recent_message_limit,
+  summary_trigger_count = excluded.summary_trigger_count,
+  alert_cooldown_minutes = excluded.alert_cooldown_minutes,
+  model_config = excluded.model_config,
+  is_active = excluded.is_active;
+
 insert into public.creative_generation_configs (
   version,
   description,

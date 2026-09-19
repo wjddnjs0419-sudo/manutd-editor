@@ -10,6 +10,18 @@ verify_jwt = false
 [functions.sync-notion-intelligence]
 verify_jwt = false
 
+[functions.fixture-sync]
+verify_jwt = false
+
+[functions.telegram-morning-brief]
+verify_jwt = false
+
+[functions.telegram-alerts]
+verify_jwt = false
+
+[functions.telegram-agent]
+verify_jwt = false
+
 [api]
 enabled = true
 # Port to use for the API URL.
