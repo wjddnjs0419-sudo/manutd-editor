@@ -226,6 +226,7 @@ The conversation is persistent. Current work is represented by explicit active-c
 - `id uuid primary key`
 - `thread_id uuid not null`
 - `telegram_message_id bigint null`
+- `telegram_update_id bigint unique null`
 - `role text not null`
 - `message_type text not null`
 - `content text not null`
@@ -245,7 +246,7 @@ Message types include:
 - `BRIEFING`
 - `ALERT`
 
-Raw message history is retained. Rolling summary is only a prompt-optimization artifact and never replaces the audit history.
+Raw message history is retained. Incoming Telegram `update_id` is stored when available and is the idempotency key for duplicate webhook delivery. Rolling summary is only a prompt-optimization artifact and never replaces the audit history.
 
 ### 5.4 Frozen briefing snapshots
 
@@ -555,7 +556,7 @@ A candidate remaining FIRST_MOVER while its score changes does not generate repe
 
 ## 13. Security
 
-All `app_private` M6 tables are service-only. anon/authenticated roles receive no direct access.
+All `app_private` M6 tables are service-only. anon/authenticated roles receive no direct access. `public.matches` and `public.telegram_agent_configs` also follow the existing backend-only access pattern unless a later milestone explicitly introduces a client read path.
 
 Required protections:
 
