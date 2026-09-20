@@ -16,3 +16,34 @@ Deno.test("duplicate update is claimed before running agent logic", async () => 
   assertEquals(await response.json(), { status: "ALREADY_PROCESSED" });
   assertEquals(runs, 0);
 });
+
+Deno.test("agent handler unwraps a single n8n item before owner validation", async () => {
+  let received: unknown;
+  const handler = createTelegramAgentHandler({ invokeSecret: "secret", ownerUserId: "42", run: async (update) => {
+    received = update;
+    return { status: "OK", reply: "ok" };
+  } });
+  const response = await handler(new Request("https://example.test", {
+    method: "POST",
+    headers: { authorization: "Bearer secret" },
+    body: JSON.stringify([{ update_id: 3, message: { from: { id: 42 }, chat: { id: 42 }, text: "/help" } }]),
+  }));
+  assertEquals(response.status, 200);
+  assertEquals(received, { update_id: 3, message: { from: { id: 42 }, chat: { id: 42 }, text: "/help" } });
+});
+
+Deno.test("agent handler parses a JSON-encoded n8n item before owner validation", async () => {
+  let received: unknown;
+  const handler = createTelegramAgentHandler({ invokeSecret: "secret", ownerUserId: "42", run: async (update) => {
+    received = update;
+    return { status: "OK", reply: "ok" };
+  } });
+  const update = { update_id: 4, message: { from: { id: 42 }, chat: { id: 42 }, text: "/help" } };
+  const response = await handler(new Request("https://example.test", {
+    method: "POST",
+    headers: { authorization: "Bearer secret" },
+    body: JSON.stringify(JSON.stringify(update)),
+  }));
+  assertEquals(response.status, 200);
+  assertEquals(received, update);
+});
