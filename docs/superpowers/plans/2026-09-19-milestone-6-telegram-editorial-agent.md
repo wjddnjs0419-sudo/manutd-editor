@@ -4,9 +4,9 @@
 
 **Goal:** Build the Telegram editorial operating layer that sends a 09:00 KST MU morning briefing with representative competitor thumbnails and source links, tracks Manchester United fixtures, pushes deduplicated priority/fixture alerts, remembers editorial context, answers grounded read-only questions, and performs explicit slash-command Creative Brief revisions.
 
-**Architecture:** Supabase remains canonical. Two thin Edge Function entrypoints (`fixture-sync` and Telegram runtime endpoints) delegate to focused M6 modules; API-Football is the initial fixture provider behind an adapter, and existing private Supabase Storage provides signed reference thumbnails. n8n only schedules/invokes or forwards Telegram updates; all fixture interpretation, briefing selection, memory, alert dedupe, command validation, revision logic, and Telegram message composition live in version-controlled code.
+**Architecture:** Supabase remains canonical. Two thin Edge Function entrypoints (`fixture-sync` and Telegram runtime endpoints) delegate to focused M6 modules; ESPN is isolated behind a provider-neutral fixture adapter, and existing private Supabase Storage provides signed reference thumbnails. n8n only schedules/invokes or forwards Telegram updates; all fixture interpretation, briefing selection, memory, alert dedupe, command validation, revision logic, and Telegram message composition live in version-controlled code.
 
-**Tech Stack:** Supabase/Postgres 17/pgTAP, Supabase Edge Functions on Deno 2.1, TypeScript, `@supabase/supabase-js@2.116.0`, OpenAI Responses API using the project’s versioned M6 config, API-Football v3, Telegram Bot API, existing Notion client, n8n workflow JSON validation.
+**Tech Stack:** Supabase/Postgres 17/pgTAP, Supabase Edge Functions on Deno 2.1, TypeScript, `@supabase/supabase-js@2.116.0`, ESPN undocumented public soccer JSON endpoints, OpenAI Responses API using the project’s versioned M6 config, Telegram Bot API, existing Notion client, n8n workflow JSON validation.
 
 **Spec:** `docs/superpowers/specs/2026-09-19-milestone-6-telegram-editorial-agent-design.md`
 
@@ -17,7 +17,9 @@
 - Morning Brief default is exactly 09:00 KST and always sends, including a concise no-change report.
 - Before compiling the 09:00 brief, force one fixture refresh.
 - Normal fixture refresh slots are 03:00 and 15:00 KST; D-1 through kickoff is hourly; LIVE is every 15 minutes.
-- The initial fixture provider is API-Football v3 behind a provider interface; Manchester United provider team id is `33`, verified during implementation against the provider response.
+- ESPN is the current provider behind a provider interface; Manchester United ESPN team id is `360`, verified against the live team schedule response.
+- The verified competition registry is `eng.1`, `eng.fa`, `eng.league_cup`, `uefa.champions`, and `uefa.europa`; no competition slug is duplicated outside the registry.
+- ESPN failures are classified as `NETWORK_ERROR`, `TIMEOUT`, `ESPN_BAD_RESPONSE`, `ESPN_SCHEMA_MISMATCH`, `MATCH_NOT_FOUND`, or `UNSUPPORTED_STATUS`; raw upstream bodies are never persisted as errors.
 - Fixture sync stores UTC-compatible `timestamptz`; Telegram and Notion render Asia/Seoul.
 - Briefing candidate identity/order is deterministic; the LLM may phrase supplied facts but cannot add candidates, change order, change scores, invent reasons, or introduce outside facts.
 - Top candidates include one deterministic representative post thumbnail when a cached asset exists, plus the canonical Instagram permalink and source username for human verification.
@@ -50,7 +52,7 @@ supabase/functions/_shared/m6/
   openai.ts                   read-only/summary/briefing phrasing provider
   telegram_client.ts          Bot API transport/retry/sendMessage/sendPhoto
   fixture_types.ts            provider-neutral fixture model
-  api_football_provider.ts    API-Football adapter only
+  espn_fixture_provider.ts    ESPN adapter and competition registry only
   fixture_service.ts          sync cadence, normalize/diff/persist
   match_calendar.ts           Notion Match Calendar projection
   reference_media.ts          deterministic reference post + cached media choice
@@ -86,7 +88,7 @@ Tests mirror these boundaries under `supabase/functions/tests/m6/`.
 - A briefing’s `/open 2` must still resolve to the same candidate, representative post, thumbnail asset, and permalink after later M4 rescoring; Task 4 freezes and reopens that exact snapshot.
 - A missing/expired cached thumbnail or failed signed-URL creation must degrade to text + Instagram permalink, not fail the entire brief or alert; Task 4 tests all media fallback branches.
 - A LOCKED/APPROVED brief may change between command proposal and `/confirm`; Task 7 revalidates the latest production state at confirmation time and refuses stale destructive execution.
-- API-Football quota/network failure or partial fixture data must preserve the last canonical match state, record a safe failure category, and still allow a text-only morning brief; Tasks 2 and 5 test stale-safe fallback.
+- ESPN timeout/schema/network failure or partial fixture data must preserve the last canonical match state, record a safe failure category, and still allow a text-only morning brief; Tasks 2 and 5 test stale-safe fallback.
 
 ---
 
@@ -94,6 +96,7 @@ Tests mirror these boundaries under `supabase/functions/tests/m6/`.
 
 **Files:**
 - Create via CLI: `supabase/migrations/<generated>_milestone_6_telegram_editorial_agent.sql`
+- Create: `supabase/migrations/20260920120000_milestone_6_espn_provider.sql`
 - Modify: `supabase/seed.sql`
 - Create: `supabase/tests/database/012_milestone_6_telegram_editorial_agent_test.sql`
 - Modify: `supabase/config.toml`
@@ -189,7 +192,7 @@ select is((select summary_trigger_count from public.telegram_agent_configs where
 
 select throws_ok(
   $$insert into public.matches(provider, external_match_id, competition, home_team, away_team, opponent, is_home, kickoff_at, status, last_synced_at)
-    values ('API_FOOTBALL','x','PL','A','B','B',true,now(),'BAD',now())$$,
+    values ('espn','x','PL','A','B','B',true,now(),'BAD',now())$$,
   '23514'
 );
 select throws_ok(
@@ -209,7 +212,7 @@ Adjust the exact plan count after all assertions are present.
 Run:
 
 ```bash
-supabase test db --file supabase/tests/database/012_milestone_6_telegram_editorial_agent_test.sql
+supabase test db --local supabase/tests/database/012_milestone_6_telegram_editorial_agent_test.sql
 ```
 
 Expected: FAIL because M6 tables/config do not exist.
@@ -265,7 +268,6 @@ create table app_private.fixture_sync_state (
   last_attempt_at timestamptz,
   last_success_at timestamptz,
   last_error_category text,
-  rate_limit_remaining integer,
   updated_at timestamptz not null default now()
 );
 
@@ -343,8 +345,7 @@ verify_jwt = false
 Add only empty/example values to `.env.example`:
 
 ```text
-FOOTBALL_API_KEY=
-FOOTBALL_TEAM_ID=33
+# ESPN public endpoint; no fixture-provider secret is required.
 TELEGRAM_AGENT_INVOKE_SECRET=
 TELEGRAM_OWNER_USER_ID=
 TELEGRAM_OWNER_CHAT_ID=
@@ -375,70 +376,55 @@ git commit -m "feat: add milestone 6 runtime contracts"
 
 ---
 
-### Task 2: API-Football adapter and canonical fixture sync
+### Task 2: ESPN adapter and canonical fixture sync
 
 **Files:**
 - Create: `supabase/functions/_shared/m6/fixture_types.ts`
-- Create: `supabase/functions/_shared/m6/api_football_provider.ts`
+- Remove: legacy fixture provider adapter
+- Create: `supabase/functions/_shared/m6/espn_fixture_provider.ts`
 - Create: `supabase/functions/_shared/m6/fixture_service.ts`
 - Create: `supabase/functions/_shared/m6/repository.ts`
 - Create: `supabase/functions/fixture-sync/handler.ts`
 - Create: `supabase/functions/fixture-sync/index.ts`
-- Create: `supabase/functions/tests/m6/api_football_provider_test.ts`
+- Create: `supabase/functions/tests/m6/espn_fixture_provider_test.ts`
 - Create: `supabase/functions/tests/m6/fixture_service_test.ts`
 - Create: `supabase/functions/tests/m6/fixture_handler_test.ts`
 
 **Interfaces:**
 - `FixtureProvider.fetchFixtures(from: Date, to: Date): Promise<readonly ProviderFixture[]>`
 - `FixtureProvider.fetchMatch(externalMatchId: string): Promise<ProviderFixture | null>`
-- `normalizeApiFootballFixture(raw): CanonicalFixture`
+- `normalizeEspnFixture(raw, competition, teamId, providerUpdatedAt): CanonicalFixture`
 - `deriveMatchDayMode(matches, now, timezone): MatchDayMode`
 - `runFixtureSync({ mode: "AUTO" | "FORCE", now }, deps): Promise<FixtureSyncResult>`
 - Repository methods: `listUpcomingMatches`, `getMatchByExternalId`, `upsertMatch`, `getFixtureSyncState`, `saveFixtureSyncState`, `insertAlertEventIfAbsent`.
 
 - [ ] **Step 1: Write RED provider normalization tests**
 
-Cover API-Football v3 response normalization with fixtures such as:
+Cover the observed ESPN team schedule and summary response normalization with fixtures such as:
 
 ```ts
 const raw = {
-  fixture: {
-    id: 12345,
-    date: "2026-09-20T11:30:00+00:00",
-    timestamp: 1789903800,
-    venue: { name: "Old Trafford" },
-    status: { short: "NS", long: "Not Started" }
-  },
-  league: { name: "Premier League", season: 2026 },
-  teams: {
-    home: { id: 33, name: "Manchester United" },
-    away: { id: 42, name: "Arsenal" }
-  },
-  goals: { home: null, away: null }
+  id: "401999999",
+  date: "2026-09-20T11:30:00Z",
+  season: { year: 2026 },
+  competitions: [{
+    status: { type: { name: "STATUS_SCHEDULED", state: "pre", completed: false } },
+    venue: { fullName: "Old Trafford" },
+    competitors: [
+      { id: "360", homeAway: "home", team: { displayName: "Manchester United" } },
+      { id: "42", homeAway: "away", team: { displayName: "Arsenal" } }
+    ]
+  }]
 };
-assertEquals(normalizeApiFootballFixture(raw, 33), {
-  provider: "API_FOOTBALL",
-  external_match_id: "12345",
-  competition: "Premier League",
-  season: "2026",
-  home_team: "Manchester United",
-  away_team: "Arsenal",
-  opponent: "Arsenal",
-  is_home: true,
-  kickoff_at: "2026-09-20T11:30:00.000Z",
-  venue: "Old Trafford",
-  status: "SCHEDULED",
-  home_score: null,
-  away_score: null
-});
+assertEquals(normalizeEspnFixture(raw, ESPN_COMPETITIONS.PREMIER_LEAGUE, "360", "2026-09-20T12:00:00Z").provider, "espn");
 ```
 
 Add mappings:
-- `NS` and the provider's documented second not-started short code -> `SCHEDULED`
-- `1H/HT/2H/ET/BT/P/INT/LIVE -> LIVE`
-- `FT/AET/PEN/AWD/WO -> FINISHED`
-- `PST/SUSP -> POSTPONED`
-- `CANC/ABD -> CANCELLED`
+- `pre + STATUS_SCHEDULED` -> `SCHEDULED`
+- ESPN `in` live states -> `LIVE`
+- `post + STATUS_FULL_TIME`/final variants -> `FINISHED`
+- `STATUS_POSTPONED` -> `POSTPONED`
+- `STATUS_CANCELED`/`STATUS_CANCELLED` -> `CANCELLED`
 
 Unknown status must throw `UNSUPPORTED_FIXTURE_STATUS` instead of silently corrupting canonical state.
 
@@ -447,28 +433,22 @@ Unknown status must throw `UNSUPPORTED_FIXTURE_STATUS` instead of silently corru
 Run:
 
 ```bash
-docker run --rm -v "$PWD/supabase:/workspace" -w /workspace denoland/deno:2.1.4   deno test functions/tests/m6/api_football_provider_test.ts
+  docker run --rm -v "$PWD/supabase:/workspace" -w /workspace denoland/deno:2.1.4   deno test functions/tests/m6/espn_fixture_provider_test.ts
 ```
 
-Expected: FAIL because adapter does not exist.
+Expected: FAIL because the ESPN adapter does not exist.
 
-- [ ] **Step 3: Implement API-Football transport**
+- [ ] **Step 3: Implement ESPN transport**
 
 Use the current provider contract:
 
 ```ts
-const BASE_URL = "https://v3.football.api-sports.io";
+const BASE_URL = "https://site.web.api.espn.com/apis/site/v2/sports/soccer";
 
-await fetch(
-  `${BASE_URL}/fixtures?team=${teamId}&from=${yyyyMmDd(from)}&to=${yyyyMmDd(to)}&timezone=UTC`,
-  { headers: { "x-apisports-key": apiKey } }
-);
+await fetch(`${BASE_URL}/eng.1/teams/360/schedule`, { signal });
 ```
 
-For a specific match use `/fixtures?id=<id>`. Validate `errors`, `response`, and response HTTP status. Normalize provider failures to safe categories:
-`RATE_LIMITED | AUTH | NETWORK | SERVER | MALFORMED | UNSUPPORTED_STATUS`.
-
-Read `x-ratelimit-requests-remaining` when supplied and expose it to sync state. Never log the API key or provider body.
+For a specific match use `/eng.1/summary?event=<id>`. Fetch the single registry of verified slugs (`eng.1`, `eng.fa`, `eng.league_cup`, `uefa.champions`, `uefa.europa`), validate the response shape, filter by team id `360`, and use bounded timeout/retry. Normalize failures to `NETWORK_ERROR | TIMEOUT | ESPN_BAD_RESPONSE | ESPN_SCHEMA_MISMATCH | MATCH_NOT_FOUND | UNSUPPORTED_STATUS`. ESPN has no API key or quota state.
 
 - [ ] **Step 4: Write RED cadence and diff tests**
 
@@ -539,12 +519,12 @@ Never return provider payloads or keys.
 
 - [ ] **Step 7: Verify Manchester United provider identity in credentialed smoke**
 
-When `FOOTBALL_API_KEY` is available, perform one safe provider request for team id `33` and assert the returned team name is exactly `Manchester United`. If credentials are absent, record the external credential blocker; do not change the configured team id by guess.
+Perform a no-secret ESPN request against the verified team schedule endpoint and assert the returned team name is exactly `Manchester United`. Assert all five registry slugs return schema-valid JSON; if the requested window has no MU fixture, report `no fixture in requested window` without failing the smoke.
 
 - [ ] **Step 8: Run focused/full tests and commit**
 
 ```bash
-docker run --rm -v "$PWD/supabase:/workspace" -w /workspace denoland/deno:2.1.4   deno test functions/tests/m6/api_football_provider_test.ts             functions/tests/m6/fixture_service_test.ts             functions/tests/m6/fixture_handler_test.ts
+  docker run --rm -v "$PWD/supabase:/workspace" -w /workspace denoland/deno:2.1.4   deno test functions/tests/m6/espn_fixture_provider_test.ts             functions/tests/m6/fixture_service_test.ts             functions/tests/m6/fixture_handler_test.ts
 
 docker run --rm -v "$PWD/supabase:/workspace" -w /workspace denoland/deno:2.1.4   deno test functions/tests
 ```
@@ -1218,7 +1198,7 @@ Validator must assert:
 - fixture schedule exactly 15-minute invocation cadence,
 - Telegram Trigger forwards to `/functions/v1/telegram-agent`,
 - HTTP nodes use credential references only,
-- no bot token, API-Football key, Supabase secret, OpenAI key, or Notion token literal appears,
+- no bot token, Supabase secret, OpenAI key, or Notion token literal appears,
 - M6 HTTP nodes use `Telegram Agent Invoke Secret`,
 - alert dispatch branch is `continueOnFail:true`,
 - no Code node contains scoring/selection/command logic.
@@ -1280,7 +1260,7 @@ External APIs are mocked in the integration test. Real credential smoke is separ
 - run DB assertions and M6 integration tests,
 - run n8n validators,
 - run secret scan,
-- optionally run real API-Football/OpenAI/Telegram/Notion smoke only when their required secrets are present,
+- run the no-secret ESPN smoke; optionally run real OpenAI/Telegram/Notion smoke only when their required secrets are present,
 - never print secret values.
 
 Real Telegram smoke sends only to `TELEGRAM_OWNER_CHAT_ID`.
@@ -1310,12 +1290,12 @@ node --test scripts/validate-n8n-workflow.test.mjs
 ```
 
 Then run a secret scan covering at least:
-`FOOTBALL_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_AGENT_INVOKE_SECRET`, `OPENAI_API_KEY`, `NOTION_TOKEN`, `SUPABASE_SECRET_KEY`, `sb_secret_`, and `Bearer `.
+`TELEGRAM_BOT_TOKEN`, `TELEGRAM_AGENT_INVOKE_SECRET`, `OPENAI_API_KEY`, `NOTION_TOKEN`, `SUPABASE_SECRET_KEY`, `sb_secret_`, and `Bearer `.
 
 - [ ] **Step 7: Run real end-to-end smoke where credentials are available**
 
 Verify actual behavior:
-1. API-Football team 33 resolves to Manchester United.
+1. ESPN team 360 resolves to Manchester United and all five verified competition slugs respond with schema-valid payloads.
 2. fixture sync populates `public.matches`.
 3. Match Calendar projection creates/updates without touching `콘텐츠 여부`.
 4. Telegram receives a test Morning Brief with at least one source permalink; cached media candidate includes a thumbnail.
@@ -1331,7 +1311,7 @@ If any external credential or API access is unavailable, report the exact blocke
 
 Document:
 - M6 architecture,
-- API-Football provider and quota-aware cadence,
+- ESPN provider endpoints, stable team/competition registry, bounded retry/timeout, and safe failure categories,
 - required env vars,
 - 09:00 brief behavior,
 - thumbnail + Instagram permalink behavior,

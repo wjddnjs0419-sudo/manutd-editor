@@ -39,6 +39,8 @@ node "$script_dir/validate-n8n-workflow.mjs" "$repo_dir/n8n/workflows/fixture-sy
 node "$script_dir/validate-n8n-workflow.mjs" "$repo_dir/n8n/workflows/telegram-morning-brief.json" >/dev/null
 node "$script_dir/validate-n8n-workflow.mjs" "$repo_dir/n8n/workflows/telegram-editorial-agent.json" >/dev/null
 
+"$script_dir/run-milestone-6-espn-smoke.sh"
+
 if rg -n --hidden --glob '!.git/**' --glob '!*.md' --glob '!*.json' \
   --glob '!scripts/run-milestone-6-smoke.sh' \
   'sk-[A-Za-z0-9]{20,}|sb_secret_[A-Za-z0-9_-]{20,}|Bearer [A-Za-z0-9._-]{20,}' "$repo_dir"; then
@@ -46,4 +48,4 @@ if rg -n --hidden --glob '!.git/**' --glob '!*.md' --glob '!*.json' \
   exit 1
 fi
 
-echo "Milestone 6 local smoke passed. Credentialed API-Football/OpenAI/Telegram/Notion smoke is skipped unless explicitly configured."
+echo "Milestone 6 local smoke passed. ESPN is public; credentialed OpenAI/Telegram/Notion smoke is skipped unless explicitly configured."

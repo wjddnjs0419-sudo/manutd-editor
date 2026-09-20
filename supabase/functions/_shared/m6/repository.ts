@@ -70,6 +70,7 @@ function parseMatch(value: unknown): StoredMatch {
     home_score: nullableNumber(source.home_score),
     away_score: nullableNumber(source.away_score),
     provider_payload: object(source.provider_payload) ? source.provider_payload : {},
+    provider_updated_at: nullableString(source.provider_updated_at),
   };
 }
 
@@ -82,7 +83,15 @@ export function createM6Repository(options: M6RepositoryOptions): M6Repository {
   async function request(path: string, init: RequestInit = {}, profile?: string): Promise<unknown> {
     let response: Response;
     try {
-      response = await fetchImpl(`${baseUrl}${path}`, { ...init, headers: { ...headers, ...(profile ? { "accept-profile": profile, "content-profile": profile } : {}), ...(init.headers ?? {}) } });
+      response = await fetchImpl(`${baseUrl}${path}`, {
+        ...init,
+        headers: {
+          ...headers,
+          ...(profile ? { "accept-profile": profile, "content-profile": profile } : {}),
+          ...(init.body ? { "content-type": "application/json" } : {}),
+          ...(init.headers ?? {}),
+        },
+      });
     } catch {
       throw new M6RepositoryError("NETWORK");
     }
@@ -105,7 +114,7 @@ export function createM6Repository(options: M6RepositoryOptions): M6Repository {
   return {
     async listUpcomingMatches(from, to) { return listUpcomingMatches(from, to); },
     async getMatchByExternalId(externalMatchId) {
-      const result = await request(`/rest/v1/matches?select=*&external_match_id=eq.${encodeURIComponent(externalMatchId)}&provider=eq.API_FOOTBALL&limit=1`);
+      const result = await request(`/rest/v1/matches?select=*&external_match_id=eq.${encodeURIComponent(externalMatchId)}&provider=eq.espn&limit=1`);
       if (!Array.isArray(result)) throw new M6RepositoryError("RESPONSE");
       return result[0] ? parseMatch(result[0]) : null;
     },
@@ -113,7 +122,7 @@ export function createM6Repository(options: M6RepositoryOptions): M6Repository {
       const result = await request(`/rest/v1/matches?on_conflict=provider,external_match_id`, {
         method: "POST",
         headers: { prefer: "resolution=merge-duplicates,return=representation" },
-        body: JSON.stringify({ ...fixture, provider_payload: {}, last_synced_at: syncedAt.toISOString() }),
+        body: JSON.stringify({ ...fixture, last_synced_at: syncedAt.toISOString() }),
       });
       if (!Array.isArray(result) || !result[0]) throw new M6RepositoryError("RESPONSE");
       return parseMatch(result[0]);
@@ -130,7 +139,6 @@ export function createM6Repository(options: M6RepositoryOptions): M6Repository {
         last_attempt_at: nullableString(source.last_attempt_at),
         last_success_at: nullableString(source.last_success_at),
         last_error_category: nullableString(source.last_error_category),
-        rate_limit_remaining: nullableNumber(source.rate_limit_remaining),
       } satisfies FixtureSyncState;
     },
     async saveFixtureSyncState(state) {

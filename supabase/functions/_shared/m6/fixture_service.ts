@@ -11,7 +11,6 @@ export interface FixtureSyncState {
   last_attempt_at: string | null;
   last_success_at: string | null;
   last_error_category: string | null;
-  rate_limit_remaining: number | null;
 }
 
 export interface FixtureAlertEvent {
@@ -34,7 +33,7 @@ export interface FixtureSyncRepository {
 }
 
 export interface FixtureSyncDependencies {
-  provider: FixtureProvider & { readonly rateLimitRemaining?: number | null };
+  provider: FixtureProvider;
   repository: FixtureSyncRepository;
   alertThreadId: string;
 }
@@ -127,7 +126,7 @@ export async function runFixtureSync(
   request: { mode: "AUTO" | "FORCE"; now: Date },
   dependencies: FixtureSyncDependencies,
 ): Promise<FixtureSyncResult> {
-  const providerName = "API_FOOTBALL";
+  const providerName = "espn";
   const from = new Date(request.now.getTime() - 24 * 60 * 60 * 1000);
   const to = new Date(request.now.getTime() + 60 * 24 * 60 * 60 * 1000);
   const existing = await dependencies.repository.listUpcomingMatches(from, to);
@@ -144,7 +143,6 @@ export async function runFixtureSync(
     last_attempt_at: request.now.toISOString(),
     last_success_at: state?.last_success_at ?? null,
     last_error_category: null,
-    rate_limit_remaining: dependencies.provider.rateLimitRemaining ?? null,
   });
 
   let fetched: readonly CanonicalFixture[];
@@ -153,14 +151,13 @@ export async function runFixtureSync(
   } catch (error) {
     const category = typeof error === "object" && error !== null && "category" in error && typeof error.category === "string"
       ? error.category
-      : "NETWORK";
+      : "NETWORK_ERROR";
     await dependencies.repository.saveFixtureSyncState({
       provider: providerName,
       last_full_sync_at: state?.last_full_sync_at ?? null,
       last_attempt_at: request.now.toISOString(),
       last_success_at: state?.last_success_at ?? null,
       last_error_category: category,
-      rate_limit_remaining: dependencies.provider.rateLimitRemaining ?? null,
     });
     return { status: "FAILED", matches_seen: existing.length, matches_changed: 0, alerts_created: 0, match_day_mode: currentMode, error_category: category };
   }
@@ -221,7 +218,6 @@ export async function runFixtureSync(
     last_attempt_at: request.now.toISOString(),
     last_success_at: request.now.toISOString(),
     last_error_category: null,
-    rate_limit_remaining: dependencies.provider.rateLimitRemaining ?? null,
   });
   return { status: "SYNCED", matches_seen: fetched.length, matches_changed: matchesChanged, alerts_created: alertsCreated, match_day_mode: finalMode };
 }

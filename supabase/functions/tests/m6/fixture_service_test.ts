@@ -13,7 +13,7 @@ import type {
 
 const match = (overrides: Partial<StoredMatch> = {}): StoredMatch => ({
   id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-  provider: "API_FOOTBALL",
+  provider: "espn",
   external_match_id: "123",
   competition: "Premier League",
   season: "2026",
@@ -26,11 +26,13 @@ const match = (overrides: Partial<StoredMatch> = {}): StoredMatch => ({
   status: "SCHEDULED",
   home_score: null,
   away_score: null,
+  provider_payload: {},
+  provider_updated_at: null,
   ...overrides,
 });
 
 const fixture = (overrides: Partial<CanonicalFixture> = {}): CanonicalFixture => ({
-  provider: "API_FOOTBALL",
+  provider: "espn",
   external_match_id: "123",
   competition: "Premier League",
   season: "2026",
@@ -43,6 +45,8 @@ const fixture = (overrides: Partial<CanonicalFixture> = {}): CanonicalFixture =>
   status: "SCHEDULED",
   home_score: null,
   away_score: null,
+  provider_payload: {},
+  provider_updated_at: null,
   ...overrides,
 });
 

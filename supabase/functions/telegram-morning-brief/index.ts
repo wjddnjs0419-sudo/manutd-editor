@@ -1,4 +1,4 @@
-import { createApiFootballProvider } from "../_shared/m6/api_football_provider.ts";
+import { createEspnFixtureProvider } from "../_shared/m6/espn_fixture_provider.ts";
 import { buildMorningBriefingSnapshot } from "../_shared/m6/briefing.ts";
 import { runFixtureSync } from "../_shared/m6/fixture_service.ts";
 import { createM6Repository } from "../_shared/m6/repository.ts";
@@ -13,7 +13,7 @@ const serviceRoleKey = Deno.env.get("SUPABASE_SECRET_KEY") ?? Deno.env.get("SUPA
 const ownerThreadId = Deno.env.get("TELEGRAM_OWNER_THREAD_ID") ?? "";
 const botToken = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
 const repository = createM6Repository({ supabaseUrl, serviceRoleKey });
-const provider = createApiFootballProvider({ apiKey: Deno.env.get("FOOTBALL_API_KEY") ?? "", teamId: Number(Deno.env.get("FOOTBALL_TEAM_ID") ?? "33") });
+const provider = createEspnFixtureProvider();
 
 interface RestOptions { profile?: string; method?: string; body?: unknown; prefer?: string; }
 async function rest(path: string, options: RestOptions = {}): Promise<unknown> {

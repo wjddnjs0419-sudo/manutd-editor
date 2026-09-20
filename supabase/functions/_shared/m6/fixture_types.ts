@@ -6,7 +6,7 @@ export type CanonicalFixtureStatus =
   | "CANCELLED";
 
 export interface CanonicalFixture {
-  provider: "API_FOOTBALL";
+  provider: "espn";
   external_match_id: string;
   competition: string;
   season: string | null;
@@ -19,6 +19,8 @@ export interface CanonicalFixture {
   status: CanonicalFixtureStatus;
   home_score: number | null;
   away_score: number | null;
+  provider_payload: Record<string, unknown>;
+  provider_updated_at: string | null;
 }
 
 export interface FixtureProvider {
@@ -48,5 +50,6 @@ export interface StoredMatch {
   status: CanonicalFixtureStatus;
   home_score: number | null;
   away_score: number | null;
-  provider_payload?: Record<string, unknown>;
+  provider_payload: Record<string, unknown>;
+  provider_updated_at: string | null;
 }

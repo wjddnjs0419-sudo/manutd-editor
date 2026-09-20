@@ -13,7 +13,7 @@ const httpNodes = nodes.filter((node) =>
 function assertNoSecrets(value) {
   const serialized = JSON.stringify(value);
   for (const forbidden of [
-    "FOOTBALL_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_AGENT_INVOKE_SECRET",
+    "TELEGRAM_BOT_TOKEN", "TELEGRAM_AGENT_INVOKE_SECRET",
     "OPENAI_API_KEY", "NOTION_TOKEN", "SUPABASE_SECRET_KEY", "sb_secret_", "Bearer ",
   ]) assert.equal(serialized.includes(forbidden), false, `forbidden secret marker: ${forbidden}`);
 }

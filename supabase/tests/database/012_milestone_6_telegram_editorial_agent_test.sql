@@ -92,7 +92,7 @@ select is(pg_temp.m6_active_config_value('summary_trigger_count'), '20', 'summar
 
 select throws_ok(
   $$insert into public.matches(provider, external_match_id, competition, home_team, away_team, opponent, is_home, kickoff_at, status, last_synced_at)
-    values ('API_FOOTBALL','x','PL','A','B','B',true,now(),'BAD',now())$$,
+    values ('espn','x','PL','A','B','B',true,now(),'BAD',now())$$,
   '23514'
 );
 select throws_ok(
