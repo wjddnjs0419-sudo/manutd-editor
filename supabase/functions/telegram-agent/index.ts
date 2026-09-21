@@ -1,9 +1,13 @@
 import { parseCommand, type ParsedCommand } from "../_shared/m6/commands.ts";
+import { businessDate } from "../_shared/m6/business_date.ts";
+import { classifyReadiness } from "../_shared/m6/readiness.ts";
+import { formatCurrentReply, snapshotCurrentCandidates } from "./current.ts";
 import { MEMORY_SYSTEM_RULES, maybeRollSummary, type MemoryMessage, type MemoryThread } from "../_shared/m6/memory.ts";
 import { createOpenAIGenerator } from "../_shared/m6/openai.ts";
 import { retrieveHistoricalContext, type HistoricalContext, type RetrievalThreadState } from "../_shared/m6/retrieval.ts";
 import { reviseCaption, reviseSlide, selectHook } from "../_shared/m6/revisions.ts";
 import { createTelegramClient } from "../_shared/m6/telegram_client.ts";
+import { createM6Repository } from "../_shared/m6/repository.ts";
 import { createTelegramAgentHandler } from "./handler.ts";
 import { answerNaturalLanguage, type CanonicalConversationContext } from "./conversation.ts";
 import type { StoredCreativeBrief } from "../creative-generation/repository.ts";
@@ -15,6 +19,7 @@ const botToken = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
 const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceKey = Deno.env.get("SUPABASE_SECRET_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const base = supabaseUrl.replace(/\/$/u, "");
+const repository = createM6Repository({ supabaseUrl, serviceRoleKey: serviceKey });
 
 function profileHeaders(profile: string): Record<string, string> { return { apikey: serviceKey, authorization: `Bearer ${serviceKey}`, accept: "application/json", "accept-profile": profile, "content-profile": profile }; }
 async function rest(path: string, init: RequestInit = {}, profile?: string): Promise<unknown> {
@@ -232,7 +237,21 @@ async function revisionForCommand(command: Extract<ParsedCommand, { type: "HOOK"
   }
 }
 
-const HELP = "/today · /open <1..3|uuid|alert> · /brief · /hook <1..3> · /slide <1..7> <지시> · /caption <지시> · /select · /status · /back · /reset · /confirm · /cancel · /help";
+const HELP = "/today · /current · /open <1..3|uuid|alert> · /brief · /hook <1..3> · /slide <1..7> <지시> · /caption <지시> · /select · /status · /back · /reset · /confirm · /cancel · /help";
+
+function latestCurrentSnapshot(thread: ThreadRow): { items?: Array<Record<string, unknown>> } | null {
+  for (const value of [...thread.context_history].reverse()) {
+    if (!isObject(value) || value.type !== "CURRENT_CANDIDATES" || !isObject(value.snapshot)) continue;
+    return value.snapshot as { items?: Array<Record<string, unknown>> };
+  }
+  return null;
+}
+
+async function saveCurrentSnapshot(thread: ThreadRow, snapshot: unknown): Promise<void> {
+  const history = Array.isArray(thread.context_history) ? thread.context_history.filter((value) => !isObject(value) || value.type !== "CURRENT_CANDIDATES") : [];
+  history.push({ type: "CURRENT_CANDIDATES", snapshot });
+  await rest(`/rest/v1/telegram_threads?id=eq.${encodeURIComponent(thread.id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ context_history: history.slice(-5) }) }, "app_private");
+}
 
 async function commandReply(command: ParsedCommand, thread: ThreadRow): Promise<string> {
   if (command.type === "HELP") return HELP;
@@ -243,6 +262,15 @@ async function commandReply(command: ParsedCommand, thread: ThreadRow): Promise<
   if (command.type === "TODAY") {
     const rows = await rest(`/rest/v1/telegram_briefings?select=rendered_message,briefing_date&thread_id=eq.${encodeURIComponent(thread.id)}&order=briefing_date.desc&limit=1`, {}, "app_private");
     return Array.isArray(rows) && rows[0] && typeof rows[0].rendered_message === "string" ? rows[0].rendered_message : "저장된 오늘 브리핑이 없습니다.";
+  }
+  if (command.type === "CURRENT") {
+    const briefingDate = businessDate(new Date(), "Asia/Seoul");
+    const state = await repository.getIntelligenceReadiness(briefingDate);
+    const rows = await repository.listBriefingCandidates(briefingDate);
+    const readiness = classifyReadiness(state, briefingDate, rows.length);
+    const snapshot = snapshotCurrentCandidates(briefingDate, rows);
+    await saveCurrentSnapshot(thread, snapshot);
+    return formatCurrentReply({ briefingDate, readiness, candidateCount: rows.length, items: snapshot.items.map((item) => ({ position: item.position, candidateId: item.candidate_id, priorityScore: item.priority_score, username: item.reference_username })) });
   }
   if (command.type === "STATUS") return thread.active_candidate_id ? `현재 후보 ${thread.active_candidate_id}의 최신 상태를 확인하세요.` : "활성 후보가 없습니다. /today 또는 /open으로 시작하세요.";
   if (command.type === "BACK") return "이전 작업 맥락으로 돌아갔습니다.";
@@ -267,7 +295,7 @@ async function commandReply(command: ParsedCommand, thread: ThreadRow): Promise<
       return `최근 alert를 열었습니다.${typeof alert.payload?.permalink === "string" ? `\n🔗 원문: ${alert.payload.permalink}` : ""}`;
     }
     const rows = await rest(`/rest/v1/telegram_briefings?select=candidate_snapshot&thread_id=eq.${encodeURIComponent(thread.id)}&order=briefing_date.desc&limit=1`, {}, "app_private");
-    const snapshot = Array.isArray(rows) && rows[0] && typeof rows[0].candidate_snapshot === "object" ? rows[0].candidate_snapshot as { items?: Array<Record<string, unknown>> } : {};
+    const snapshot = latestCurrentSnapshot(thread) ?? (Array.isArray(rows) && rows[0] && typeof rows[0].candidate_snapshot === "object" ? rows[0].candidate_snapshot as { items?: Array<Record<string, unknown>> } : {});
     const item = snapshot.items?.find((candidate) => command.target === String(candidate.position) || command.target === String(candidate.candidate_id));
     if (!item || typeof item.candidate_id !== "string") return "현재 브리핑에서 해당 후보를 찾지 못했습니다.";
     await rest(`/rest/v1/telegram_threads?id=eq.${encodeURIComponent(thread.id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ active_candidate_id: item.candidate_id, active_brief_id: null, pending_action: null, pending_action_expires_at: null }) }, "app_private");
