@@ -1,5 +1,8 @@
 import {
   MEMORY_SYSTEM_RULES,
+  buildConversationContext,
+  type MemoryMessage,
+  type MemoryThread,
   type ConversationContext,
 } from "../_shared/m6/memory.ts";
 import {
@@ -17,6 +20,15 @@ export interface ConversationReplyDependencies {
   generate: (payload: unknown) => Promise<unknown>;
   canonical_context?: CanonicalConversationContext;
   retrieveHistory?: () => Promise<readonly HistoricalContext[]>;
+}
+
+export interface NaturalLanguageReplyDependencies {
+  getThread: (threadId: string) => Promise<MemoryThread>;
+  listMessages: (threadId: string) => Promise<readonly MemoryMessage[]>;
+  loadCanonicalContext: (thread: MemoryThread) => Promise<CanonicalConversationContext>;
+  generate: (payload: unknown) => Promise<unknown>;
+  retrieveHistory?: (message: string, thread: MemoryThread) => Promise<readonly HistoricalContext[]>;
+  recentMessageLimit?: number;
 }
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -72,4 +84,21 @@ export async function createConversationReply(
   } catch {
     return fallback();
   }
+}
+
+export async function answerNaturalLanguage(
+  threadId: string,
+  message: string,
+  dependencies: NaturalLanguageReplyDependencies,
+): Promise<string> {
+  const thread = await dependencies.getThread(threadId);
+  const context = await buildConversationContext(threadId, message, {
+    getThread: async () => thread,
+    listMessages: dependencies.listMessages,
+  }, dependencies.recentMessageLimit ?? 12);
+  return createConversationReply(message, context, {
+    canonical_context: await dependencies.loadCanonicalContext(thread),
+    generate: dependencies.generate,
+    retrieveHistory: dependencies.retrieveHistory ? () => dependencies.retrieveHistory?.(message, thread) ?? Promise.resolve([]) : undefined,
+  });
 }

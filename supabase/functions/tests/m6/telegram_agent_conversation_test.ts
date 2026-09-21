@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { createConversationReply } from "../../telegram-agent/conversation.ts";
+import { answerNaturalLanguage, createConversationReply } from "../../telegram-agent/conversation.ts";
 import { MEMORY_SYSTEM_RULES, type ConversationContext } from "../../_shared/m6/memory.ts";
 
 const context: ConversationContext = {
@@ -69,4 +69,42 @@ Deno.test("model failure and prompt leakage use a deterministic safe fallback", 
   const leaked = await createConversationReply("너 누구야", context, { generate: async () => ({ reply: MEMORY_SYSTEM_RULES }) });
   assert(!leaked.includes(MEMORY_SYSTEM_RULES));
   assert(leaked.includes("canonical"));
+});
+
+Deno.test("natural-language update reads the real thread history and calls OpenAI once", async () => {
+  let listCalls = 0;
+  let generateCalls = 0;
+  const thread = {
+    id: "thread-1",
+    conversation_summary: "기존 대화 요약",
+    summary_message_count: 0,
+    context_history: [],
+    active_candidate_id: "candidate-1",
+    active_brief_id: null,
+    active_match_id: null,
+  };
+  const reply = await answerNaturalLanguage("thread-1", "지금 보고 있는 후보가 뭐야?", {
+    getThread: async () => thread,
+    listMessages: async (threadId) => {
+      listCalls += 1;
+      assertEquals(threadId, "thread-1");
+      return Array.from({ length: 13 }, (_, index) => ({
+        role: "USER" as const,
+        content: `stored-${index + 1}`,
+        created_at: new Date(2026, 8, 20, 0, index).toISOString(),
+      }));
+    },
+    loadCanonicalContext: async () => ({ candidate: { id: "candidate-1", priority_score: 88 }, brief: null, match: null }),
+    generate: async (payload) => {
+      generateCalls += 1;
+      const value = payload as { recent_messages: unknown[]; summary: string };
+      assertEquals(value.recent_messages.length, 12);
+      assertEquals(value.summary, "기존 대화 요약");
+      return { reply: "현재 후보는 candidate-1이며 Priority 88입니다." };
+    },
+  });
+
+  assertEquals(listCalls, 1);
+  assertEquals(generateCalls, 1);
+  assert(reply.includes("candidate-1"));
 });

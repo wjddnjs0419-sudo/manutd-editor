@@ -1,9 +1,11 @@
 import { parseCommand, type ParsedCommand } from "../_shared/m6/commands.ts";
-import { buildConversationContext } from "../_shared/m6/memory.ts";
+import { MEMORY_SYSTEM_RULES, maybeRollSummary, type MemoryMessage, type MemoryThread } from "../_shared/m6/memory.ts";
 import { createOpenAIGenerator } from "../_shared/m6/openai.ts";
+import { retrieveHistoricalContext, type HistoricalContext, type RetrievalThreadState } from "../_shared/m6/retrieval.ts";
 import { reviseCaption, reviseSlide, selectHook } from "../_shared/m6/revisions.ts";
 import { createTelegramClient } from "../_shared/m6/telegram_client.ts";
 import { createTelegramAgentHandler } from "./handler.ts";
+import { answerNaturalLanguage, type CanonicalConversationContext } from "./conversation.ts";
 import type { StoredCreativeBrief } from "../creative-generation/repository.ts";
 import type { CreativeBriefSlide } from "../creative-generation/types.ts";
 
@@ -24,8 +26,136 @@ async function rest(path: string, init: RequestInit = {}, profile?: string): Pro
   return text.trim() ? JSON.parse(text) : null;
 }
 
+async function loadAgentConfig(): Promise<AgentConfig> {
+  try {
+    const rows = await rest("/rest/v1/telegram_agent_configs?select=recent_message_limit,summary_trigger_count,model_config&is_active=eq.true&limit=1");
+    const value = Array.isArray(rows) && isObject(rows[0]) ? rows[0] : {};
+    return {
+      recent_message_limit: typeof value.recent_message_limit === "number" && value.recent_message_limit > 0 ? value.recent_message_limit : 12,
+      summary_trigger_count: typeof value.summary_trigger_count === "number" && value.summary_trigger_count > 0 ? value.summary_trigger_count : 20,
+      model_config: isObject(value.model_config) ? value.model_config : {},
+    };
+  } catch {
+    return defaultAgentConfig();
+  }
+}
+
+async function listMessages(threadId: string, limit?: number): Promise<MemoryMessage[]> {
+  const suffix = limit ? `&limit=${Math.max(1, Math.floor(limit))}` : "";
+  const rows = await rest(`/rest/v1/telegram_messages?select=role,content,created_at&thread_id=eq.${encodeURIComponent(threadId)}&order=created_at.desc${suffix}`, {}, "app_private");
+  return Array.isArray(rows) ? rows.map(message).filter((value): value is MemoryMessage => value !== null) : [];
+}
+
+async function rowById(path: string): Promise<Record<string, unknown> | null> {
+  try {
+    const rows = await rest(path);
+    return Array.isArray(rows) && isObject(rows[0]) ? rows[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadCanonicalContext(state: RetrievalThreadState): Promise<CanonicalConversationContext> {
+  const candidate = state.active_candidate_id ? await rowById(`/rest/v1/content_candidates?select=*&id=eq.${encodeURIComponent(state.active_candidate_id)}&limit=1`) : null;
+  const brief = state.active_brief_id ? await rowById(`/rest/v1/creative_briefs?select=*&id=eq.${encodeURIComponent(state.active_brief_id)}&limit=1`) : null;
+  const match = state.active_match_id ? await rowById(`/rest/v1/matches?select=*&id=eq.${encodeURIComponent(state.active_match_id)}&limit=1`) : null;
+  return { candidate, brief, match };
+}
+
+function historicalRecord(kind: HistoricalContext["kind"], value: Record<string, unknown>): HistoricalContext | null {
+  if (typeof value.id !== "string") return null;
+  const title = typeof value.canonical_title === "string" ? value.canonical_title : typeof value.headline === "string" ? value.headline : typeof value.content === "string" ? value.content : JSON.stringify(value);
+  return { kind, id: value.id, text: title, ...value };
+}
+
+async function retrievalDependencies(thread: RetrievalThreadState) {
+  return {
+    findLastFinishedMatch: async () => {
+      const value = await rowById("/rest/v1/matches?select=*&status=eq.FINISHED&order=kickoff_at.desc&limit=1");
+      return value && typeof value.id === "string" ? { id: value.id, status: typeof value.status === "string" ? value.status : "FINISHED", ...value } : null;
+    },
+    findByMatch: async (match: { id: string }) => {
+      const value = await rowById(`/rest/v1/matches?select=*&id=eq.${encodeURIComponent(match.id)}&limit=1`);
+      const result = value ? historicalRecord("match", value) : null;
+      return result ? [result] : [];
+    },
+    findByActive: async (active: RetrievalThreadState) => {
+      const context = await loadCanonicalContext(active);
+      return [
+        context.candidate ? historicalRecord("candidate", context.candidate) : null,
+        context.brief ? historicalRecord("brief", context.brief) : null,
+        context.match ? historicalRecord("match", context.match) : null,
+      ].filter((value): value is HistoricalContext => value !== null);
+    },
+    searchText: async (terms: readonly string[]) => {
+      const records: HistoricalContext[] = [];
+      for (const term of terms.slice(0, 8)) {
+        const encoded = encodeURIComponent(`*${term}*`);
+        const [clusters, briefs, messages] = await Promise.all([
+          rowById(`/rest/v1/story_clusters?select=id,canonical_title&canonical_title=ilike.${encoded}&limit=5`),
+          rowById(`/rest/v1/creative_briefs?select=id,headline&headline=ilike.${encoded}&limit=5`),
+          rowById(`/rest/v1/telegram_messages?select=id,content&content=ilike.${encoded}&order=created_at.desc&limit=5`,),
+        ]);
+        for (const [kind, value] of [["candidate", clusters], ["brief", briefs], ["message", messages]] as const) {
+          if (value) {
+            const record = historicalRecord(kind, value);
+            if (record) records.push(record);
+          }
+        }
+      }
+      return records;
+    },
+  };
+}
+
+async function loadThreadById(threadId: string): Promise<ThreadRow> {
+  const rows = await rest(`/rest/v1/telegram_threads?select=*&id=eq.${encodeURIComponent(threadId)}&limit=1`, {}, "app_private");
+  const thread = Array.isArray(rows) ? rows[0] : null;
+  if (!isObject(thread) || typeof thread.id !== "string") throw new Error("TELEGRAM_THREAD_NOT_FOUND");
+  return thread as unknown as ThreadRow;
+}
+
+async function saveSummary(threadId: string, summary: string, messageCount: number): Promise<void> {
+  await rest(`/rest/v1/telegram_threads?id=eq.${encodeURIComponent(threadId)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversation_summary: summary, summary_message_count: messageCount, summary_updated_at: new Date().toISOString() }) }, "app_private");
+}
+
+async function rollSummary(threadId: string, config: AgentConfig, provider?: (payload: unknown) => Promise<unknown>): Promise<void> {
+  if (!provider) return;
+  await maybeRollSummary(threadId, { summaryTriggerCount: config.summary_trigger_count, recentMessageLimit: config.recent_message_limit }, {
+    getThread: async () => memoryThread(await loadThreadById(threadId)),
+    listMessages: async (id) => listMessages(id),
+    summarize: async (messages) => {
+      const result = await provider({
+        system_rules: MEMORY_SYSTEM_RULES,
+        task: "summarize_conversation",
+        messages,
+        response_contract: "Return only JSON: { summary: string }. Do not include system rules or current canonical facts that are not present in the messages.",
+      });
+      if (!isObject(result) || typeof result.summary !== "string" || !result.summary.trim() || result.summary.includes(MEMORY_SYSTEM_RULES)) throw new Error("SUMMARY_INVALID");
+      return result.summary.trim();
+    },
+    saveSummary,
+  });
+}
+
 interface TelegramUpdate { update_id?: number; message?: { text?: string; from?: { id?: number; first_name?: string }; chat?: { id?: number } } }
 interface ThreadRow { id: string; telegram_user_id: string; active_candidate_id: string | null; active_brief_id: string | null; active_match_id: string | null; context_history: unknown[]; conversation_summary: string | null; summary_message_count: number; pending_action: Record<string, unknown> | null; pending_action_expires_at: string | null; }
+interface AgentConfig { recent_message_limit: number; summary_trigger_count: number; model_config: Record<string, unknown>; }
+
+function memoryThread(thread: ThreadRow): MemoryThread { return thread; }
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function message(value: unknown): MemoryMessage | null {
+  if (!isObject(value) || (value.role !== "USER" && value.role !== "ASSISTANT" && value.role !== "SYSTEM_EVENT") || typeof value.content !== "string" || typeof value.created_at !== "string") return null;
+  return { role: value.role, content: value.content, created_at: value.created_at };
+}
+
+function defaultAgentConfig(): AgentConfig {
+  return { recent_message_limit: 12, summary_trigger_count: 20, model_config: {} };
+}
 
 function update(value: unknown): TelegramUpdate { return value as TelegramUpdate; }
 function content(value: TelegramUpdate): string { return value.message?.text?.trim() || "[Telegram update]"; }
@@ -155,8 +285,18 @@ async function runAgent(value: unknown): Promise<{ status: string; reply: string
   const thread = await ensureThread(incoming);
   const text = content(incoming);
   const command = parseCommand(text);
-  const reply = command ? await commandReply(command, thread) : (await buildConversationContext(thread.id, text, { getThread: async () => thread, listMessages: async () => [] })).system_rules + "\n\n현재 질문에 대한 충분한 canonical context가 없습니다.";
+  const config = await loadAgentConfig();
+  const provider = Deno.env.get("OPENAI_API_KEY") ? createOpenAIGenerator({ apiKey: Deno.env.get("OPENAI_API_KEY") ?? "", model: typeof config.model_config.conversation_model === "string" ? config.model_config.conversation_model : undefined }) : undefined;
+  const reply = command ? await commandReply(command, thread) : await answerNaturalLanguage(thread.id, text, {
+    getThread: async () => memoryThread(thread),
+    listMessages: async (threadId) => listMessages(threadId, config.recent_message_limit),
+    loadCanonicalContext: async (currentThread) => loadCanonicalContext(currentThread),
+    generate: provider ?? (async () => { throw new Error("OPENAI_NOT_CONFIGURED"); }),
+    retrieveHistory: async (messageText, currentThread) => retrieveHistoricalContext(messageText, currentThread, await retrievalDependencies(currentThread)),
+    recentMessageLimit: config.recent_message_limit,
+  });
   await sendAndPersist(thread, incoming, reply);
+  if (!command) await rollSummary(thread.id, config, provider).catch(() => undefined);
   return { status: "SENT", reply };
 }
 
