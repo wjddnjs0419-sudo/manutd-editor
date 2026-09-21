@@ -1,4 +1,5 @@
 import type { StoryClusterEvaluation } from "./ai_classifier.ts";
+import { businessDate } from "../_shared/m6/business_date.ts";
 
 export type EvaluationRepositoryErrorCode =
   | "DATABASE_CONFIGURATION_ERROR"
@@ -265,6 +266,7 @@ export interface IntelligenceRepository {
 export interface IntelligenceRepositoryOptions extends EvaluationRepositoryDeps {
   readonly serviceRoleKey?: string;
   readonly secretKey?: string;
+  readonly businessTimezone?: string;
 }
 
 function validDate(value: Date | string): Date {
@@ -405,6 +407,13 @@ export function createIntelligenceRepository(
     ...options,
     serviceRoleKey: configuredServiceRoleKey,
   });
+
+  async function activeBusinessTimezone(): Promise<string> {
+    if (options.businessTimezone?.trim()) return options.businessTimezone;
+    const value = await jsonRequest("/rest/v1/telegram_agent_configs?select=timezone&is_active=eq.true&limit=1", { method: "GET" });
+    if (Array.isArray(value) && record(value[0]) && typeof value[0].timezone === "string" && value[0].timezone.trim()) return value[0].timezone;
+    return "Asia/Seoul";
+  }
 
   async function request(path: string, init: RequestInit): Promise<Response> {
     let response: Response;
@@ -579,10 +588,11 @@ export function createIntelligenceRepository(
 
     async calculateCandidates(runAt): Promise<number> {
       const at = validDate(runAt);
+      const rankingDate = businessDate(at, await activeBusinessTimezone());
       const value = await jsonRequest("/rest/v1/rpc/calculate_priority_candidates", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ p_run_at: at.toISOString(), p_ranking_date: at.toISOString().slice(0, 10) }),
+        body: JSON.stringify({ p_run_at: at.toISOString(), p_ranking_date: rankingDate }),
       });
       if (typeof value === "number" && Number.isSafeInteger(value)) return value;
       if (record(value) && Number.isSafeInteger(value.count)) return value.count as number;

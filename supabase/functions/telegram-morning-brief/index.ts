@@ -1,4 +1,5 @@
 import { createEspnFixtureProvider } from "../_shared/m6/espn_fixture_provider.ts";
+import { businessDate } from "../_shared/m6/business_date.ts";
 import { buildMorningBriefingSnapshot } from "../_shared/m6/briefing.ts";
 import { runFixtureSync } from "../_shared/m6/fixture_service.ts";
 import { createM6Repository } from "../_shared/m6/repository.ts";
@@ -38,12 +39,6 @@ async function signedUrl(path: string): Promise<string | null> {
   } }) }, 600);
 }
 
-function localDate(now: Date, timezone: string): string {
-  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
-  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
-  return `${get("year")}-${get("month")}-${get("day")}`;
-}
-
 async function runMorningBrief(): Promise<MorningBriefResult> {
   if (!ownerThreadId || !botToken) throw new Error("TELEGRAM_OWNER_CONFIGURATION_MISSING");
   const configRows = await rest("/rest/v1/telegram_agent_configs?select=*&is_active=eq.true&limit=1");
@@ -51,7 +46,7 @@ async function runMorningBrief(): Promise<MorningBriefResult> {
   if (!config) throw new Error("ACTIVE_AGENT_CONFIG_MISSING");
   const timezone = typeof config.timezone === "string" ? config.timezone : "Asia/Seoul";
   const now = new Date();
-  const briefingDate = localDate(now, timezone);
+  const briefingDate = businessDate(now, timezone);
   const existing = await rest(`/rest/v1/telegram_briefings?select=briefing_date,sent_at&thread_id=eq.${encodeURIComponent(ownerThreadId)}&briefing_date=eq.${briefingDate}&limit=1`, { profile: "app_private" });
   if (Array.isArray(existing) && existing.length > 0) return { status: "ALREADY_SENT", briefing_date: briefingDate, messages_sent: 0, render_mode: "FALLBACK_TEMPLATE" };
 
