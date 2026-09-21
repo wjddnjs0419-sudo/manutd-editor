@@ -29,6 +29,21 @@ Deno.test("natural-language reply calls the model once without leaking memory ru
   assert(!reply.includes("Natural-language conversation is read-only."));
 });
 
+Deno.test("identity prompt defines the assistant role without canonical context", async () => {
+  let captured: unknown;
+  await createConversationReply("너 누구야", context, {
+    canonical_context: { candidate: null, brief: null, match: null },
+    generate: async (payload) => {
+      captured = payload;
+      return { reply: "저는 ManUtd Content AI입니다." };
+    },
+  });
+
+  const payload = captured as { assistant_identity?: string; response_contract: string };
+  assertEquals(payload.assistant_identity, "ManUtd Content AI는 Manchester United 콘텐츠 편집을 돕는 Telegram editorial assistant입니다.");
+  assert(payload.response_contract.includes("assistant_identity"));
+});
+
 Deno.test("conversation prompt keeps the latest 12 messages, summary, active IDs, and canonical rows", async () => {
   let captured: unknown;
   await createConversationReply(context.user_message, context, {

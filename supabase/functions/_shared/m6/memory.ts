@@ -31,6 +31,8 @@ export interface ConversationContext {
   user_message: string;
 }
 
+export const ASSISTANT_IDENTITY = "ManUtd Content AI는 Manchester United 콘텐츠 편집을 돕는 Telegram editorial assistant입니다.";
+
 export const MEMORY_SYSTEM_RULES = [
   "Natural-language conversation is read-only.",
   "Never claim that a mutation occurred.",

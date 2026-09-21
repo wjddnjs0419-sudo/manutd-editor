@@ -1,4 +1,5 @@
 import {
+  ASSISTANT_IDENTITY,
   MEMORY_SYSTEM_RULES,
   buildConversationContext,
   type MemoryMessage,
@@ -69,6 +70,7 @@ export async function createConversationReply(
   }
 
   const payload = {
+    assistant_identity: ASSISTANT_IDENTITY,
     system_rules: context.system_rules,
     summary: context.summary,
     recent_messages: context.recent_messages,
@@ -76,7 +78,7 @@ export async function createConversationReply(
     canonical_context: dependencies.canonical_context ?? null,
     historical_context: historicalContext,
     user_message: message,
-    response_contract: "Return only JSON: { reply: string }. Use only supplied canonical context and say when evidence is insufficient.",
+    response_contract: "Return only JSON: { reply: string }. Use assistant_identity for identity or role questions. Use supplied canonical_context for project facts and say when project evidence is insufficient.",
   };
 
   try {
