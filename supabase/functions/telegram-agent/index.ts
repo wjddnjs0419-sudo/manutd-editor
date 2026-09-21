@@ -31,7 +31,7 @@ async function loadAgentConfig(): Promise<AgentConfig> {
     const rows = await rest("/rest/v1/telegram_agent_configs?select=recent_message_limit,summary_trigger_count,model_config&is_active=eq.true&limit=1");
     const value = Array.isArray(rows) && isObject(rows[0]) ? rows[0] : {};
     return {
-      recent_message_limit: typeof value.recent_message_limit === "number" && value.recent_message_limit > 0 ? value.recent_message_limit : 12,
+      recent_message_limit: typeof value.recent_message_limit === "number" && value.recent_message_limit > 0 ? Math.min(12, value.recent_message_limit) : 12,
       summary_trigger_count: typeof value.summary_trigger_count === "number" && value.summary_trigger_count > 0 ? value.summary_trigger_count : 20,
       model_config: isObject(value.model_config) ? value.model_config : {},
     };
