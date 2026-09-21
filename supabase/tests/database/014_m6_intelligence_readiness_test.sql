@@ -14,11 +14,13 @@ select isnt_empty($$select 1 from pg_indexes where schemaname='app_private' and 
 select throws_ok(
   $$insert into app_private.intelligence_readiness(ranking_date,status,candidate_count,started_at) values ('2026-09-21','READY',0,now())$$,
   '23514',
+  null,
   'readiness rejects unknown status'
 );
 select throws_ok(
   $$insert into app_private.intelligence_readiness(ranking_date,status,candidate_count,started_at) values ('2026-09-21','SUCCEEDED',-1,now())$$,
   '23514',
+  null,
   'readiness rejects negative candidate counts'
 );
 
