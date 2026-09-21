@@ -27,9 +27,9 @@ export function createOpenAIGenerator(options: { apiKey: string; model?: string;
       body: JSON.stringify({ model: options.model ?? "gpt-5.6-luna", input: JSON.stringify(payload), text: { format: { type: "json_object" } } }),
     });
     if (!response.ok) throw new Error("OPENAI_REQUEST_FAILED");
-    const body = await response.json() as { output_text?: unknown };
-    if (typeof body.output_text !== "string") throw new Error("OPENAI_INVALID_RESPONSE");
-    return JSON.parse(body.output_text);
+    const outputText = responseOutputText(await response.json());
+    if (!outputText) throw new Error("OPENAI_INVALID_RESPONSE");
+    return JSON.parse(outputText);
   };
 }
 
@@ -41,6 +41,19 @@ export interface TelegramMessagePlan {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function responseOutputText(value: unknown): string | null {
+  if (!isObject(value)) return null;
+  if (typeof value.output_text === "string") return value.output_text;
+  if (!Array.isArray(value.output)) return null;
+  for (const output of value.output) {
+    if (!isObject(output) || !Array.isArray(output.content)) continue;
+    for (const content of output.content) {
+      if (isObject(content) && content.type === "output_text" && typeof content.text === "string") return content.text;
+    }
+  }
+  return null;
 }
 
 function unsafeNote(note: string, maxNoteChars: number): boolean {
