@@ -1,8 +1,9 @@
 export interface MorningBriefResult {
-  status: "SENT" | "ALREADY_SENT" | "FAILED";
+  status: "SENT" | "ALREADY_SENT" | "NOT_READY" | "DEGRADED" | "FAILED";
   briefing_date: string;
   messages_sent: number;
   render_mode: "OPENAI" | "FALLBACK_TEMPLATE";
+  readiness?: "NOT_READY" | "DEGRADED" | "READY_EMPTY" | "READY_WITH_CANDIDATES";
   warning?: string;
 }
 
@@ -33,6 +34,7 @@ export function createMorningBriefHandler(dependencies: MorningBriefHandlerDepen
     const body = await request.json().catch(() => ({}));
     if (typeof body !== "object" || body === null || Array.isArray(body)) return Response.json({ error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 });
     const result = await dependencies.run({ force: true });
-    return Response.json(result, { status: result.status === "FAILED" ? 502 : 200 });
+    const responseStatus = result.status === "FAILED" ? 502 : result.status === "NOT_READY" ? 409 : result.status === "DEGRADED" ? 503 : 200;
+    return Response.json(result, { status: responseStatus });
   };
 }

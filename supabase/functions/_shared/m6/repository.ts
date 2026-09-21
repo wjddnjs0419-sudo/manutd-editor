@@ -1,6 +1,7 @@
 import type { CanonicalFixture, StoredMatch } from "./fixture_types.ts";
 import type { FixtureAlertEvent, FixtureSyncRepository, FixtureSyncState } from "./fixture_service.ts";
 import type { CandidateReferencePost } from "./reference_media.ts";
+import type { IntelligenceReadinessRecord, IntelligenceReadinessStatus } from "./readiness.ts";
 
 export interface M6RepositoryOptions {
   supabaseUrl: string;
@@ -20,6 +21,7 @@ export interface BriefingCandidateRow {
 
 export interface M6Repository extends FixtureSyncRepository {
   listBriefingCandidates(rankingDate: string): Promise<readonly BriefingCandidateRow[]>;
+  getIntelligenceReadiness(rankingDate: string): Promise<IntelligenceReadinessRecord | null>;
 }
 
 export class M6RepositoryError extends Error {
@@ -169,6 +171,21 @@ export function createM6Repository(options: M6RepositoryOptions): M6Repository {
         const latest = briefs.sort((left, right) => (typeof right.version === "number" ? right.version : 0) - (typeof left.version === "number" ? left.version : 0))[0];
         return { candidate_id: typeof candidate.id === "string" ? candidate.id : "", rank: nullableNumber(candidate.rank), priority_score: nullableNumber(candidate.priority_score), first_mover_flag: candidate.first_mover_flag === true, must_cover_flag: candidate.must_cover_flag === true, creative_status: typeof latest?.status === "string" ? latest.status : "NOT_REQUESTED", reference_posts: postsByCluster.get(typeof candidate.story_cluster_id === "string" ? candidate.story_cluster_id : "") ?? [] };
       }).filter((candidate) => candidate.candidate_id !== "");
+    },
+    async getIntelligenceReadiness(rankingDate): Promise<IntelligenceReadinessRecord | null> {
+      const result = await request(`/rest/v1/intelligence_readiness?select=ranking_date,status,candidate_count,started_at,completed_at,error_category&ranking_date=eq.${encodeURIComponent(rankingDate)}&limit=1`, {}, "app_private");
+      if (!Array.isArray(result) || !object(result[0])) return null;
+      const value = result[0];
+      const status = value.status;
+      if (typeof value.ranking_date !== "string" || (status !== "RUNNING" && status !== "SUCCEEDED" && status !== "FAILED") || typeof value.candidate_count !== "number" || typeof value.started_at !== "string") throw new M6RepositoryError("RESPONSE");
+      return {
+        ranking_date: value.ranking_date,
+        status: status as IntelligenceReadinessStatus,
+        candidate_count: value.candidate_count,
+        started_at: value.started_at,
+        completed_at: nullableString(value.completed_at),
+        error_category: nullableString(value.error_category),
+      };
     },
   };
 }

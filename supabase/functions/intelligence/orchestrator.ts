@@ -29,6 +29,7 @@ import {
   type RecentRawPost,
   type StoryClusterContext,
 } from "./repository.ts";
+import { businessDate } from "../_shared/m6/business_date.ts";
 
 export type LifecycleStatus = "OPEN" | "ACTIVE" | "STALE" | "ARCHIVED";
 
@@ -63,6 +64,10 @@ function date(value: Date | string): Date {
 
 function iso(value: Date | string): string {
   return date(value).toISOString();
+}
+
+function completionTimestamp(startedAt: Date): string {
+  return new Date(Math.max(Date.now(), startedAt.getTime())).toISOString();
 }
 
 export function deriveLifecycleStatus(input: LifecycleInput): LifecycleStatus {
@@ -210,6 +215,8 @@ export async function runIntelligence(
   options: RunIntelligenceOptions,
 ): Promise<IntelligenceRunSummary> {
   const runAt = date(options.runAt ?? options.now?.() ?? new Date());
+  const businessTimezone = options.repository.getBusinessTimezone ? await options.repository.getBusinessTimezone() : "Asia/Seoul";
+  const rankingDate = businessDate(runAt, businessTimezone);
   const runId = crypto.randomUUID();
   const leaseUntil = new Date(runAt.getTime() + options.config.leaseSeconds * 1000);
   const acquired = await options.repository.tryAcquireRun(runId, runAt, leaseUntil);
@@ -239,6 +246,9 @@ export async function runIntelligence(
   }, options.config.heartbeatSeconds * 1000);
 
   try {
+    if (options.repository.saveReadiness) {
+      await options.repository.saveReadiness({ ranking_date: rankingDate, status: "RUNNING", candidate_count: 0, started_at: runAt.toISOString(), completed_at: null, error_category: null });
+    }
     const accountSnapshot = await options.repository.loadEligibleAccounts(runAt);
     options.onEligibleAccounts?.(accountSnapshot);
     const posts = await options.repository.listRecentPosts(runAt);
@@ -411,13 +421,21 @@ export async function runIntelligence(
     }
 
     await options.repository.upsertClusterSources([...pendingSources.values()]);
-    const candidatesUpserted = await options.repository.calculateCandidates(runAt);
+    const candidatesUpserted = await options.repository.calculateCandidates(runAt, rankingDate);
+    if (options.repository.saveReadiness) {
+      await options.repository.saveReadiness({ ranking_date: rankingDate, status: "SUCCEEDED", candidate_count: candidatesUpserted, started_at: runAt.toISOString(), completed_at: completionTimestamp(runAt), error_category: null });
+    }
     return {
       runId,
       status: "completed",
       clustersProcessed: touched.size,
       candidatesUpserted,
     };
+  } catch (error) {
+    if (options.repository.saveReadiness) {
+      await options.repository.saveReadiness({ ranking_date: rankingDate, status: "FAILED", candidate_count: 0, started_at: runAt.toISOString(), completed_at: completionTimestamp(runAt), error_category: error instanceof Error && error.name === "EvaluationRepositoryError" ? error.message.split(" ")[0] : "INTELLIGENCE_FAILED" }).catch(() => undefined);
+    }
+    throw error;
   } finally {
     clearIntervalImpl(heartbeat);
     try {

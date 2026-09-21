@@ -6,6 +6,7 @@ import { createM6Repository } from "../_shared/m6/repository.ts";
 import { createReferenceSignedUrl, selectRepresentativeReference } from "../_shared/m6/reference_media.ts";
 import { createTelegramClient } from "../_shared/m6/telegram_client.ts";
 import { createOpenAIGenerator, phraseMorningBrief, renderMorningBrief } from "../_shared/m6/openai.ts";
+import { classifyReadiness } from "../_shared/m6/readiness.ts";
 import { createMorningBriefHandler, type MorningBriefResult } from "./handler.ts";
 
 const secret = Deno.env.get("TELEGRAM_AGENT_INVOKE_SECRET") ?? "";
@@ -50,8 +51,16 @@ async function runMorningBrief(): Promise<MorningBriefResult> {
   const existing = await rest(`/rest/v1/telegram_briefings?select=briefing_date,sent_at&thread_id=eq.${encodeURIComponent(ownerThreadId)}&briefing_date=eq.${briefingDate}&limit=1`, { profile: "app_private" });
   if (Array.isArray(existing) && existing.length > 0) return { status: "ALREADY_SENT", briefing_date: briefingDate, messages_sent: 0, render_mode: "FALLBACK_TEMPLATE" };
 
-  const fixtureResult = await runFixtureSync({ mode: "FORCE", now }, { provider, repository, alertThreadId: ownerThreadId });
+  const readinessState = await repository.getIntelligenceReadiness(briefingDate);
+  if (!readinessState || readinessState.status === "RUNNING") return { status: "NOT_READY", briefing_date: briefingDate, messages_sent: 0, render_mode: "FALLBACK_TEMPLATE", readiness: "NOT_READY", warning: "오늘 Intelligence 파이프라인이 아직 완료되지 않았습니다." };
+  if (readinessState.status === "FAILED") return { status: "DEGRADED", briefing_date: briefingDate, messages_sent: 0, render_mode: "FALLBACK_TEMPLATE", readiness: "DEGRADED", warning: `오늘 Intelligence 파이프라인이 실패했습니다.${readinessState.error_category ? ` (${readinessState.error_category})` : ""}` };
+
   const rows = await repository.listBriefingCandidates(briefingDate);
+  const readiness = classifyReadiness(readinessState, briefingDate, rows.length);
+  if (readiness === "NOT_READY") return { status: "NOT_READY", briefing_date: briefingDate, messages_sent: 0, render_mode: "FALLBACK_TEMPLATE", readiness, warning: "오늘 Intelligence 결과가 아직 확정되지 않았습니다." };
+  if (readiness === "DEGRADED") return { status: "DEGRADED", briefing_date: briefingDate, messages_sent: 0, render_mode: "FALLBACK_TEMPLATE", readiness, warning: "오늘 Intelligence 후보 상태가 일치하지 않아 브리핑을 보내지 않았습니다." };
+
+  const fixtureResult = await runFixtureSync({ mode: "FORCE", now }, { provider, repository, alertThreadId: ownerThreadId });
   const candidates = rows.slice(0, Number(config.briefing_top_n ?? 3)).map((row) => ({
     candidate_id: row.candidate_id,
     priority_score: row.priority_score,
@@ -81,7 +90,7 @@ async function runMorningBrief(): Promise<MorningBriefResult> {
     sent += 1;
   }
   await rest(`/rest/v1/telegram_briefings?thread_id=eq.${encodeURIComponent(ownerThreadId)}&briefing_date=eq.${briefingDate}`, { profile: "app_private", method: "PATCH", body: { sent_at: new Date().toISOString() }, prefer: "return=minimal" });
-  return { status: "SENT", briefing_date: briefingDate, messages_sent: sent, render_mode: phrasing.render_mode ?? "FALLBACK_TEMPLATE", warning: fixtureResult.status === "FAILED" ? "Fixture refresh failed; briefing used last canonical fixture state." : undefined };
+  return { status: "SENT", briefing_date: briefingDate, messages_sent: sent, render_mode: phrasing.render_mode ?? "FALLBACK_TEMPLATE", readiness, warning: fixtureResult.status === "FAILED" ? "Fixture refresh failed; briefing used last canonical fixture state." : undefined };
 }
 
 Deno.serve(createMorningBriefHandler({ invokeSecret: secret, run: async () => runMorningBrief() }));
