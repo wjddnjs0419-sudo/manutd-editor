@@ -46,9 +46,9 @@ async function listMessages(threadId: string, limit?: number): Promise<MemoryMes
   return Array.isArray(rows) ? rows.map(message).filter((value): value is MemoryMessage => value !== null) : [];
 }
 
-async function rowById(path: string): Promise<Record<string, unknown> | null> {
+async function rowById(path: string, profile?: string): Promise<Record<string, unknown> | null> {
   try {
-    const rows = await rest(path);
+    const rows = await rest(path, {}, profile);
     return Array.isArray(rows) && isObject(rows[0]) ? rows[0] : null;
   } catch {
     return null;
@@ -94,7 +94,7 @@ async function retrievalDependencies(thread: RetrievalThreadState) {
         const [clusters, briefs, messages] = await Promise.all([
           rowById(`/rest/v1/story_clusters?select=id,canonical_title&canonical_title=ilike.${encoded}&limit=5`),
           rowById(`/rest/v1/creative_briefs?select=id,headline&headline=ilike.${encoded}&limit=5`),
-          rowById(`/rest/v1/telegram_messages?select=id,content&content=ilike.${encoded}&order=created_at.desc&limit=5`,),
+          rowById(`/rest/v1/telegram_messages?select=id,content&content=ilike.${encoded}&order=created_at.desc&limit=5`, "app_private"),
         ]);
         for (const [kind, value] of [["candidate", clusters], ["brief", briefs], ["message", messages]] as const) {
           if (value) {
