@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert@1";
 import { parseCommand, validatePendingAction } from "../../_shared/m6/commands.ts";
 
 Deno.test("slash command parser accepts only explicit supported grammar", () => {
+  assertEquals(parseCommand("/current"), { type: "CURRENT" });
   assertEquals(parseCommand("/hook 3"), { type: "HOOK", hook: 3 });
   assertEquals(parseCommand("/slide 3 더 짧고 직관적으로"), { type: "SLIDE", slide: 3, instruction: "더 짧고 직관적으로" });
   assertEquals(parseCommand("/caption 덜 자극적으로"), { type: "CAPTION", instruction: "덜 자극적으로" });

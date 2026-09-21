@@ -355,3 +355,22 @@ Deno.test("repository keeps capability audit fields and real run timestamp predi
   assert.match(postQuery, /2026-09-17/);
   assert.match(postQuery, /2026-09-18/);
 });
+
+Deno.test("records business-date readiness through running and succeeded states", async () => {
+  const states: string[] = [];
+  const result = await runIntelligence(options(repository({
+    getBusinessTimezone: async () => "Asia/Seoul",
+    saveReadiness: async (record) => { states.push(`${record.ranking_date}:${record.status}:${record.candidate_count}`); },
+  })));
+  assert.equal(result.status, "completed");
+  assert.deepEqual(states, ["2026-09-18:RUNNING:0", "2026-09-18:SUCCEEDED:0"]);
+});
+
+Deno.test("records failed readiness without exposing the upstream error", async () => {
+  const states: string[] = [];
+  await assert.rejects(() => runIntelligence(options(repository({
+    saveReadiness: async (record) => { states.push(`${record.status}:${record.error_category ?? ""}`); },
+    loadEligibleAccounts: async () => { throw new Error("secret provider response"); },
+  }))));
+  assert.deepEqual(states, ["RUNNING:", "FAILED:INTELLIGENCE_FAILED"]);
+});

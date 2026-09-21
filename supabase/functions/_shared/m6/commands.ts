@@ -1,5 +1,5 @@
 export type ParsedCommand =
-  | { type: "TODAY" | "BRIEF" | "SELECT" | "STATUS" | "BACK" | "RESET" | "CONFIRM" | "CANCEL" | "HELP" }
+  | { type: "TODAY" | "CURRENT" | "BRIEF" | "SELECT" | "STATUS" | "BACK" | "RESET" | "CONFIRM" | "CANCEL" | "HELP" }
   | { type: "OPEN"; target: string }
   | { type: "HOOK"; hook: number }
   | { type: "SLIDE"; slide: number; instruction: string }
@@ -9,7 +9,7 @@ const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 
 export function parseCommand(text: string): ParsedCommand | null {
   const value = text.trim();
-  if (/^\/(?:today|brief|select|status|back|reset|confirm|cancel|help)$/u.test(value)) return { type: value.slice(1).toUpperCase() as ParsedCommand["type"] } as ParsedCommand;
+  if (/^\/(?:today|current|brief|select|status|back|reset|confirm|cancel|help)$/u.test(value)) return { type: value.slice(1).toUpperCase() as ParsedCommand["type"] } as ParsedCommand;
   const open = value.match(new RegExp(`^\\/open\\s+((?:[1-3])|alert|${uuid})$`, "iu"));
   if (open) return { type: "OPEN", target: open[1] };
   const hook = value.match(/^\/hook\s+([1-3])$/u);

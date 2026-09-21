@@ -81,3 +81,18 @@ Deno.test("morning brief handler authenticates and returns safe delivery summary
   assertEquals(response.status, 200);
   assertEquals(await response.json(), { status: "SENT", briefing_date: "2026-09-19", messages_sent: 3, render_mode: "FALLBACK_TEMPLATE" });
 });
+
+Deno.test("morning brief handler exposes not-ready and degraded states without reporting SENT", async () => {
+  for (const expected of [
+    { status: "NOT_READY", http: 409 },
+    { status: "DEGRADED", http: 503 },
+  ] as const) {
+    const handler = createMorningBriefHandler({
+      invokeSecret: "secret",
+      run: async () => ({ status: expected.status, briefing_date: "2026-09-21", messages_sent: 0, render_mode: "FALLBACK_TEMPLATE" }),
+    });
+    const response = await handler(new Request("https://example.test", { method: "POST", headers: { authorization: "Bearer secret" }, body: "{}" }));
+    assertEquals(response.status, expected.http);
+    assertEquals((await response.json()).status, expected.status);
+  }
+});
