@@ -26,12 +26,14 @@ Task 1: complete (commit 3e38d85, tests: `supabase test db --local supabase/test
 
 Task 2: Ruling: the first whole-suite Deno command omitted `--allow-env`/`--allow-net`, so two pre-existing integration tests failed before execution; reran in the repository's Docker harness with `supabase/functions/.env.local` and both permissions — cost if wrong: the initial result would misclassify a harness invocation error as a regression.
 
-Task 2: complete (commit pending, focused tests: 9/9 pass; whole suite: 281/281 pass)
+Task 2: complete (commit 335f22a, focused tests: 9/9 pass; whole suite: 281/281 pass)
 
-Task 3: complete (commit pending, focused tests: 9/9 pass; private Storage reader and structured provider verified for image/carousel/thumbnail-safe inputs, bounded media, SHA-256, strict schema, retry, timeout, and redaction)
+Task 3: complete (commit 66ce32f, focused tests: 9/9 pass; private Storage reader and structured provider verified for image/carousel/thumbnail-safe inputs, bounded media, SHA-256, strict schema, retry, timeout, and redaction)
 
-Task 4: complete (commit pending, focused tests: 8/8 pass; repository, fingerprint idempotency, bounded concurrency, failure isolation, authenticated handler, and `verify_jwt = false` function wiring verified)
+Task 4: complete (commit f0f972a, focused tests: 8/8 pass; repository, fingerprint idempotency, bounded concurrency, failure isolation, authenticated handler, and `verify_jwt = false` function wiring verified)
 
-Task 5: complete (commit pending, focused tests: 14/14 pass; `COLLECT_INSTAGRAM -> ANALYZE_CONTENT -> RUN_INTELLIGENCE`, stable dedupe keys, failure isolation, collector-secret boundary, and bounded request mapping verified)
+Task 5: complete (commit c46f2f3, focused tests: 14/14 pass; `COLLECT_INSTAGRAM -> ANALYZE_CONTENT -> RUN_INTELLIGENCE`, stable dedupe keys, failure isolation, collector-secret boundary, and bounded request mapping verified)
 
-Task 6: complete (commit pending, focused tests: 42/42 pass; optional app-private current-contract enrichment, caption-only fallback, multimodal feature normalization, bounded signature context, and old intelligence behavior verified)
+Task 6: complete (commit e07cebf, focused tests: 42/42 pass; optional app-private current-contract enrichment, caption-only fallback, multimodal feature normalization, bounded signature context, and old intelligence behavior verified)
+
+Task 7: complete (commit pending, local smoke: database 410/410, Deno integration/feature smoke 90/90, architecture/workflow validation 20/20, full Edge Function suite 304/304; no external provider or production URL used)

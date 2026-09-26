@@ -26,9 +26,10 @@ async function rowsFor(dedupeKey: string): Promise<Array<Record<string, unknown>
   return Array.isArray(value) ? value as Array<Record<string, unknown>> : [];
 }
 
-Deno.test("local smoke claims collection, completes it, and enqueues intelligence once", async () => {
+Deno.test("local smoke claims collection, analysis, and intelligence exactly once", async () => {
   const chainKey = "m7-phase-1-smoke";
   const rootDedupeKey = `${chainKey}:COLLECT_INSTAGRAM`;
+  const analysisDedupeKey = `${chainKey}:ANALYZE_CONTENT`;
   const intelligenceDedupeKey = `${chainKey}:RUN_INTELLIGENCE`;
   await queue.enqueue("COLLECT_INSTAGRAM", { chain_key: chainKey, smoke_fixture: true }, rootDedupeKey, 3, new Date("2026-09-26T00:00:00Z"));
 
@@ -51,6 +52,18 @@ Deno.test("local smoke claims collection, completes it, and enqueues intelligenc
   assert.deepEqual(await worker.processBatch(), { claimed: 1, succeeded: 1, failed: 0, downstream_enqueued: 1 });
   assert.deepEqual(calls, ["COLLECT_INSTAGRAM"]);
   assert.deepEqual(await rowsFor(rootDedupeKey), [{ job_type: "COLLECT_INSTAGRAM", status: "SUCCEEDED", dedupe_key: rootDedupeKey }]);
+  assert.deepEqual(await rowsFor(analysisDedupeKey), [{ job_type: "ANALYZE_CONTENT", status: "PENDING", dedupe_key: analysisDedupeKey }]);
+
+  const analysisWorker = createOrchestrationWorker({
+    queue,
+    invoker,
+    workerId: "m7-smoke-analysis-worker",
+    batchSize: 5,
+    leaseSeconds: 300,
+    now: () => new Date("2026-09-26T00:00:00Z"),
+  });
+  assert.deepEqual(await analysisWorker.processBatch(), { claimed: 1, succeeded: 1, failed: 0, downstream_enqueued: 1 });
+  assert.deepEqual(calls, ["COLLECT_INSTAGRAM", "ANALYZE_CONTENT"]);
   assert.deepEqual(await rowsFor(intelligenceDedupeKey), [{ job_type: "RUN_INTELLIGENCE", status: "PENDING", dedupe_key: intelligenceDedupeKey }]);
   assert.equal((await rowsFor(intelligenceDedupeKey)).length, 1);
 
