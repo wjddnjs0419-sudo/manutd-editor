@@ -2,7 +2,35 @@
 
 맨체스터 유나이티드 관련 Instagram 콘텐츠를 수집·분석하고, 객관적인 우선순위 점수와 실행 가능한 콘텐츠 브리프를 만드는 시스템입니다.
 
-현재 구현 범위는 **Milestone 3 수집 파이프라인, Milestone 4 Content Intelligence, Milestone 4.5 Notion Editorial Sync, Milestone 5 Grounded Creative Generation**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. 이어서 intelligence Edge Function이 최근 게시물을 story cluster로 묶고 결정론적인 Priority Score·Data Confidence·FIRST_MOVER/MUST_COVER 결과를 생성합니다. M5는 M4 canonical evidence snapshot만 사용해 deterministic-first content mode를 분류하고, OpenAI Responses structured output을 검증한 뒤 append-only Creative Brief revision을 저장합니다. Notion sync Edge Function은 Supabase 후보를 `📡 Daily Intelligence` 데이터베이스에 editorial projection으로 upsert하며, Supabase가 canonical source이고 Notion의 human-owned 편집 필드는 보존합니다.
+현재 구현 범위는 **Milestone 1–7**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. 이어서 intelligence Edge Function이 최근 게시물을 story cluster로 묶고 결정론적인 Priority Score·Data Confidence·FIRST_MOVER/MUST_COVER 결과를 생성합니다. M5는 M4 canonical evidence snapshot만 사용해 deterministic-first content mode를 분류하고, OpenAI Responses structured output을 검증한 뒤 append-only Creative Brief revision을 저장합니다. Notion은 Supabase canonical state의 독립 projection consumer이며, 사람 소유 편집 필드는 보존합니다.
+
+## Milestone 7 final architecture
+
+Supabase is the canonical database, orchestration layer, scheduler, and Edge Function runtime.
+
+```text
+Supabase Cron
+  → app_private.editorial_jobs
+  → orchestration-worker
+  → existing collection / intelligence / creative / fixture / briefing boundaries
+  → canonical Supabase state
+  → independent consumers (Notion projection, Telegram, future Figma drafts)
+
+Telegram → direct `telegram-agent` webhook
+n8n → legacy / not required for production
+```
+
+Telegram uses the direct `telegram-agent` webhook.
+
+Creative generation succeeds when a `creative_briefs` row reaches canonical
+`READY` state. A separate `PROJECT_NOTION` job projects that brief to Notion;
+Notion availability therefore cannot roll back or invalidate creative
+generation. Telegram alert delivery and future Figma draft generation can
+consume the same READY state without changing the core generation contract.
+
+n8n is legacy and not required for production. Historical exports and their
+validator remain under `n8n/` for audit, parity comparison, and an explicit
+temporary rollback only.
 
 ## 핵심 원칙
 
@@ -57,7 +85,7 @@ AI는 게시물에서 이 엔티티를 추출할 수 있지만, 숫자 신뢰도
 ## Milestone 3 Core 수집 경로
 
 ```text
-n8n Schedule (후속 연결)
+Supabase Cron (M7 root schedule)
   → collect-instagram Edge Function (active 계정 조회, concurrency 2)
   → Meta Business Discovery API
   → ingest_instagram_account_batch RPC
@@ -94,7 +122,7 @@ M6는 Supabase를 canonical state로 유지하면서 Telegram을 운영 콘솔�
 
 `/today`, `/open <1..3|uuid|alert>`, `/brief`, `/hook <1..3>`, `/slide <1..7> <지시>`, `/caption <지시>`, `/select`, `/status`, `/back`, `/reset`, `/confirm`, `/cancel`, `/help`
 
-n8n은 `fixture-sync → telegram-alerts`, 09:00 `telegram-morning-brief`, Telegram Trigger → `telegram-agent` 호출만 담당합니다. 점수·선택·메모리·명령·dedupe 규칙은 Edge Function과 Supabase에 있습니다. 모든 M6 workflow는 git에서 `active: false`이며 credential value를 포함하지 않습니다.
+M6의 score·선택·메모리·명령·dedupe 규칙은 Edge Function과 Supabase에 있습니다. Telegram은 직접 `telegram-agent` webhook으로 전달되고, 모든 historical n8n workflow는 git에서 `active: false`이며 credential value를 포함하지 않습니다.
 
 ## Milestone 7 Phase 1 Supabase-native orchestration
 
@@ -107,8 +135,8 @@ revision semantics intact.
 The local worker requires `ORCHESTRATION_WORKER_INVOKE_SECRET` in addition to
 the existing collector and Telegram invoke secrets. It accepts a bounded batch
 request and never receives or forwards the Supabase service-role key outside
-the Edge Function runtime. n8n workflows are intentionally unchanged in this
-phase.
+the Edge Function runtime. Historical n8n exports are retained only for audit
+and rollback; they are not required by the Supabase-native runtime.
 
 Run the deterministic local queue/worker smoke without Meta, OpenAI, Notion, or
 Telegram credentials:
@@ -154,17 +182,23 @@ export TELEGRAM_WEBHOOK_SECRET='...'
 ```
 
 The n8n exports remain in `n8n/workflows/` for parity and history; the local
-M7 smoke path tests the Supabase queue, worker, and direct webhook without n8n.
+M7 smoke path tests the Supabase queue, worker, independent Notion projection,
+observability, and direct webhook without n8n.
 
 로컬 검증:
 
 ```bash
 supabase db reset --local
 supabase test db
-node scripts/validate-n8n-workflow.mjs n8n/workflows/fixture-sync-schedule.json
-node scripts/validate-n8n-workflow.mjs n8n/workflows/telegram-morning-brief.json
-node scripts/validate-n8n-workflow.mjs n8n/workflows/telegram-editorial-agent.json
-./scripts/run-milestone-6-smoke.sh
+./scripts/run-milestone-7-smoke.sh
+node --test scripts/validate-m7-architecture.test.mjs
+```
+
+The required M7 production path does not validate or invoke n8n. Historical
+n8n fixture validation remains available separately when an export needs audit:
+
+```bash
+node --test scripts/validate-n8n-workflow.test.mjs
 ```
 
 M6 범위에는 Telegram 발행/삭제, Instagram 자동 게시, 실시간 scorebot, vector-RAG 인프라, 복잡한 multi-user RBAC, 광범위한 Notion administration이 포함되지 않습니다.
@@ -362,22 +396,30 @@ docker run --rm -v "$PWD/supabase:/workspace" -w /workspace \
   denoland/deno:2.1.4 deno test functions/tests
 ```
 
-## n8n 운영 흐름
+## n8n legacy fixtures (historical validation only)
 
-`n8n/workflows/instagram-collector-schedule.json`은 `Asia/Seoul` 30분 Schedule에서
-다음 invoke-only chain을 실행합니다.
+`n8n/workflows/` contains the historical invoke-only workflows that existed
+before M7. They are retained for audit and temporary rollback, not as required
+production orchestration.
 
 ```text
 Schedule → collect-instagram → intelligence → sync-notion-intelligence
 ```
 
-Collector와 Intelligence의 성공 경로가 보장되어야 다음 단계로 진행합니다.
-Notion sync HTTP node만 `continueOnFail`/`neverError`를 사용하므로 Notion 장애가
-collector·intelligence 결과를 실패로 바꾸지 않습니다. 모든 HTTP node는 기존
-`Instagram Collector Invoke Secret` Header Auth credential reference만 사용하며,
-workflow JSON에는 secret 값이 없습니다.
+This historical chain maps to M7's scheduled root jobs and worker chain:
+`COLLECT_INSTAGRAM` → `RUN_INTELLIGENCE` → `GENERATE_PRIORITY` →
+`SYNC_NOTION`. Canonical creative READY state is now projected by the
+independent `PROJECT_NOTION` consumer. The historical Telegram trigger maps to
+the direct `telegram-agent` webhook; fixture and briefing exports map to their
+Supabase Cron roots. Workflow JSON files contain no secret values.
 
 ```bash
 node scripts/validate-n8n-workflow.mjs n8n/workflows/instagram-collector-schedule.json
 node --test scripts/validate-n8n-workflow.test.mjs
 ```
+
+Use the historical workflow exports only for audit or a temporary rollback.
+If rollback is required, pause the Supabase Cron/worker path, restore the
+corresponding n8n export and credential references in the n8n instance, then
+reverse that change after the incident. No production deployment or rollback is
+performed by this repository smoke path.

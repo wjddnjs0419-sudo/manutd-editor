@@ -1,54 +1,59 @@
-# Instagram Collector Schedule
+# LEGACY — n8n historical workflows
 
-이 workflow는 `Asia/Seoul` 기준 30분마다 다음 invoke-only chain을 실행합니다.
+These exports are retained for audit, parity comparison, and an explicit
+temporary rollback. n8n is not required for the M7 production path.
 
-```text
-Schedule → collect-instagram → intelligence → sync-notion-intelligence
-```
+## Why n8n existed
 
-Collector와 Intelligence가 성공한 경우에만 다음 단계로 진행하며, Notion sync만
-실패를 workflow 전체에 전파하지 않습니다. Meta token과 Supabase secret key는
-n8n에 저장하거나 workflow export에 넣지 않습니다.
+Before M7, n8n supplied the wall-clock schedules, invoke-only HTTP chaining,
+fixture-to-Telegram handoff, morning briefing trigger, and Telegram webhook
+adapter. The exports deliberately contained credential references only; secret
+values and Supabase service keys never belonged in workflow JSON.
 
-## Import와 credential 연결
+## M7 replacement map
 
-1. n8n에서 `workflows/instagram-collector-schedule.json`을 import합니다.
-2. 세 HTTP Request node가 project `byymtttpwmllqvggnddm`의
-   `/functions/v1/collect-instagram`, `/functions/v1/intelligence`,
-   `/functions/v1/sync-notion-intelligence`인지 확인합니다.
-3. 기존 `Instagram Collector Invoke Secret` Header Auth credential을 세 HTTP
-   Request node에 연결합니다. credential의 header name은 `Authorization`이며,
-   secret 값은 n8n credential store에만 입력합니다.
-4. credential 값, token, key가 workflow export·문서·screenshot에 남지 않았는지
-   확인합니다.
+The historical responsibilities below were replaced by the corresponding
+Supabase-native components.
 
-## Manual 실행과 publish
+| Historical n8n responsibility | Supabase-native replacement |
+| --- | --- |
+| Instagram 30-minute schedule | Supabase Cron → `COLLECT_INSTAGRAM` root job |
+| Collector → intelligence → creative chain | `orchestration-worker` and its bounded editorial job chain |
+| Notion projection after generation | canonical `creative_briefs.READY` → `PROJECT_NOTION` consumer |
+| Fixture sync every 15 minutes | Supabase Cron → `FIXTURE_SYNC` → `DISPATCH_ALERTS` |
+| 09:00 Asia/Seoul briefing | Supabase Cron → `MORNING_BRIEF` |
+| Telegram Trigger | direct `telegram-agent` webhook with `TELEGRAM_WEBHOOK_SECRET` |
 
-1. workflow timezone이 `Asia/Seoul`, Schedule Trigger가 30분 간격인지 확인합니다.
-2. `Collect Active Instagram Accounts` node를 포함한 workflow를 manual 실행합니다.
-3. collector가 HTTP 200을 반환하면 aggregate JSON을 확인하고, 일부 계정 실패가
-   있어도 결과를 보존한 채 `Run Content Intelligence`가 한 번 실행되는지 확인합니다.
-4. intelligence가 성공하면 `Sync Daily Intelligence to Notion`이 한 번 실행됩니다.
-   Intelligence HTTP 202와 body의
-   `status: "already_running"`은 정상적인 동시 실행 방지 응답입니다.
-5. Notion sync 응답은 JSON으로 보존하며, 개별 후보 실패는 `failed` count로 확인합니다.
-6. 검증 후 workflow를 publish합니다. 기존 Telegram/OpenAI workflow와 연결하지
-   않습니다.
+Notion projection is intentionally independent: a Notion outage can retry or
+dead-letter `PROJECT_NOTION` without changing the canonical creative-generation
+success contract. Future Figma draft generation can consume the same READY
+state without modifying creative generation.
 
-## Retry semantics
+## Historical files
 
-`Run Content Intelligence`는 120초 timeout을 사용하고 실패 시 Notion sync로
-진행하지 않습니다. `already_running`(HTTP 202)은 JSON으로 보존하며 다음 scheduled
-실행에서 다시 시도할 수 있습니다. `Sync Daily Intelligence to Notion`은 120초
-timeout, `continueOnFail`, `neverError`를 사용해 Notion 장애가 앞 단계 성공 결과를
-무효화하지 않습니다. Notion API 자체의 429/5xx/timeout retry는 Edge Function
-client가 bounded retry로 처리합니다.
+- `workflows/instagram-collector-schedule.json`
+- `workflows/fixture-sync-schedule.json`
+- `workflows/telegram-morning-brief.json`
+- `workflows/telegram-editorial-agent.json`
 
-## Export 검증
+They are inactive historical fixtures. Do not enable them alongside the M7
+Cron schedules without an explicit incident decision, because both systems
+could enqueue duplicate work.
 
-저장소 export를 갱신한 뒤에는 node 연결, endpoint, timeout, JSON/202 처리,
-credential reference와 secret marker를 검사합니다.
+## Temporary rollback
+
+If a production incident requires rollback, pause the Supabase Cron and
+orchestration-worker invocation path, restore the matching n8n export and its
+credential references in the n8n instance, and verify the direct function
+endpoints. Reverse the rollback after the incident and re-enable only the M7
+path. This repository does not perform production deployment or rollback.
+
+## Historical export validation
+
+The validator remains useful when reviewing an old export. It is not part of
+the required M7 production smoke path.
 
 ```bash
 node scripts/validate-n8n-workflow.mjs n8n/workflows/instagram-collector-schedule.json
+node --test scripts/validate-n8n-workflow.test.mjs
 ```
