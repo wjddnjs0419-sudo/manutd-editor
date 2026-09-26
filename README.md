@@ -96,6 +96,27 @@ M6는 Supabase를 canonical state로 유지하면서 Telegram을 운영 콘솔�
 
 n8n은 `fixture-sync → telegram-alerts`, 09:00 `telegram-morning-brief`, Telegram Trigger → `telegram-agent` 호출만 담당합니다. 점수·선택·메모리·명령·dedupe 규칙은 Edge Function과 Supabase에 있습니다. 모든 M6 workflow는 git에서 `active: false`이며 credential value를 포함하지 않습니다.
 
+## Milestone 7 Phase 1 Supabase-native orchestration
+
+M7 Phase 1 adds a server-only `app_private.editorial_jobs` queue and an
+`orchestration-worker` Edge Function. The queue is canonical and is accessible
+only through service-role RPCs. The worker invokes the existing M1–M6 Edge
+Function boundaries and keeps their existing readiness, lease, and append-only
+revision semantics intact.
+
+The local worker requires `ORCHESTRATION_WORKER_INVOKE_SECRET` in addition to
+the existing collector and Telegram invoke secrets. It accepts a bounded batch
+request and never receives or forwards the Supabase service-role key outside
+the Edge Function runtime. n8n workflows are intentionally unchanged in this
+phase.
+
+Run the deterministic local queue/worker smoke without Meta, OpenAI, Notion, or
+Telegram credentials:
+
+```bash
+./scripts/run-milestone-7-phase-1-smoke.sh
+```
+
 필수 로컬 설정은 `SUPABASE_URL`, `SUPABASE_SECRET_KEY`이며, 실제 연동에는 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_AGENT_INVOKE_SECRET`, `TELEGRAM_OWNER_USER_ID`, `TELEGRAM_OWNER_CHAT_ID`, `TELEGRAM_OWNER_THREAD_ID`, `OPENAI_API_KEY`가 필요합니다. ESPN fixture endpoint는 인증 없이 사용하며 별도 secret/env key를 만들지 않습니다. 키 값은 커밋하지 않습니다.
 
 로컬 검증:
