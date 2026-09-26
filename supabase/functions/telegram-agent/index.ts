@@ -14,6 +14,7 @@ import type { StoredCreativeBrief } from "../creative-generation/repository.ts";
 import type { CreativeBriefSlide } from "../creative-generation/types.ts";
 
 const invokeSecret = Deno.env.get("TELEGRAM_AGENT_INVOKE_SECRET") ?? "";
+const webhookSecret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
 const ownerUserId = Deno.env.get("TELEGRAM_OWNER_USER_ID") ?? "";
 const botToken = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
 const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
@@ -328,4 +329,4 @@ async function runAgent(value: unknown): Promise<{ status: string; reply: string
   return { status: "SENT", reply };
 }
 
-Deno.serve(createTelegramAgentHandler({ invokeSecret, ownerUserId, claimUpdate, run: runAgent }));
+Deno.serve(createTelegramAgentHandler({ invokeSecret, webhookSecret, ownerUserId, claimUpdate, run: runAgent }));
