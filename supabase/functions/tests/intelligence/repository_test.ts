@@ -6,7 +6,7 @@ Deno.test("candidate calculation uses the active Telegram business timezone", as
   const repository = createIntelligenceRepository({
     supabaseUrl: "https://example.supabase.co",
     serviceRoleKey: "service-key",
-    fetch: async (input, init) => {
+    fetch: async (input: RequestInfo | URL, init?: globalThis.RequestInit) => {
       const url = String(input);
       if (url.includes("telegram_agent_configs")) return new Response(JSON.stringify([{ timezone: "Asia/Seoul" }]), { status: 200 });
       rankingDate = JSON.parse(String(init?.body)).p_ranking_date;

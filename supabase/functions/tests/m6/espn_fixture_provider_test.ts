@@ -130,7 +130,7 @@ Deno.test("retries a transient ESPN response with a bounded request", async () =
 });
 
 Deno.test("classifies an ESPN request timeout without leaking a provider body", async () => {
-  const provider = createEspnFixtureProvider({ timeoutMs: 1, maxRetries: 0, fetch: (_input, init) => new Promise((_resolve, reject) => {
+  const provider = createEspnFixtureProvider({ timeoutMs: 1, maxRetries: 0, fetch: (_input: RequestInfo | URL, init?: globalThis.RequestInit) => new Promise((_resolve, reject) => {
     init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
   }) });
   await assertRejects(

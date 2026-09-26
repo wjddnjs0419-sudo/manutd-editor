@@ -6,7 +6,7 @@ Deno.test("M6 repository marks JSON writes with the JSON content type", async ()
   const repository = createM6Repository({
     supabaseUrl: "https://example.supabase.co",
     serviceRoleKey: "test-service-role-key",
-    fetch: async (_input, init) => {
+    fetch: async (_input: RequestInfo | URL, init?: globalThis.RequestInit) => {
       capturedHeaders = new Headers(init?.headers);
       return new Response(null, { status: 204 });
     },
