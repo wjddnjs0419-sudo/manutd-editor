@@ -119,6 +119,43 @@ Telegram credentials:
 
 필수 로컬 설정은 `SUPABASE_URL`, `SUPABASE_SECRET_KEY`이며, 실제 연동에는 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_AGENT_INVOKE_SECRET`, `TELEGRAM_OWNER_USER_ID`, `TELEGRAM_OWNER_CHAT_ID`, `TELEGRAM_OWNER_THREAD_ID`, `OPENAI_API_KEY`가 필요합니다. ESPN fixture endpoint는 인증 없이 사용하며 별도 secret/env key를 만들지 않습니다. 키 값은 커밋하지 않습니다.
 
+## Milestone 7 Phase 2 Supabase-native schedules and Telegram webhook
+
+Supabase Cron now enqueues only the root editorial jobs. The 30-minute
+Instagram schedule enqueues `COLLECT_INSTAGRAM`, the 15-minute fixture schedule
+enqueues `FIXTURE_SYNC`, and the 09:00 Asia/Seoul morning schedule enqueues
+`MORNING_BRIEF`. The `orchestration-worker` owns the bounded downstream chain;
+fixture success enqueues `DISPATCH_ALERTS`, while the existing
+`telegram-morning-brief` function remains the owner of readiness,
+`businessDate()`, forced fixture refresh, snapshots, ALREADY_SENT behavior, and
+Telegram persistence.
+
+Telegram can POST directly to:
+
+```text
+https://<project-ref>.supabase.co/functions/v1/telegram-agent
+```
+
+Telegram must send `X-Telegram-Bot-Api-Secret-Token`, matching the local/hosted
+`TELEGRAM_WEBHOOK_SECRET`. `TELEGRAM_OWNER_USER_ID` authorization and
+`telegram_update_id` dedupe remain enforced. The existing
+`TELEGRAM_AGENT_INVOKE_SECRET` bearer path is retained only for explicitly
+secured internal/test calls.
+
+To register a webhook after deployment, provide secrets only through the shell
+environment and run the helper. This phase does not call Telegram or register a
+production webhook:
+
+```bash
+export TELEGRAM_BOT_TOKEN='...'
+export TELEGRAM_WEBHOOK_URL='https://<project-ref>.supabase.co/functions/v1/telegram-agent'
+export TELEGRAM_WEBHOOK_SECRET='...'
+./scripts/register-telegram-webhook.sh
+```
+
+The n8n exports remain in `n8n/workflows/` for parity and history; the local
+M7 smoke path tests the Supabase queue, worker, and direct webhook without n8n.
+
 로컬 검증:
 
 ```bash
