@@ -83,7 +83,10 @@ function captionSimilarity(
       ? post.tokens
       : [...tokenSet(post.normalizedCaption)],
   );
-  const captions = signature.normalizedCaptions ?? [];
+  const captions = [
+    ...(signature.normalizedCaptions ?? []),
+    ...(signature.multimodalContext ?? []),
+  ];
   let best = 0;
 
   for (const caption of captions) {
@@ -227,6 +230,14 @@ export function mergeSignature(
     lastPublishedAt: latest(signature.lastPublishedAt, post.publishedAt),
     representativePostIds,
     dictionaryVersion: signature.dictionaryVersion,
+    ...(signature.multimodalContext || post.multimodalContext
+      ? {
+        multimodalContext: unionInInputOrder(
+          signature.multimodalContext ?? [],
+          post.multimodalContext ?? [],
+        ).slice(0, 16),
+      }
+      : {}),
     normalizedCaptions: unionInInputOrder(
       current.normalizedCaptions ?? [],
       [post.normalizedCaption],

@@ -150,6 +150,9 @@ function classifierSnapshot(
       tokens: [...rawPost.tokens],
       publishedAt: rawPost.publishedAt,
       dictionaryVersion: rawPost.dictionaryVersion,
+      ...(rawPost.multimodalContext && rawPost.multimodalContext.length > 0
+        ? { multimodalContext: [...rawPost.multimodalContext] }
+        : {}),
     },
     aggregate_signature: {
       entities: [...signature.entities],
@@ -160,6 +163,9 @@ function classifierSnapshot(
       lastPublishedAt: signature.lastPublishedAt,
       representativePostIds: [...signature.representativePostIds],
       dictionaryVersion: signature.dictionaryVersion,
+      ...(signature.multimodalContext && signature.multimodalContext.length > 0
+        ? { multimodalContext: [...signature.multimodalContext] }
+        : {}),
     },
   };
 }

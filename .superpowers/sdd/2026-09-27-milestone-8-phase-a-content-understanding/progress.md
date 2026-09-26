@@ -33,3 +33,5 @@ Task 3: complete (commit pending, focused tests: 9/9 pass; private Storage reade
 Task 4: complete (commit pending, focused tests: 8/8 pass; repository, fingerprint idempotency, bounded concurrency, failure isolation, authenticated handler, and `verify_jwt = false` function wiring verified)
 
 Task 5: complete (commit pending, focused tests: 14/14 pass; `COLLECT_INSTAGRAM -> ANALYZE_CONTENT -> RUN_INTELLIGENCE`, stable dedupe keys, failure isolation, collector-secret boundary, and bounded request mapping verified)
+
+Task 6: complete (commit pending, focused tests: 42/42 pass; optional app-private current-contract enrichment, caption-only fallback, multimodal feature normalization, bounded signature context, and old intelligence behavior verified)

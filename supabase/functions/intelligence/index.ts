@@ -29,6 +29,7 @@ void supabase;
 const repository = createIntelligenceRepository({
   supabaseUrl,
   serviceRoleKey,
+  contentUnderstandingAnalysisVersion: readEnv("CONTENT_UNDERSTANDING_ANALYSIS_VERSION") ?? "m8-a-v1",
 });
 const classifier = createStoryClassifier({
   config,

@@ -28,6 +28,38 @@ export interface StoryFeatures {
   readonly tokens: string[];
   readonly publishedAt: string;
   readonly dictionaryVersion: string;
+  readonly multimodalContext?: string[];
+}
+
+export interface MultimodalEvidence {
+  readonly slideIndex: number | null;
+  readonly mediaAssetId: string | null;
+}
+
+export interface MultimodalClaim {
+  readonly subject: string;
+  readonly predicate: string;
+  readonly object: string;
+  readonly text: string;
+  readonly origin: string;
+  readonly confidence: number;
+  readonly evidence: readonly MultimodalEvidence[];
+}
+
+export interface MultimodalFeatureInput {
+  readonly entities: readonly string[];
+  readonly topics: readonly string[];
+  readonly sourceNames: readonly string[];
+  readonly importantNumbers: readonly string[];
+  readonly visualSummary: string | null;
+  readonly combinedSummary: string | null;
+  readonly onImageText: readonly { readonly text: string; readonly slideIndex: number | null; readonly confidence: number | null }[];
+  readonly claims: readonly MultimodalClaim[];
+}
+
+export interface RecentContentUnderstanding extends MultimodalFeatureInput {
+  readonly status: "SUCCEEDED" | "PARTIAL";
+  readonly analysisVersion: string;
 }
 
 export interface ClusterSignature {
@@ -39,6 +71,7 @@ export interface ClusterSignature {
   readonly lastPublishedAt: string;
   readonly representativePostIds: string[];
   readonly dictionaryVersion: string;
+  readonly multimodalContext?: string[];
 }
 
 export interface StoryEvaluationInput {

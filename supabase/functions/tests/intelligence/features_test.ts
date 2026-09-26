@@ -75,6 +75,51 @@ Deno.test("normalizes recognized information source aliases", () => {
   assert.deepEqual(features.sources, ["fabrizio_romano"]);
 });
 
+Deno.test("enriches features from multimodal semantics without flattening slide evidence", () => {
+  const features = extractStoryFeatures(
+    "Thoughts? 👀",
+    "2026-09-18T10:00:00Z",
+    dictionary,
+    {
+      entities: ["Jadon Sancho", "Manchester United"],
+      topics: ["injury update", "clubless period"],
+      sourceNames: ["Fabrizio Romano"],
+      importantNumbers: ["3 months"],
+      visualSummary: "Jadon Sancho training away from a club environment",
+      combinedSummary: "The post claims a three-month clubless period.",
+      onImageText: [{ text: "3 months without a club", slideIndex: 2, confidence: 0.96 }],
+      claims: [{
+        subject: "Jadon Sancho",
+        predicate: "without_a_club_for",
+        object: "3 months",
+        text: "The post claims three months without a club.",
+        origin: "carousel_slide",
+        confidence: 0.94,
+        evidence: [{ slideIndex: 2, mediaAssetId: "asset-3" }],
+      }],
+    },
+  );
+
+  assert.ok(features.entities.includes("jadon_sancho"));
+  assert.ok(features.entities.includes("manchester_united"));
+  assert.ok(features.events.includes("injury"));
+  assert.ok(features.events.includes("clubless_period"));
+  assert.ok(features.sources.includes("fabrizio_romano"));
+  assert.ok(features.numbers.includes("3"));
+  assert.ok(features.tokens.includes("jadon"));
+  assert.ok(features.multimodalContext?.includes("The post claims a three-month clubless period."));
+  assert.equal(features.tokens.includes("slide"), false);
+});
+
+Deno.test("omitted multimodal input preserves the caption-only feature shape", () => {
+  const features = extractStoryFeatures(
+    "Bruno injury update",
+    "2026-09-18T10:00:00Z",
+    dictionary,
+  );
+  assert.equal(Object.hasOwn(features, "multimodalContext"), false);
+});
+
 Deno.test("canonicalizes numbers and dates while preserving publication time", () => {
   const features = extractStoryFeatures(
     "Bruno scored 1,000 goals on 18 September 2026 and wore number 8",

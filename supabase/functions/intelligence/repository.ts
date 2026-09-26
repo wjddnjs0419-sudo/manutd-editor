@@ -1,6 +1,7 @@
 import type { StoryClusterEvaluation } from "./ai_classifier.ts";
 import { businessDate } from "../_shared/m6/business_date.ts";
 import type { IntelligenceReadinessRecord } from "../_shared/m6/readiness.ts";
+import type { RecentContentUnderstanding } from "./types.ts";
 
 export type EvaluationRepositoryErrorCode =
   | "DATABASE_CONFIGURATION_ERROR"
@@ -190,6 +191,7 @@ export interface RecentRawPost {
   readonly commentsCount: number | null;
   readonly followersCountAtCollection: number | null;
   readonly createdAt: string;
+  readonly contentUnderstanding?: RecentContentUnderstanding;
   readonly sourceAccount?: {
     readonly id: string;
     readonly username: string;
@@ -270,6 +272,7 @@ export interface IntelligenceRepositoryOptions extends EvaluationRepositoryDeps 
   readonly serviceRoleKey?: string;
   readonly secretKey?: string;
   readonly businessTimezone?: string;
+  readonly contentUnderstandingAnalysisVersion?: string;
 }
 
 function validDate(value: Date | string): Date {
@@ -306,6 +309,54 @@ function numberOrNull(value: unknown): number | null {
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function boundedStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.length <= 160).slice(0, 64)
+    : [];
+}
+
+function decodeOptionalContentUnderstanding(
+  value: unknown,
+  analysisVersion: string,
+): RecentContentUnderstanding | null {
+  if (!record(value) || (value.status !== "SUCCEEDED" && value.status !== "PARTIAL") || value.analysis_version !== analysisVersion) return null;
+  const claims = Array.isArray(value.claims)
+    ? value.claims.filter(record).map((claim) => ({
+      subject: typeof claim.subject === "string" ? claim.subject.slice(0, 160) : "",
+      predicate: typeof claim.predicate === "string" ? claim.predicate.slice(0, 160) : "",
+      object: typeof claim.object === "string" ? claim.object.slice(0, 160) : "",
+      text: typeof claim.text === "string" ? claim.text.slice(0, 500) : "",
+      origin: typeof claim.origin === "string" ? claim.origin : "unknown",
+      confidence: typeof claim.confidence === "number" && Number.isFinite(claim.confidence) ? claim.confidence : 0,
+      evidence: Array.isArray(claim.evidence)
+        ? claim.evidence.filter(record).map((item) => ({
+          slideIndex: Number.isSafeInteger(item.slideIndex) ? item.slideIndex as number : null,
+          mediaAssetId: typeof item.mediaAssetId === "string" ? item.mediaAssetId : null,
+        })).slice(0, 8)
+        : [],
+    })).filter((claim) => claim.text !== "").slice(0, 32)
+    : [];
+  const onImageText = Array.isArray(value.on_image_text)
+    ? value.on_image_text.filter(record).map((item) => ({
+      text: typeof item.text === "string" ? item.text.slice(0, 500) : "",
+      slideIndex: Number.isSafeInteger(item.slideIndex) ? item.slideIndex as number : null,
+      confidence: typeof item.confidence === "number" && Number.isFinite(item.confidence) ? item.confidence : null,
+    })).filter((item) => item.text !== "").slice(0, 64)
+    : [];
+  return {
+    status: value.status,
+    analysisVersion,
+    entities: boundedStringArray(value.entities),
+    topics: boundedStringArray(value.topics),
+    sourceNames: boundedStringArray(value.source_names),
+    importantNumbers: boundedStringArray(value.important_numbers),
+    visualSummary: typeof value.visual_summary === "string" ? value.visual_summary.slice(0, 4_000) : null,
+    combinedSummary: typeof value.combined_summary === "string" ? value.combined_summary.slice(0, 4_000) : null,
+    onImageText,
+    claims,
+  };
 }
 
 function region(value: unknown): IntelligenceRegion {
@@ -503,7 +554,39 @@ export function createIntelligenceRepository(
       // PostgREST's second predicate is added explicitly so future posts cannot leak into a run.
       query.append("published_at", `lte.${at.toISOString()}`);
       const value = await jsonRequest(`/rest/v1/raw_posts?${query}`, { method: "GET" });
-      return arrayResponse(value, 200).map(postFromRow);
+      const posts = arrayResponse(value, 200).map(postFromRow);
+      if (posts.length === 0) return posts;
+
+      const analysisVersion = options.contentUnderstandingAnalysisVersion ?? "m8-a-v1";
+      try {
+        const analysisQuery = new URLSearchParams({
+          select: "raw_post_id,status,analysis_version,visual_summary,combined_summary,entities,topics,on_image_text,important_numbers,source_names,claims",
+          raw_post_id: `in.(${posts.map((post) => post.id).join(",")})`,
+          analysis_version: `eq.${analysisVersion}`,
+          status: "in.(SUCCEEDED,PARTIAL)",
+          order: "created_at.desc",
+        });
+        const analysisValue = await jsonRequest(`/rest/v1/content_understandings?${analysisQuery}`, {
+          method: "GET",
+          headers: {
+            "accept-profile": "app_private",
+            "content-profile": "app_private",
+          },
+        });
+        if (!Array.isArray(analysisValue)) return posts;
+        const byPost = new Map<string, RecentContentUnderstanding>();
+        for (const row of analysisValue) {
+          if (!record(row) || typeof row.raw_post_id !== "string" || byPost.has(row.raw_post_id)) continue;
+          const decoded = decodeOptionalContentUnderstanding(row, analysisVersion);
+          if (decoded !== null) byPost.set(row.raw_post_id, decoded);
+        }
+        return posts.map((post) => {
+          const contentUnderstanding = byPost.get(post.id);
+          return contentUnderstanding ? { ...post, contentUnderstanding } : post;
+        });
+      } catch {
+        return posts;
+      }
     },
 
     async listClusterContexts(): Promise<readonly StoryClusterContext[]> {

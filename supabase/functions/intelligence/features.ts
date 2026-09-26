@@ -1,6 +1,7 @@
 import {
   INTELLIGENCE_DICTIONARY_VERSION,
   type IntelligenceDictionary,
+  type MultimodalFeatureInput,
   type StoryFeatures,
 } from "./types.ts";
 
@@ -172,24 +173,89 @@ function parsePublishedAt(publishedAt: string): string {
   return parsed.toISOString();
 }
 
+function canonicalTerm(value: string): string | null {
+  const normalized = normalizeCaption(value);
+  if (normalized === "") return null;
+  return normalized.replaceAll(" ", "_").slice(0, 160);
+}
+
+function multimodalTerms(
+  terms: readonly string[],
+  normalizedText: string,
+  aliases: Readonly<Record<string, string>>,
+): string[] {
+  const found = lookupAliases(normalizedText, aliases);
+  for (const term of terms) {
+    const canonical = canonicalTerm(term);
+    if (canonical !== null && !found.includes(canonical)) found.push(canonical);
+  }
+  return found;
+}
+
+function mergeUnique(left: readonly string[], right: readonly string[]): string[] {
+  const values = [...left];
+  for (const value of right) if (!values.includes(value)) values.push(value);
+  return values;
+}
+
+function multimodalContext(input: MultimodalFeatureInput): string[] {
+  const values = [input.visualSummary, input.combinedSummary, ...input.topics, ...input.claims.map((claim) => claim.text)]
+    .filter((value): value is string => typeof value === "string" && value.trim() !== "")
+    .map((value) => value.slice(0, 500));
+  return values.slice(0, 16);
+}
+
 export function extractStoryFeatures(
   caption: string,
   publishedAt: string,
   dictionary: IntelligenceDictionary = DEFAULT_INTELLIGENCE_DICTIONARY,
+  multimodal?: MultimodalFeatureInput,
 ): StoryFeatures {
   const normalized = normalizeCaption(caption);
   const dateResult = normalizedDates(normalized);
+  if (!multimodal) {
+    return {
+      entities: lookupAliases(normalized, dictionary.entities),
+      events: lookupAliases(normalized, dictionary.events),
+      sources: lookupAliases(normalized, dictionary.sources),
+      numbers: normalizedNumbers(dateResult.withoutDates),
+      dates: dateResult.dates,
+      normalizedCaption: normalized,
+      tokens: normalized.split(" ").filter(Boolean),
+      publishedAt: parsePublishedAt(publishedAt),
+      dictionaryVersion: dictionary.version,
+    };
+  }
+
+  const semanticText = [
+    multimodal.visualSummary,
+    multimodal.combinedSummary,
+    ...multimodal.topics,
+    ...multimodal.sourceNames,
+    ...multimodal.importantNumbers,
+    ...multimodal.claims.map((claim) => claim.text),
+  ].filter((value): value is string => typeof value === "string" && value.trim() !== "");
+  const normalizedSemantic = normalizeCaption(semanticText.join(" "));
+  const semanticDateResult = normalizedDates(normalizedSemantic);
+  const semanticTokens = normalizedSemantic.split(" ").filter(Boolean);
+  const semanticEntities = multimodalTerms(multimodal.entities, normalizedSemantic, dictionary.entities);
+  const semanticTopics = multimodalTerms(multimodal.topics, normalizedSemantic, dictionary.events);
+  const semanticSources = multimodalTerms(multimodal.sourceNames, normalizedSemantic, dictionary.sources);
+  const semanticNumbers = normalizedNumbers(
+    [...multimodal.importantNumbers, normalizedSemantic].join(" "),
+  );
 
   return {
-    entities: lookupAliases(normalized, dictionary.entities),
-    events: lookupAliases(normalized, dictionary.events),
-    sources: lookupAliases(normalized, dictionary.sources),
-    numbers: normalizedNumbers(dateResult.withoutDates),
-    dates: dateResult.dates,
+    entities: mergeUnique(lookupAliases(normalized, dictionary.entities), semanticEntities),
+    events: mergeUnique(lookupAliases(normalized, dictionary.events), semanticTopics),
+    sources: mergeUnique(lookupAliases(normalized, dictionary.sources), semanticSources),
+    numbers: mergeUnique(normalizedNumbers(dateResult.withoutDates), semanticNumbers),
+    dates: mergeUnique(dateResult.dates, semanticDateResult.dates),
     normalizedCaption: normalized,
-    tokens: normalized.split(" ").filter(Boolean),
+    tokens: mergeUnique(normalized.split(" ").filter(Boolean), semanticTokens),
     publishedAt: parsePublishedAt(publishedAt),
     dictionaryVersion: dictionary.version,
+    multimodalContext: multimodalContext(multimodal),
   };
 }
 

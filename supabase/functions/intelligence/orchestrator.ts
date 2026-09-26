@@ -105,6 +105,7 @@ function signature(value: Record<string, unknown>, fallback: StoryFeatures): Clu
     values("representative_post_ids", []),
   );
   const normalizedCaptions = values("normalizedCaptions", values("normalized_captions", []));
+  const multimodalContext = values("multimodalContext", values("multimodal_context", []));
   return {
     entities: values("entities", fallback.entities),
     events: values("events", fallback.events),
@@ -126,6 +127,7 @@ function signature(value: Record<string, unknown>, fallback: StoryFeatures): Clu
       : typeof value.dictionary_version === "string"
       ? value.dictionary_version
       : fallback.dictionaryVersion,
+    ...(multimodalContext.length > 0 ? { multimodalContext: multimodalContext.slice(0, 16) } : {}),
     ...(normalizedCaptions.length > 0 ? { normalizedCaptions } : {}),
   };
 }
@@ -141,6 +143,9 @@ function signatureJson(value: ClusterSignature): Record<string, unknown> {
     last_published_at: value.lastPublishedAt,
     representative_post_ids: [...value.representativePostIds],
     dictionary_version: value.dictionaryVersion,
+    ...(value.multimodalContext && value.multimodalContext.length > 0
+      ? { multimodal_context: [...value.multimodalContext].slice(0, 16) }
+      : {}),
     ...(context.normalizedCaptions ? { normalized_captions: [...context.normalizedCaptions] } : {}),
   };
 }
@@ -271,7 +276,7 @@ export async function runIntelligence(
 
     for (const post of posts) {
       if (processedPostIds.has(post.id)) continue;
-      const features = extractStoryFeatures(post.caption, post.publishedAt, dictionary);
+      const features = extractStoryFeatures(post.caption, post.publishedAt, dictionary, post.contentUnderstanding);
       const candidates: Array<{
         context: StoryClusterContext;
         features: StoryFeatures;

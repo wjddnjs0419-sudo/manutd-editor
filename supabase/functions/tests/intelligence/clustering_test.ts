@@ -274,6 +274,16 @@ Deno.test("aggregate signature unions entity, event, source, number, and time", 
   assert.deepEqual(merged.representativePostIds, ["post-1", "post-2"]);
 });
 
+Deno.test("aggregate signature keeps bounded multimodal context in input order", () => {
+  const merged = mergeSignature(
+    signature({ multimodalContext: ["first visual summary"] } as Partial<TestSignature>),
+    post({ multimodalContext: ["second visual summary", "carousel claim"] }),
+    "post-2",
+  );
+
+  assert.deepEqual(merged.multimodalContext, ["first visual summary", "second visual summary", "carousel claim"]);
+});
+
 Deno.test("aggregate signature retains context beyond one representative", () => {
   const newPost = post({
     entities: ["manchester_united"],
