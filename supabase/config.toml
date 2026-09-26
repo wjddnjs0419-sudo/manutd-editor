@@ -28,6 +28,9 @@ verify_jwt = false
 [functions.orchestration-worker]
 verify_jwt = false
 
+[functions.analyze-content]
+verify_jwt = false
+
 [api]
 enabled = true
 # Port to use for the API URL.

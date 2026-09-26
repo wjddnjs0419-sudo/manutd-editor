@@ -29,3 +29,5 @@ Task 2: Ruling: the first whole-suite Deno command omitted `--allow-env`/`--allo
 Task 2: complete (commit pending, focused tests: 9/9 pass; whole suite: 281/281 pass)
 
 Task 3: complete (commit pending, focused tests: 9/9 pass; private Storage reader and structured provider verified for image/carousel/thumbnail-safe inputs, bounded media, SHA-256, strict schema, retry, timeout, and redaction)
+
+Task 4: complete (commit pending, focused tests: 8/8 pass; repository, fingerprint idempotency, bounded concurrency, failure isolation, authenticated handler, and `verify_jwt = false` function wiring verified)
