@@ -86,6 +86,23 @@ Deno.test("persists READY brief then returns NOOP for same fingerprint", async (
   assertEquals(repository.briefs[0]?.version, 1);
 });
 
+Deno.test("canonical READY generation does not invoke a projection consumer", async () => {
+  const repository = new MemoryRepository();
+  let projectionCalls = 0;
+  const deps = {
+    ...dependencies(repository),
+    projectReady: async () => {
+      projectionCalls += 1;
+    },
+  } as unknown as GenerationDependencies;
+
+  const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" }, deps);
+
+  assertEquals(result.status, "READY");
+  assertEquals(projectionCalls, 0);
+  assertEquals(repository.briefs[0]?.status, "READY");
+});
+
 Deno.test("changed evidence creates the next revision", async () => {
   const repository = new MemoryRepository();
   const deps = dependencies(repository);

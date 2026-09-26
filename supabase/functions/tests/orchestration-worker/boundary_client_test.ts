@@ -55,11 +55,20 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
     request,
   });
   const types: EditorialJobType[] = [
-    "COLLECT_INSTAGRAM", "RUN_INTELLIGENCE", "GENERATE_PRIORITY", "SYNC_NOTION",
+    "COLLECT_INSTAGRAM", "RUN_INTELLIGENCE", "GENERATE_PRIORITY", "SYNC_NOTION", "PROJECT_NOTION",
     "POLL_SELECTED", "DISPATCH_ALERTS", "FIXTURE_SYNC", "MORNING_BRIEF",
   ];
   for (const jobType of types) {
-    await invoker.invoke(jobType, jobType === "RUN_INTELLIGENCE" ? { as_of: "2026-09-26T00:00:00Z" } : jobType === "FIXTURE_SYNC" ? { mode: "FORCE" } : {});
+    await invoker.invoke(
+      jobType,
+      jobType === "RUN_INTELLIGENCE"
+        ? { as_of: "2026-09-26T00:00:00Z" }
+        : jobType === "FIXTURE_SYNC"
+        ? { mode: "FORCE" }
+        : jobType === "PROJECT_NOTION"
+        ? { creative_brief_id: "brief-1" }
+        : {},
+    );
   }
 
   assert.deepEqual(calls.map((call) => call.url), [
@@ -67,17 +76,19 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
     "https://supabase.test/functions/v1/intelligence",
     "https://supabase.test/functions/v1/creative-generation-priority",
     "https://supabase.test/functions/v1/sync-notion-intelligence",
+    "https://supabase.test/functions/v1/project-notion",
     "https://supabase.test/functions/v1/creative-generation-selected-poll",
     "https://supabase.test/functions/v1/telegram-alerts",
     "https://supabase.test/functions/v1/fixture-sync",
     "https://supabase.test/functions/v1/telegram-morning-brief",
   ]);
   assert.deepEqual(calls.map((call) => call.authorization), [
-    "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret",
+    "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret",
     "Bearer telegram-secret", "Bearer telegram-secret", "Bearer telegram-secret",
   ]);
   assert.deepEqual(calls[1]?.body, { as_of: "2026-09-26T00:00:00Z" });
-  assert.deepEqual(calls[6]?.body, { mode: "FORCE" });
+  assert.deepEqual(calls[4]?.body, { creative_brief_id: "brief-1" });
+  assert.deepEqual(calls[7]?.body, { mode: "FORCE" });
   assert.equal(JSON.stringify(calls).includes("service-role"), false);
 });
 
@@ -91,4 +102,3 @@ Deno.test("boundary client returns status-only failures without retaining upstre
 
   assert.deepEqual(await invoker.invoke("SYNC_NOTION", {}), { status: 502 });
 });
-

@@ -3,6 +3,7 @@ export const EDITORIAL_JOB_TYPES = [
   "RUN_INTELLIGENCE",
   "GENERATE_PRIORITY",
   "SYNC_NOTION",
+  "PROJECT_NOTION",
   "POLL_SELECTED",
   "DISPATCH_ALERTS",
   "FIXTURE_SYNC",
@@ -53,4 +54,3 @@ export interface OrchestrationBatchSummary {
   readonly failed: number;
   readonly downstream_enqueued: number;
 }
-

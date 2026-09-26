@@ -67,6 +67,13 @@ export interface GenerationRepository {
   getDailyIntelligencePageId?(candidateId: string): Promise<string | null>;
 }
 
+export interface ProjectNotionRepository {
+  getCreativeBrief(creativeBriefId: string): Promise<StoredCreativeBrief | null>;
+  getPipelineState(candidateId: string): Promise<ExistingPipelineState | null>;
+  savePipelineState(state: { candidate_id: string; creative_brief_id: string; revision: number; notion_page_id: string; sync_hash: string | null; production_status: ExistingPipelineState["production_status"] }): Promise<void>;
+  getDailyIntelligencePageId(candidateId: string): Promise<string | null>;
+}
+
 interface RestRepositoryOptions {
   readonly supabaseUrl: string;
   readonly serviceKey: string;
@@ -111,7 +118,7 @@ function jobFromRow(row: Record<string, unknown>): GenerationJob {
   };
 }
 
-export function createRestGenerationRepository(options: RestRepositoryOptions): GenerationRepository {
+export function createRestGenerationRepository(options: RestRepositoryOptions): GenerationRepository & ProjectNotionRepository {
   const fetchImpl = options.request ?? fetch;
   const base = `${options.supabaseUrl.replace(/\/$/u, "")}/rest/v1`;
   async function request(path: string, init: RequestInit = {}, schema?: string): Promise<unknown> {
@@ -157,6 +164,10 @@ export function createRestGenerationRepository(options: RestRepositoryOptions): 
     },
     async findReadyBrief(candidateId, inputFingerprint) {
       const row = await getOne(`/creative_briefs?select=*&candidate_id=eq.${encodeURIComponent(candidateId)}&input_fingerprint=eq.${encodeURIComponent(inputFingerprint)}&status=eq.READY&limit=1`);
+      return row ? row as unknown as StoredCreativeBrief : null;
+    },
+    async getCreativeBrief(creativeBriefId) {
+      const row = await getOne(`/creative_briefs?select=*&id=eq.${encodeURIComponent(creativeBriefId)}&status=eq.READY&limit=1`);
       return row ? row as unknown as StoredCreativeBrief : null;
     },
     async getJob(candidateId, inputFingerprint) {

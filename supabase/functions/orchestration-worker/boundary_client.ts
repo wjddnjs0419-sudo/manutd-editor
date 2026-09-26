@@ -12,6 +12,7 @@ const BOUNDARIES: Record<EditorialJobType, { path: string; secret: "collector" |
   RUN_INTELLIGENCE: { path: "intelligence", secret: "collector" },
   GENERATE_PRIORITY: { path: "creative-generation-priority", secret: "collector" },
   SYNC_NOTION: { path: "sync-notion-intelligence", secret: "collector" },
+  PROJECT_NOTION: { path: "project-notion", secret: "collector" },
   POLL_SELECTED: { path: "creative-generation-selected-poll", secret: "collector" },
   DISPATCH_ALERTS: { path: "telegram-alerts", secret: "telegram" },
   FIXTURE_SYNC: { path: "fixture-sync", secret: "telegram" },
@@ -32,6 +33,9 @@ function requestBody(jobType: EditorialJobType, payload: Record<string, unknown>
   }
   if (jobType === "RUN_INTELLIGENCE" || jobType === "SYNC_NOTION") {
     return typeof payload.as_of === "string" ? { as_of: payload.as_of } : {};
+  }
+  if (jobType === "PROJECT_NOTION") {
+    return typeof payload.creative_brief_id === "string" ? { creative_brief_id: payload.creative_brief_id } : {};
   }
   if (jobType === "FIXTURE_SYNC") {
     return { mode: payload.mode === "FORCE" ? "FORCE" : "AUTO" };
@@ -58,4 +62,3 @@ export function createBoundaryInvoker(options: BoundaryClientOptions): BoundaryI
     },
   };
 }
-
