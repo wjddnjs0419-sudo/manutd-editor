@@ -84,6 +84,7 @@ Deno.test("sends caption and ordered image data through strict private Responses
   assert.equal(body.text.format.schema.additionalProperties, false);
   assert.equal(content[0]?.type, "input_text");
   assert.match(String(content[0]?.text), /Thoughts\?/);
+  assert.match(String(content[0]?.text), /slideIndex values must be zero-based/);
   assert.deepEqual(content.slice(1).map((item) => item.image_url), input.media.map((item) => item.dataUrl));
   assert.equal(String(request?.body).includes("storage_path"), false);
   assert.equal(String(request?.body).includes("https://"), false);

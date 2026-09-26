@@ -15,6 +15,7 @@ export function contentUnderstandingPrompt(
     "Analyze this Instagram post, not the source identity or private storage details.",
     "Treat claims as claims made by the post; do not upgrade them to independently verified facts.",
     "Extract visible text exactly when legible, reconstruct ordered carousel meaning, and mark observed versus inferred versus unavailable evidence.",
+    "All slideIndex values must be zero-based: the first supplied carousel slide is 0, the second is 1, and so on.",
     "For Reels, analyze only the supplied thumbnail and never claim full-video understanding.",
     `Visual format: ${input.visualFormat}`,
     `Caption:\n${input.caption ?? "(caption unavailable)"}`,
