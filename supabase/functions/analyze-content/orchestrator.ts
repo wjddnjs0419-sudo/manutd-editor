@@ -34,6 +34,7 @@ export interface ContentAnalysisOptions {
   readonly contract: AnalysisContract;
   readonly batchSize: number;
   readonly concurrency: number;
+  readonly maxSlides?: number;
   readonly asOf?: Date;
   readonly limit?: number;
   readonly readMedia: (asset: AnalysisCandidateAsset) => Promise<PrivateMediaInput>;
@@ -116,11 +117,12 @@ function saveInput(
 async function processCandidate(
   candidate: AnalysisCandidate,
   options: ContentAnalysisOptions,
+  maxSlides: number,
 ): Promise<"skipped" | "succeeded" | "partial" | "unavailable" | "failed"> {
   const now = options.now ?? (() => new Date());
   const media: PrivateMediaInput[] = [];
   let mediaFailure: string | null = null;
-  for (const asset of candidate.assets) {
+  for (const asset of candidate.assets.slice(0, maxSlides)) {
     if (asset.storagePath === null) {
       mediaFailure = "MEDIA_UNAVAILABLE";
       continue;
@@ -173,6 +175,8 @@ async function processCandidate(
 export async function runContentAnalysis(options: ContentAnalysisOptions): Promise<AnalysisBatchSummary> {
   if (!Number.isSafeInteger(options.batchSize) || options.batchSize < 1 || options.batchSize > 100) throw new Error("Analysis batch size is invalid");
   if (!Number.isSafeInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 2) throw new Error("Analysis concurrency is invalid");
+  const maxSlides = options.maxSlides ?? 6;
+  if (!Number.isSafeInteger(maxSlides) || maxSlides < 1 || maxSlides > 10) throw new Error("Analysis slide limit is invalid");
   const candidates = await options.repository.listCandidates(options.asOf ?? (options.now?.() ?? new Date()), options.limit ?? options.batchSize, options.contract);
   const counts = { analyzed: 0, skipped: 0, succeeded: 0, partial: 0, unavailable: 0, failed: 0 };
   let cursor = 0;
@@ -181,7 +185,7 @@ export async function runContentAnalysis(options: ContentAnalysisOptions): Promi
       const index = cursor++;
       const candidate = candidates[index];
       if (!candidate) return;
-      const result = await processCandidate(candidate, options);
+      const result = await processCandidate(candidate, options, maxSlides);
       if (result !== "skipped") counts.analyzed += 1;
       counts[result] += 1;
     }

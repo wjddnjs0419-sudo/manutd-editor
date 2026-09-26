@@ -39,6 +39,7 @@ const handler = createAnalyzeContentHandler({
     contract,
     batchSize: config.batchSize,
     concurrency: config.concurrency,
+    maxSlides: config.maxSlides,
     asOf,
     limit,
     readMedia: (asset) => {

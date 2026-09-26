@@ -98,6 +98,38 @@ Deno.test("analyzes weak captions with visual context, preserves carousel order,
   assert.deepEqual(carouselInput?.mediaIds, candidates[2]?.assets.map((item) => item.mediaAssetId));
 });
 
+Deno.test("bounds oversized carousels to the configured slide limit", async () => {
+  const carousel = candidate(
+    5,
+    "CAROUSEL_ALBUM",
+    null,
+    Array.from({ length: 7 }, (_, index) => asset(index, "CAROUSEL_CHILD")),
+    "Seven slides.",
+  );
+  const saved: Array<Record<string, unknown>> = [];
+  const readIds: string[] = [];
+  let providerMediaIds: string[] = [];
+  const result = await runContentAnalysis({
+    repository: repository([carousel], saved),
+    contract,
+    batchSize: 10,
+    concurrency: 1,
+    maxSlides: 6,
+    readMedia: async (reference) => {
+      readIds.push(reference.mediaAssetId);
+      return mediaInput(reference as ReturnType<typeof asset>);
+    },
+    analyze: async (input) => {
+      providerMediaIds = input.media.map((item) => item.mediaAssetId);
+      return output(input.visualFormat);
+    },
+  });
+
+  assert.deepEqual(result, { status: "COMPLETED", candidates: 1, analyzed: 1, skipped: 0, succeeded: 1, partial: 0, unavailable: 0, failed: 0 });
+  assert.deepEqual(readIds, carousel.assets.slice(0, 6).map((item) => item.mediaAssetId));
+  assert.deepEqual(providerMediaIds, carousel.assets.slice(0, 6).map((item) => item.mediaAssetId));
+});
+
 Deno.test("skips an exact fingerprint, but analyzes a changed caption as a new historical row", async () => {
   const base = candidate(1, "IMAGE", null, [asset(1)], "same");
   const readMedia = async (reference: AnalysisCandidate["assets"][number]) => mediaInput(reference as ReturnType<typeof asset>);
