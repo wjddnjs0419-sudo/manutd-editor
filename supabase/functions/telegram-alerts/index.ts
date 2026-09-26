@@ -1,11 +1,13 @@
 import { dispatchPendingAlerts, type PendingAlert } from "../_shared/m6/alerts.ts";
 import { createTelegramClient } from "../_shared/m6/telegram_client.ts";
 import { createTelegramAlertsHandler } from "./handler.ts";
+import { materializeEditorialJobDeadAlerts } from "./dead_alerts.ts";
 
 const secret = Deno.env.get("TELEGRAM_AGENT_INVOKE_SECRET") ?? "";
 const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceRoleKey = Deno.env.get("SUPABASE_SECRET_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const botToken = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
+const ownerThreadId = Deno.env.get("TELEGRAM_OWNER_THREAD_ID") ?? "";
 const baseUrl = supabaseUrl.replace(/\/$/u, "");
 const headers = { apikey: serviceRoleKey, authorization: `Bearer ${serviceRoleKey}`, accept: "application/json" };
 
@@ -17,6 +19,7 @@ async function rest(path: string, init: RequestInit = {}): Promise<unknown> {
 }
 
 async function runAlerts() {
+  await materializeEditorialJobDeadAlerts({ supabaseUrl, serviceKey: serviceRoleKey, threadId: ownerThreadId });
   const rows = await rest("/rest/v1/telegram_alert_events?select=id,event_type,payload&status=eq.PENDING&order=created_at.asc&limit=50", { headers: { "accept-profile": "app_private" } });
   const pending = Array.isArray(rows) ? rows as PendingAlert[] : [];
   const client = createTelegramClient({ token: botToken });
