@@ -87,7 +87,7 @@ function invoker(
   return { invoke: async (jobType) => handler(jobType) };
 }
 
-Deno.test("successful collection enqueues exactly the intelligence stage", async () => {
+Deno.test("successful collection enqueues exactly the multimodal analysis stage", async () => {
   const queue = queueWith([job("collect-1", "COLLECT_INSTAGRAM")]);
   const worker = createOrchestrationWorker({
     queue,
@@ -100,8 +100,38 @@ Deno.test("successful collection enqueues exactly the intelligence stage", async
   const result = await worker.processBatch();
 
   assert.deepEqual(result, { claimed: 1, succeeded: 1, failed: 0, downstream_enqueued: 1 });
-  assert.deepEqual([...queue.enqueued.keys()], ["pipeline-1:RUN_INTELLIGENCE"]);
+  assert.deepEqual([...queue.enqueued.keys()], ["pipeline-1:ANALYZE_CONTENT"]);
   assert.deepEqual(queue.completed, ["collect-1"]);
+});
+
+Deno.test("successful analysis enqueues exactly one intelligence stage", async () => {
+  const queue = queueWith([job("analysis-1", "ANALYZE_CONTENT")]);
+  const worker = createOrchestrationWorker({
+    queue,
+    invoker: invoker(async () => ({ status: 200, body: { status: "COMPLETED" } })),
+    workerId: "worker-1",
+    now: () => now,
+  });
+
+  const result = await worker.processBatch();
+
+  assert.deepEqual(result, { claimed: 1, succeeded: 1, failed: 0, downstream_enqueued: 1 });
+  assert.deepEqual([...queue.enqueued.keys()], ["pipeline-1:RUN_INTELLIGENCE"]);
+});
+
+Deno.test("failed analysis does not enqueue intelligence", async () => {
+  const queue = queueWith([job("analysis-1", "ANALYZE_CONTENT")]);
+  const worker = createOrchestrationWorker({
+    queue,
+    invoker: invoker(async () => ({ status: 502, body: { error: "provider detail" } })),
+    workerId: "worker-1",
+    now: () => now,
+  });
+
+  const result = await worker.processBatch();
+
+  assert.deepEqual(result, { claimed: 1, succeeded: 0, failed: 1, downstream_enqueued: 0 });
+  assert.equal(queue.enqueued.size, 0);
 });
 
 Deno.test("one failed job does not block an unrelated successful job", async () => {
@@ -204,7 +234,7 @@ Deno.test("repeated stage processing uses one stable downstream dedupe key", asy
   await worker.processBatch();
 
   assert.equal(queue.enqueued.size, 1);
-  assert.equal(queue.enqueued.get("pipeline-1:RUN_INTELLIGENCE"), "downstream-1");
+  assert.equal(queue.enqueued.get("pipeline-1:ANALYZE_CONTENT"), "downstream-1");
 });
 
 Deno.test("repeated fixture processing uses one stable alert dedupe key", async () => {

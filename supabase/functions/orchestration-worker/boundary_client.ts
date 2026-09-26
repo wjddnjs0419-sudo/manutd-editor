@@ -9,6 +9,7 @@ interface BoundaryClientOptions {
 
 const BOUNDARIES: Record<EditorialJobType, { path: string; secret: "collector" | "telegram" }> = {
   COLLECT_INSTAGRAM: { path: "collect-instagram", secret: "collector" },
+  ANALYZE_CONTENT: { path: "analyze-content", secret: "collector" },
   RUN_INTELLIGENCE: { path: "intelligence", secret: "collector" },
   GENERATE_PRIORITY: { path: "creative-generation-priority", secret: "collector" },
   SYNC_NOTION: { path: "sync-notion-intelligence", secret: "collector" },
@@ -30,6 +31,12 @@ function requestBody(jobType: EditorialJobType, payload: Record<string, unknown>
     return Array.isArray(payload.source_account_ids)
       ? { source_account_ids: payload.source_account_ids }
       : {};
+  }
+  if (jobType === "ANALYZE_CONTENT") {
+    return {
+      ...(typeof payload.as_of === "string" ? { as_of: payload.as_of } : {}),
+      ...(typeof payload.limit === "number" && Number.isSafeInteger(payload.limit) ? { limit: payload.limit } : {}),
+    };
   }
   if (jobType === "RUN_INTELLIGENCE" || jobType === "SYNC_NOTION") {
     return typeof payload.as_of === "string" ? { as_of: payload.as_of } : {};

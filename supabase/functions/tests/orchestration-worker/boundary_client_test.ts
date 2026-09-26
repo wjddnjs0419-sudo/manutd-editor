@@ -55,13 +55,13 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
     request,
   });
   const types: EditorialJobType[] = [
-    "COLLECT_INSTAGRAM", "RUN_INTELLIGENCE", "GENERATE_PRIORITY", "SYNC_NOTION", "PROJECT_NOTION",
+    "COLLECT_INSTAGRAM", "ANALYZE_CONTENT", "RUN_INTELLIGENCE", "GENERATE_PRIORITY", "SYNC_NOTION", "PROJECT_NOTION",
     "POLL_SELECTED", "DISPATCH_ALERTS", "FIXTURE_SYNC", "MORNING_BRIEF",
   ];
   for (const jobType of types) {
     await invoker.invoke(
       jobType,
-      jobType === "RUN_INTELLIGENCE"
+      jobType === "RUN_INTELLIGENCE" || jobType === "ANALYZE_CONTENT"
         ? { as_of: "2026-09-26T00:00:00Z" }
         : jobType === "FIXTURE_SYNC"
         ? { mode: "FORCE" }
@@ -73,6 +73,7 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
 
   assert.deepEqual(calls.map((call) => call.url), [
     "https://supabase.test/functions/v1/collect-instagram",
+    "https://supabase.test/functions/v1/analyze-content",
     "https://supabase.test/functions/v1/intelligence",
     "https://supabase.test/functions/v1/creative-generation-priority",
     "https://supabase.test/functions/v1/sync-notion-intelligence",
@@ -83,12 +84,13 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
     "https://supabase.test/functions/v1/telegram-morning-brief",
   ]);
   assert.deepEqual(calls.map((call) => call.authorization), [
-    "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret",
+    "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret",
     "Bearer telegram-secret", "Bearer telegram-secret", "Bearer telegram-secret",
   ]);
   assert.deepEqual(calls[1]?.body, { as_of: "2026-09-26T00:00:00Z" });
-  assert.deepEqual(calls[4]?.body, { creative_brief_id: "brief-1" });
-  assert.deepEqual(calls[7]?.body, { mode: "FORCE" });
+  assert.deepEqual(calls[2]?.body, { as_of: "2026-09-26T00:00:00Z" });
+  assert.deepEqual(calls[5]?.body, { creative_brief_id: "brief-1" });
+  assert.deepEqual(calls[8]?.body, { mode: "FORCE" });
   assert.equal(JSON.stringify(calls).includes("service-role"), false);
 });
 
