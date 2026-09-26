@@ -180,8 +180,6 @@ export function createAnalysisRepository(options: AnalysisRepositoryOptions): An
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const headers = {
     apikey: serviceRoleKey,
-    "accept-profile": "app_private",
-    "content-profile": "app_private",
   };
 
   async function request(path: string, init: RequestInit = {}): Promise<Response> {
@@ -227,7 +225,13 @@ export function createAnalysisRepository(options: AnalysisRepositoryOptions): An
         analysis_version: `eq.${contract.analysisVersion}`,
         raw_post_id: `in.(${ids})`,
       });
-      const existingResponse = await request(`/rest/v1/content_understandings?${existingQuery.toString()}`, { method: "GET" });
+      const existingResponse = await request(`/rest/v1/content_understandings?${existingQuery.toString()}`, {
+        method: "GET",
+        headers: {
+          "accept-profile": "app_private",
+          "content-profile": "app_private",
+        },
+      });
       const existing = await parseJson(existingResponse);
       if (!Array.isArray(existing)) throw new AnalysisRepositoryError("DATABASE_INVALID_RESPONSE", existingResponse.status);
       const fingerprints = new Map<string, string[]>();
@@ -257,6 +261,8 @@ export function createAnalysisRepository(options: AnalysisRepositoryOptions): An
           method: "POST",
           headers: {
             "content-type": "application/json",
+            "content-profile": "app_private",
+            "accept-profile": "app_private",
             prefer: "resolution=merge-duplicates,return=minimal",
           },
           body: JSON.stringify(row(input)),

@@ -68,8 +68,12 @@ Deno.test("lists bounded candidates with ordered private asset metadata only", a
   assert.deepEqual(candidates[0]?.assets.map((asset) => asset.carouselIndex), [0, 1]);
   assert.equal(Object.hasOwn(candidates[0]?.assets[0] ?? {}, "originalMediaUrl"), false);
   assert.deepEqual(candidates[0]?.existingFingerprints, ["old-fingerprint"]);
-  assert.equal(requests[0]?.init.headers && (requests[0].init.headers as Record<string, string>)["accept-profile"], "app_private");
-  assert.equal(requests[1]?.init.headers && (requests[1].init.headers as Record<string, string>)["content-profile"], "app_private");
+  const rawPostHeaders = requests[0]?.init.headers as Record<string, string> | undefined;
+  const analysisHeaders = requests[1]?.init.headers as Record<string, string> | undefined;
+  assert.equal(rawPostHeaders?.["accept-profile"], undefined);
+  assert.equal(rawPostHeaders?.["content-profile"], undefined);
+  assert.equal(analysisHeaders?.["accept-profile"], "app_private");
+  assert.equal(analysisHeaders?.["content-profile"], "app_private");
   assert.equal(requests[0]?.url.includes("original_media_url"), false);
 });
 
