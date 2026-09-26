@@ -11,6 +11,13 @@ if [[ -f "$env_file" ]]; then
   set +a
 fi
 
+if [[ -n "${SUPABASE_URL:-}" ]]; then
+  case "$SUPABASE_URL" in
+    http://127.0.0.1:*|http://localhost:*) ;;
+    *) unset SUPABASE_URL SUPABASE_SECRET_KEY ;;
+  esac
+fi
+
 if [[ -z "${SUPABASE_SECRET_KEY:-}" ]]; then
   eval "$(supabase status -o env)"
   SUPABASE_SECRET_KEY="${SECRET_KEY:-${SERVICE_ROLE_KEY:-}}"
