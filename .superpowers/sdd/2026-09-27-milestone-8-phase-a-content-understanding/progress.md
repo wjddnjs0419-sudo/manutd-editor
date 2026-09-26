@@ -27,3 +27,5 @@ Task 1: complete (commit 3e38d85, tests: `supabase test db --local supabase/test
 Task 2: Ruling: the first whole-suite Deno command omitted `--allow-env`/`--allow-net`, so two pre-existing integration tests failed before execution; reran in the repository's Docker harness with `supabase/functions/.env.local` and both permissions — cost if wrong: the initial result would misclassify a harness invocation error as a regression.
 
 Task 2: complete (commit pending, focused tests: 9/9 pass; whole suite: 281/281 pass)
+
+Task 3: complete (commit pending, focused tests: 9/9 pass; private Storage reader and structured provider verified for image/carousel/thumbnail-safe inputs, bounded media, SHA-256, strict schema, retry, timeout, and redaction)

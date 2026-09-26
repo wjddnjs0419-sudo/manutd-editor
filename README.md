@@ -2,7 +2,7 @@
 
 맨체스터 유나이티드 관련 Instagram 콘텐츠를 수집·분석하고, 객관적인 우선순위 점수와 실행 가능한 콘텐츠 브리프를 만드는 시스템입니다.
 
-현재 구현 범위는 **Milestone 1–7**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. 이어서 intelligence Edge Function이 최근 게시물을 story cluster로 묶고 결정론적인 Priority Score·Data Confidence·FIRST_MOVER/MUST_COVER 결과를 생성합니다. M5는 M4 canonical evidence snapshot만 사용해 deterministic-first content mode를 분류하고, OpenAI Responses structured output을 검증한 뒤 append-only Creative Brief revision을 저장합니다. Notion은 Supabase canonical state의 독립 projection consumer이며, 사람 소유 편집 필드는 보존합니다.
+현재 구현 범위는 **Milestone 1–8 Phase A**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. 이어서 intelligence Edge Function이 최근 게시물을 story cluster로 묶고 결정론적인 Priority Score·Data Confidence·FIRST_MOVER/MUST_COVER 결과를 생성합니다. M5는 M4 canonical evidence snapshot만 사용해 deterministic-first content mode를 분류하고, OpenAI Responses structured output을 검증한 뒤 append-only Creative Brief revision을 저장합니다. M8 Phase A는 private Instagram 이미지·캐러셀·Reel thumbnail을 server-only strict multimodal analysis로 보강하며, 원본·private media·M4 deterministic scoring은 유지합니다. Notion은 Supabase canonical state의 독립 projection consumer이며, 사람 소유 편집 필드는 보존합니다.
 
 ## Milestone 7 final architecture
 
@@ -106,6 +106,31 @@ media cache는 `instagram-analysis` private bucket만 사용합니다. 원본 �
 ### 환경 변수
 
 실제 값은 로컬의 무시된 env 파일이나 Supabase secrets에만 둡니다.
+
+### Milestone 8 Phase A multimodal content understanding
+
+M8 Phase A는 `analyze-content` Edge Function이 최근 `raw_posts`와 이미 저장된
+`instagram-analysis` private Storage asset을 읽어 `app_private.content_understandings`에
+versioned 결과를 저장하는 경로입니다. `IMAGE`는 단일 이미지, `CAROUSEL_ALBUM`은
+순서가 보존된 carousel child, `VIDEO` + `REELS`는 thumbnail-only 입력만 사용합니다.
+Storage는 service-role `download`만 사용하며 signed/public URL을 분석 provider에
+전달하지 않습니다. 결과의 claim은 게시물이 주장한 내용이며, `OBSERVED`, `INFERRED`,
+`UNAVAILABLE` evidence state를 함께 보존합니다.
+
+OpenAI Responses 호출은 `store: false`, strict JSON Schema, caption 및 in-memory
+image data URI를 사용합니다. 모델·prompt version·timeout·media limits·batch/concurrency는
+다음 환경 변수로 설정하며, 실제 secret 값은 커밋하지 않습니다.
+
+```text
+CONTENT_UNDERSTANDING_ANALYSIS_VERSION=m8-a-v1
+CONTENT_UNDERSTANDING_MODEL=gpt-5.6-terra
+CONTENT_UNDERSTANDING_PROMPT_VERSION=prompt-v1
+CONTENT_UNDERSTANDING_TIMEOUT_MS=30000
+CONTENT_UNDERSTANDING_MAX_SLIDES=6
+CONTENT_UNDERSTANDING_MAX_BYTES=20971520
+CONTENT_UNDERSTANDING_BATCH_SIZE=20
+CONTENT_UNDERSTANDING_CONCURRENCY=2
+```
 
 ## Milestone 6 Telegram Editorial Agent
 

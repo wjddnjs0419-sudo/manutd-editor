@@ -65,7 +65,7 @@ export const goldenAnalysisOutput: ContentUnderstandingOutput = {
       text: "The post claims Sancho is training at Flixton FC facilities.",
       origin: "carousel_slide",
       confidence: 0.91,
-      evidence: [{ slideIndex: 3, mediaAssetId: null }],
+      evidence: [{ slideIndex: 2, mediaAssetId: null }],
     },
   ],
   contentType: "PLAYER_STATUS",
