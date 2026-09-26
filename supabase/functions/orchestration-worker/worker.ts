@@ -12,6 +12,7 @@ const NEXT_STAGE: Partial<Record<EditorialJobType, EditorialJobType>> = {
   GENERATE_PRIORITY: "SYNC_NOTION",
   SYNC_NOTION: "POLL_SELECTED",
   POLL_SELECTED: "DISPATCH_ALERTS",
+  FIXTURE_SYNC: "DISPATCH_ALERTS",
 };
 
 export interface OrchestrationWorkerOptions {
@@ -138,4 +139,3 @@ export function createOrchestrationWorker(options: OrchestrationWorkerOptions): 
     },
   };
 }
-

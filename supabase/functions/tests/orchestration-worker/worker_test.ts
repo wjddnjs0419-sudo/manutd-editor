@@ -121,9 +121,42 @@ Deno.test("one failed job does not block an unrelated successful job", async () 
 
   const result = await worker.processBatch();
 
-  assert.deepEqual(result, { claimed: 2, succeeded: 1, failed: 1, downstream_enqueued: 0 });
+  assert.deepEqual(result, { claimed: 2, succeeded: 1, failed: 1, downstream_enqueued: 1 });
   assert.deepEqual(queue.completed, ["good"]);
   assert.deepEqual(queue.failed, [{ id: "bad", category: "WORKER_FAILURE", message: "SYNC_NOTION invocation failed" }]);
+  assert.deepEqual([...queue.enqueued.keys()], ["fixture-1:DISPATCH_ALERTS"]);
+});
+
+Deno.test("successful fixture sync enqueues one stable alert stage", async () => {
+  const queue = queueWith([job("fixture-1", "FIXTURE_SYNC")]);
+  const worker = createOrchestrationWorker({
+    queue,
+    invoker: invoker(async () => ({ status: 200, body: { status: "SYNCED" } })),
+    workerId: "worker-1",
+    now: () => now,
+  });
+
+  const result = await worker.processBatch();
+
+  assert.deepEqual(result, { claimed: 1, succeeded: 1, failed: 0, downstream_enqueued: 1 });
+  assert.deepEqual([...queue.enqueued.keys()], ["pipeline-1:DISPATCH_ALERTS"]);
+  assert.deepEqual(queue.completed, ["fixture-1"]);
+});
+
+Deno.test("fixture failure does not enqueue Telegram alerts", async () => {
+  const queue = queueWith([job("fixture-1", "FIXTURE_SYNC")]);
+  const worker = createOrchestrationWorker({
+    queue,
+    invoker: invoker(async () => ({ status: 502, body: { error: "upstream details" } })),
+    workerId: "worker-1",
+    now: () => now,
+  });
+
+  const result = await worker.processBatch();
+
+  assert.deepEqual(result, { claimed: 1, succeeded: 0, failed: 1, downstream_enqueued: 0 });
+  assert.equal(queue.enqueued.size, 0);
+  assert.deepEqual(queue.failed, [{ id: "fixture-1", category: "DOWNSTREAM_HTTP_5XX", message: "FIXTURE_SYNC returned HTTP 502" }]);
 });
 
 Deno.test("intelligence already_running is safe but does not start priority generation", async () => {
@@ -172,4 +205,36 @@ Deno.test("repeated stage processing uses one stable downstream dedupe key", asy
 
   assert.equal(queue.enqueued.size, 1);
   assert.equal(queue.enqueued.get("pipeline-1:RUN_INTELLIGENCE"), "downstream-1");
+});
+
+Deno.test("repeated fixture processing uses one stable alert dedupe key", async () => {
+  const queue = queueWith([job("fixture-1", "FIXTURE_SYNC")], { repeatClaims: true });
+  const worker = createOrchestrationWorker({
+    queue,
+    invoker: invoker(async () => ({ status: 200 })),
+    workerId: "worker-1",
+    now: () => now,
+  });
+
+  await worker.processBatch();
+  await worker.processBatch();
+
+  assert.equal(queue.enqueued.size, 1);
+  assert.equal(queue.enqueued.get("pipeline-1:DISPATCH_ALERTS"), "downstream-1");
+});
+
+Deno.test("morning brief remains a terminal worker stage", async () => {
+  const queue = queueWith([job("brief-1", "MORNING_BRIEF")]);
+  const worker = createOrchestrationWorker({
+    queue,
+    invoker: invoker(async () => ({ status: 200, body: { status: "ALREADY_SENT" } })),
+    workerId: "worker-1",
+    now: () => now,
+  });
+
+  const result = await worker.processBatch();
+
+  assert.deepEqual(result, { claimed: 1, succeeded: 1, failed: 0, downstream_enqueued: 0 });
+  assert.equal(queue.enqueued.size, 0);
+  assert.deepEqual(queue.completed, ["brief-1"]);
 });
