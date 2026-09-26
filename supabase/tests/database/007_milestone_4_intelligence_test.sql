@@ -52,7 +52,9 @@ returns setof text
 language plpgsql
 as $m4$
 declare
-  v_run_at timestamptz := date_trunc('minute', clock_timestamp());
+  -- Keep bucket-boundary fixtures deterministic; using clock_timestamp() makes
+  -- the -59 and -30 minute rows collide for some current-minute values.
+  v_run_at timestamptz := '2026-09-27T16:00:00Z'::timestamptz;
   v_config uuid;
   v_global uuid;
   v_kr uuid;
