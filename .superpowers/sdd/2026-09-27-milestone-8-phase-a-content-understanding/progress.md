@@ -36,4 +36,6 @@ Task 5: complete (commit c46f2f3, focused tests: 14/14 pass; `COLLECT_INSTAGRAM 
 
 Task 6: complete (commit e07cebf, focused tests: 42/42 pass; optional app-private current-contract enrichment, caption-only fallback, multimodal feature normalization, bounded signature context, and old intelligence behavior verified)
 
-Task 7: complete (commit pending, local smoke: database 410/410, Deno integration/feature smoke 90/90, architecture/workflow validation 20/20, full Edge Function suite 304/304; no external provider or production URL used)
+Task 7: complete (commit 7aca779, local smoke: database 410/410, Deno integration/feature smoke 90/90, architecture/workflow validation 20/20, full Edge Function suite 304/304; no external provider or production URL used)
+
+Production rollout: complete on linked Supabase project `byymtttpwmllqvggnddm` (`Manutd editor`, `ap-northeast-2`); `supabase db push --linked --yes` applied `20260927170000_milestone_8_phase_a_content_understanding.sql`, and `analyze-content`, `orchestration-worker`, and `intelligence` deployed successfully. Post-deploy checks: local/remote migration history aligned; all three functions ACTIVE; unauthenticated POSTs returned HTTP 401; `app_private.content_understandings` exists with `anon` and `authenticated` schema/table access both false. No external provider call or Telegram webhook registration performed.
