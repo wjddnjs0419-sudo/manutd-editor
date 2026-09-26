@@ -223,4 +223,14 @@
 - Database lint: no schema errors in `public` or `app_private`.
 - Historical n8n validator: 18 tests passed; architecture contract: 2 tests passed.
 - Stabilized the pre-existing M4 intelligence fixture clock so 30-minute metric buckets cannot collide at particular wall-clock minutes; the focused regression test passed all 45 assertions and the full database suite remained green.
-- `git diff --check` and repository secret scan passed. No deployment, webhook registration, push, or merge was performed.
+- `git diff --check` and repository secret scan passed before the approved production rollout.
+
+## Post-implementation production rollout
+
+After explicit user approval, the linked Supabase project was rolled out:
+
+- Applied the Phase 1, Phase 2, Phase 3 migrations plus `20260926164658_milestone_7_worker_schedule.sql`.
+- Deployed `orchestration-worker`, `telegram-agent`, `creative-generation`, `project-notion`, and `telegram-alerts`.
+- Configured the worker invocation secret, Telegram webhook secret, and Vault references without printing secret values.
+- Registered the direct Telegram webhook successfully.
+- Verified the worker Cron job is active, runs every minute, and produces HTTP 200 `pg_net` responses.

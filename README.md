@@ -158,6 +158,13 @@ fixture success enqueues `DISPATCH_ALERTS`, while the existing
 `businessDate()`, forced fixture refresh, snapshots, ALREADY_SENT behavior, and
 Telegram persistence.
 
+The worker is polled every minute by the separate
+`m7-orchestration-worker-every-minute` Supabase Cron job. It invokes the
+`orchestration-worker` Edge Function through `pg_net`; the project URL and
+`ORCHESTRATION_WORKER_INVOKE_SECRET` are stored in Supabase Vault rather than
+embedded in migration SQL. This poller is required for the queue to remain
+self-consuming when n8n is disabled.
+
 Telegram can POST directly to:
 
 ```text
