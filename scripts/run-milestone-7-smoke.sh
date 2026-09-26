@@ -57,7 +57,8 @@ docker run --rm \
   denoland/deno:2.1.4 \
   deno test --allow-env --allow-net \
     tests/integration/milestone_7_orchestration_integration_test.ts \
-    tests/integration/milestone_7_phase_2_parity_test.ts
+    tests/integration/milestone_7_phase_2_parity_test.ts \
+    tests/integration/milestone_7_phase_3_parity_test.ts
 
 if rg -n --hidden --glob '!.git/**' --glob '!.superpowers/**' --glob '!*.md' --glob '!*.json' --glob '!*.env*' \
   --glob '!scripts/run-milestone-7-smoke.sh' \
@@ -67,4 +68,4 @@ if rg -n --hidden --glob '!.git/**' --glob '!.superpowers/**' --glob '!*.md' --g
   exit 1
 fi
 
-echo "Milestone 7 Phase 2 local smoke passed: Cron roots, queue/worker chains, direct Telegram webhook, and n8n-free parity verified."
+echo "Milestone 7 local smoke passed: Cron roots, queue/worker chains, Notion isolation, observability, direct Telegram webhook, and n8n-free parity verified."
