@@ -31,6 +31,15 @@ verify_jwt = false
 [functions.analyze-content]
 verify_jwt = false
 
+[functions.source-discovery]
+verify_jwt = false
+
+[functions.ground-claims]
+verify_jwt = false
+
+[functions.rank-editorial]
+verify_jwt = false
+
 [api]
 enabled = true
 # Port to use for the API URL.
