@@ -25,6 +25,16 @@ Deno.test("parseFeedDocument extracts bounded RSS observations", async () => {
   assert.equal(result[0].editorialRole, "FACT_INDEPENDENT");
 });
 
+Deno.test("parseFeedDocument limits broad feeds to configured Manchester United terms", async () => {
+  const result = await parseFeedDocument(`<rss><channel>
+    <item><guid>mu-1</guid><title>Manchester United team news</title><link>https://example.test/mu</link></item>
+    <item><guid>other-1</guid><title>Another club makes a signing</title><link>https://example.test/other</link></item>
+  </channel></rss>`, { ...feed, includeTerms: ["Manchester United", "Old Trafford"] }, { maxItems: 5, maxExcerptChars: 200 });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].externalId, "mu-1");
+});
+
 Deno.test("parseFeedDocument handles Atom entries and bounds text", async () => {
   const result = await parseFeedDocument(`<feed>
     <entry><id>tag:example.test,2026:2</id><title>Atom item</title>
@@ -35,6 +45,20 @@ Deno.test("parseFeedDocument handles Atom entries and bounds text", async () => 
   assert.equal(result.length, 1);
   assert.equal(result[0].externalId, "tag:example.test,2026:2");
   assert.equal(result[0].excerpt?.length, 20);
+});
+
+Deno.test("parseFeedDocument extracts bounded official Manchester United HTML cards", async () => {
+  const result = await parseFeedDocument(`<main>
+    <a data-testid="article-card__floating-link" href="/en/news/team-news"><span>Team news: United v City</span></a>
+    <a data-testid="article-card__floating-link" href="/en/news/team-news"><span>Team news: United v City</span></a>
+    <a data-testid="article-card__floating-link" href="/en/news/press-conference"><span>Carrick: We are ready</span></a>
+  </main>`, { ...feed, canonicalName: "Manchester United", editorialRole: "FACT_PRIMARY", entityType: "CLUB", url: "https://www.manutd.com/en/news/category/news", format: "HTML" }, { maxItems: 5, maxExcerptChars: 200 });
+
+  assert.equal(result.length, 2);
+  assert.equal(result[0].title, "Team news: United v City");
+  assert.equal(result[0].canonicalUrl, "https://www.manutd.com/en/news/team-news");
+  assert.equal(result[0].metadata.format, "HTML");
+  assert.equal(result[0].editorialRole, "FACT_PRIMARY");
 });
 
 Deno.test("parseFeedDocument rejects unsafe feed URLs and malformed entries", async () => {
