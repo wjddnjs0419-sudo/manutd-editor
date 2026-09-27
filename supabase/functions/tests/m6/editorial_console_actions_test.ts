@@ -113,6 +113,13 @@ Deno.test("card generation without a selected story never invokes the canonical 
   assertEquals(result.event.action, "CREATIVE_GENERATION_FAILED");
 });
 
+Deno.test("natural-language generation can reuse the story currently open in the console", async () => {
+  let calls = 0;
+  const result = await dispatchEditorialConsoleAction({ type: "GENERATE_CAROUSEL", token: null }, state({ view: "DETAIL", story_id: story.id }), dependencies({ generateCarousel: async (value) => { calls += 1; assertEquals(value.id, story.id); return draft; } }));
+  assertEquals(calls, 1);
+  assert(result.view.text.includes("📱 카드뉴스 초안"));
+});
+
 Deno.test("card generation blocks candidates without verified public evidence", async () => {
   let calls = 0;
   const unsupported = { ...story, news_eligible: false, information_gap_score: 0, hook_strength: 0, shareability: 0, source_confidence: 0, evidence: [] };
