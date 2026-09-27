@@ -57,6 +57,10 @@ Deno.test("uses Responses API strict JSON Schema without web search", async () =
   assertEquals(body.tools, undefined);
   assertEquals(body.store, false);
   assertEquals(request?.headers instanceof Headers ? request.headers.get("authorization") : undefined, undefined);
+  const prompt = ((body.input as Array<{ content?: Array<{ text?: string }> }>)[0]?.content?.[0]?.text) ?? "";
+  assert(prompt.includes("manutd_editor"));
+  assert(prompt.includes("HOOK"));
+  assert(!prompt.includes("현재 확보된 자료"));
 });
 
 Deno.test("classifies through the configured classifier model and parses structured output", async () => {

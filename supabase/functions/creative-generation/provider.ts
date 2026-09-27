@@ -61,6 +61,8 @@ const CREATIVE_SCHEMA = {
   additionalProperties: false,
   properties: {
     schema_version: { type: "string", enum: ["1.0"] },
+    style_profile: { type: "string", enum: ["manutd_editor"] },
+    style_version: { type: "string", enum: ["manutd-editor-v1"] },
     content_mode: { type: "string", enum: ["NEWS_UPDATE", "ANALYSIS_CONTEXT", "MATCH_CONTENT"] },
     match_phase: { type: ["string", "null"], enum: ["PRE_MATCH", "LIVE", "POST_MATCH", null] },
     generation_quality: { type: "string", enum: ["FULL", "PARTIAL"] },
@@ -82,9 +84,13 @@ const CREATIVE_SCHEMA = {
         additionalProperties: false,
         properties: {
           slide_number: { type: "integer" },
+          index: { type: "integer" },
           purpose: { type: "string" },
+          role: { type: "string", enum: ["HOOK", "CONTEXT", "KEY_FACT", "IMPLICATION"] },
           headline: { type: "string" },
+          highlight: { type: ["string", "null"] },
           body: { type: "string" },
+          closing_line: { type: ["string", "null"] },
           claims: {
             type: "array",
             items: {
@@ -112,7 +118,7 @@ const CREATIVE_SCHEMA = {
             required: ["subject", "image_type", "layout_intent", "stat_emphasis", "text_hierarchy"],
           },
         },
-        required: ["slide_number", "purpose", "headline", "body", "claims", "visual_direction"],
+        required: ["slide_number", "index", "purpose", "role", "headline", "highlight", "body", "closing_line", "claims", "visual_direction"],
       },
     },
     caption: {
@@ -130,8 +136,19 @@ const CREATIVE_SCHEMA = {
         required: ["evidence_id", "label"],
       },
     },
+    editor_warning: { type: ["string", "null"] },
+    internal_grounding: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        evidence_ids: { type: "array", items: { type: "string" } },
+        source_caveats: { type: "array", items: { type: "string" } },
+        unsupported_claims: { type: "array", items: { type: "string" } },
+      },
+      required: ["evidence_ids", "source_caveats", "unsupported_claims"],
+    },
   },
-  required: ["schema_version", "content_mode", "match_phase", "generation_quality", "angle", "key_takeaway", "hooks", "slides", "caption", "sources"],
+  required: ["schema_version", "style_profile", "style_version", "content_mode", "match_phase", "generation_quality", "angle", "key_takeaway", "hooks", "slides", "caption", "sources", "editor_warning", "internal_grounding"],
 } as const;
 
 function outputText(body: unknown): string {

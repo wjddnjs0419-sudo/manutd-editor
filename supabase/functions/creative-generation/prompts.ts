@@ -1,4 +1,5 @@
 import type { ContentMode, MatchPhase } from "./types.ts";
+import { MANUTD_EDITOR_STYLE_INSTRUCTIONS } from "../_shared/editorial-style/manutd_editor.ts";
 
 const modePrompts: Record<ContentMode, string> = {
   NEWS_UPDATE: "Write the most factual, concise Korean fan-media brief. Separate confirmed from reported information, avoid hype, and do not fill missing facts.",
@@ -17,10 +18,11 @@ export function classifierPrompt(text: string): string {
 export function generationPrompt(mode: ContentMode, phase: MatchPhase | null, evidence: unknown): string {
   return [
     "You are a grounded Creative Director, not a reporter.",
+    MANUTD_EDITOR_STYLE_INSTRUCTIONS,
     modePrompts[mode],
     `Content mode: ${mode}`,
     `Match phase: ${phase ?? "none"}`,
-    "Use only this frozen internal evidence. Every claim must cite an evidence_id from it.",
+    "Use only this frozen internal evidence. Every claim must cite an evidence_id from it. Do not import facts from examples or general football knowledge.",
     `Frozen evidence:\n${JSON.stringify(evidence)}`,
   ].join("\n\n");
 }

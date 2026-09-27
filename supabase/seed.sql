@@ -295,7 +295,7 @@ insert into public.creative_generation_configs (
 )
 values (
   'm5-v1',
-  'Grounded Instagram Carousel generation configuration for Milestone 5.',
+  'Grounded Instagram Carousel generation configuration for Milestone 5 and the ManUtd Editor M8 console.',
   $json$
   {
     "version": "classifier-v1",
@@ -333,11 +333,14 @@ values (
   $json$::jsonb,
   $json$
   {
-    "min_slides": 4,
-    "max_slides": 7,
+    "min_slides": 3,
+    "max_slides": 4,
     "hook_count": 3,
     "max_repair_attempts": 1,
-    "require_visual_direction": true
+    "require_visual_direction": true,
+    "style_profile": "manutd_editor",
+    "style_version": "manutd-editor-v1",
+    "enable_style_validator": true
   }
   $json$::jsonb,
   true,

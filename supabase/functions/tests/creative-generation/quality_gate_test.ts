@@ -97,3 +97,43 @@ Deno.test("failed repair never triggers a second repair", async () => {
   assertEquals(result.ok, false);
   assertEquals(result.repair_attempted, true);
 });
+
+const styleConfig: QualityGateConfig = {
+  min_slides: 3,
+  max_slides: 4,
+  hook_count: 3,
+  max_repair_attempts: 1,
+  require_visual_direction: true,
+  style_profile: "manutd_editor",
+  style_version: "manutd-editor-v1",
+  enable_style_validator: true,
+};
+
+function styleValid(overrides: Partial<CreativeBriefOutput> = {}): CreativeBriefOutput {
+  return {
+    ...valid(),
+    style_profile: "manutd_editor",
+    style_version: "manutd-editor-v1",
+    editor_warning: null,
+    internal_grounding: { evidence_ids: ["source:1"], source_caveats: [], unsupported_claims: [] },
+    slides: [
+      { ...valid().slides[0]!, slide_number: 1, purpose: "HOOK", index: 1, role: "HOOK", headline: "3개월째 소속팀 없는 산초", highlight: "10부 리그에서 개인 훈련 중", body: "", closing_line: null },
+      { ...valid().slides[1]!, slide_number: 2, purpose: "CONTEXT", index: 2, role: "CONTEXT", headline: "자유 계약만 3개월째", highlight: null, body: "맨유와 계약이 끝난 뒤\n새 팀을 찾지 못하고 있다.", closing_line: null },
+      { ...valid().slides[2]!, slide_number: 3, purpose: "KEY_FACT", index: 3, role: "KEY_FACT", headline: "10부리그 훈련장", highlight: "Flixton FC", body: "현재는 몸 상태를 유지하는 중이다.", closing_line: null },
+    ],
+    caption: { body: "산초의 다음 행선지는?", cta: "여러분의 생각은?" },
+    ...overrides,
+  };
+}
+
+Deno.test("accepts a grounded three-slide ManUtd Editor brief without filler", () => {
+  const result = validateCreativeBrief(styleValid(), evidence, styleConfig);
+  assertEquals(result.valid, true);
+  assertEquals(result.errors, []);
+});
+
+Deno.test("rejects internal research prose from style-enabled public slides", () => {
+  const value = styleValid({ slides: [{ ...styleValid().slides[0]!, headline: "현재 확보된 자료에는 문제가 없습니다." }, ...styleValid().slides.slice(1)] });
+  const result = validateCreativeBrief(value, evidence, styleConfig);
+  assert(result.errors.some((entry) => entry.code === "STYLE_FORBIDDEN_PUBLIC_COPY"));
+});

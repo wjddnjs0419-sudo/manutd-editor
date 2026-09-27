@@ -45,6 +45,8 @@ export interface CreativeBriefInsert {
   readonly generation_quality: string;
   readonly model_name: string;
   readonly generated_at: string;
+  readonly style_profile?: string;
+  readonly style_version?: string;
 }
 
 export interface StoredCreativeBrief extends CreativeBriefInsert {

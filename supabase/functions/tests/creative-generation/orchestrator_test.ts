@@ -149,3 +149,29 @@ Deno.test("returns FAILED_VALIDATION and FAILED_PROVIDER safely", async () => {
   const providerFailure = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" }, dependencies(new MemoryRepository(), { provider: { ...dependencies(repository).provider, generate: async () => { throw new Error("provider detail"); } } }));
   assertEquals(providerFailure.status, "FAILED_PROVIDER");
 });
+
+Deno.test("stores the ManUtd Editor style identity on a canonical brief", async () => {
+  const repository = new MemoryRepository();
+  repository.config = {
+    ...config,
+    quality_gate_config: { min_slides: 3, max_slides: 4, hook_count: 3, max_repair_attempts: 0, require_visual_direction: true, style_profile: "manutd_editor", style_version: "manutd-editor-v1", enable_style_validator: true },
+  };
+  const styleOutput: CreativeBriefOutput = {
+    schema_version: "1.0", style_profile: "manutd_editor", style_version: "manutd-editor-v1", content_mode: "ANALYSIS_CONTEXT", match_phase: null, generation_quality: "FULL",
+    angle: "산초의 현재", key_takeaway: "새 팀을 찾는 시간이 길어지고 있다.",
+    hooks: [{ id: "hook_1", text: "3개월째 소속팀 없는 산초" }, { id: "hook_2", text: "산초의 다음 행선지는?" }, { id: "hook_3", text: "아직 새 팀이 없다" }],
+    slides: [
+      { slide_number: 1, index: 1, purpose: "HOOK", role: "HOOK", headline: "3개월째 소속팀 없는 산초", highlight: "아직 새 팀이 없다", body: "", closing_line: null, claims: [{ claim_id: "claim_1", type: "FACT", text: "산초가 새 팀을 찾고 있다.", evidence_ids: ["post:post-1"] }], visual_direction: { subject: "산초", image_type: "photo", layout_intent: "headline first", stat_emphasis: "3개월", text_hierarchy: ["headline", "highlight"] } },
+      { slide_number: 2, index: 2, purpose: "CONTEXT", role: "CONTEXT", headline: "자유 계약만 3개월째", highlight: null, body: "맨유와 계약이 끝난 뒤\n아직 새 소속팀을 찾지 못하고 있다.", closing_line: null, claims: [{ claim_id: "claim_2", type: "FACT", text: "산초가 새 팀을 찾고 있다.", evidence_ids: ["post:post-1"] }], visual_direction: { subject: "산초", image_type: "photo", layout_intent: "context card", stat_emphasis: null, text_hierarchy: ["headline", "body"] } },
+      { slide_number: 3, index: 3, purpose: "KEY_FACT", role: "KEY_FACT", headline: "지금은 몸을 유지하는 중", highlight: "새 팀을 찾을 때까지", body: "훈련을 이어가며\n다음 기회를 기다리고 있다.", closing_line: null, claims: [{ claim_id: "claim_3", type: "FACT", text: "산초가 새 팀을 찾고 있다.", evidence_ids: ["post:post-1"] }], visual_direction: { subject: "훈련장", image_type: "training photo", layout_intent: "fact card", stat_emphasis: null, text_hierarchy: ["headline", "highlight", "body"] } },
+    ],
+    caption: { body: "산초의 다음 행선지는 어디가 될까요?", cta: "여러분의 생각은?" },
+    sources: [{ evidence_id: "post:post-1", label: "utdreport" }], editor_warning: null,
+    internal_grounding: { evidence_ids: ["post:post-1"], source_caveats: [], unsupported_claims: [] },
+  };
+  const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL" }, dependencies(repository, { provider: { ...dependencies(repository).provider, generate: async () => styleOutput } }));
+  assertEquals(result.status, "READY");
+  assertEquals(repository.briefs[0]?.style_profile, "manutd_editor");
+  assertEquals(repository.briefs[0]?.style_version, "manutd-editor-v1");
+  assertEquals(repository.briefs[0]?.slide_count, 3);
+});

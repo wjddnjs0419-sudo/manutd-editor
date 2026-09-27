@@ -5,6 +5,8 @@ import type {
   EvidenceSnapshot,
   MatchPhase,
 } from "./types.ts";
+import { validateManutdEditorDraft } from "../_shared/editorial-style/validator.ts";
+import type { ManutdEditorCarouselDraft } from "../_shared/editorial-style/types.ts";
 
 export interface QualityGateConfig {
   readonly min_slides: number;
@@ -12,6 +14,9 @@ export interface QualityGateConfig {
   readonly hook_count: number;
   readonly max_repair_attempts: number;
   readonly require_visual_direction: boolean;
+  readonly style_profile?: string;
+  readonly style_version?: string;
+  readonly enable_style_validator?: boolean;
 }
 
 export interface ValidationError {
@@ -48,6 +53,34 @@ function nonblank(value: unknown): value is string {
 
 function error(code: string, path: string): ValidationError {
   return { code, path };
+}
+
+function styleDraft(value: CreativeBriefOutput, evidence: EvidenceSnapshot): ManutdEditorCarouselDraft {
+  const slides = value.slides.map((slide, index) => ({
+    index: typeof slide.index === "number" ? slide.index : index + 1,
+    role: slide.role ?? (index === 0 ? "HOOK" : index === 1 ? "CONTEXT" : index === 2 ? "KEY_FACT" : "IMPLICATION"),
+    headline: slide.headline,
+    highlight: slide.highlight ?? null,
+    body: typeof slide.body === "string" && slide.body.trim() ? slide.body : null,
+    closing_line: slide.closing_line ?? null,
+    evidence_ids: [...new Set((Array.isArray(slide.claims) ? slide.claims : []).filter(object).flatMap((claim) => Array.isArray(claim.evidence_ids) ? claim.evidence_ids.filter((entry): entry is string => typeof entry === "string") : []))],
+  }));
+  const grounding = object(value.internal_grounding) ? value.internal_grounding : {};
+  const internalGrounding = {
+    evidence_ids: Array.isArray(grounding.evidence_ids) ? grounding.evidence_ids.filter((entry): entry is string => typeof entry === "string") : [...evidence.evidence_ids],
+    source_caveats: Array.isArray(grounding.source_caveats) ? grounding.source_caveats.filter((entry): entry is string => typeof entry === "string") : [],
+    unsupported_claims: Array.isArray(grounding.unsupported_claims) ? grounding.unsupported_claims.filter((entry): entry is string => typeof entry === "string") : [],
+  };
+  return {
+    style_profile: value.style_profile ?? "",
+    style_version: value.style_version ?? "",
+    story_id: typeof evidence.story.id === "string" && evidence.story.id.trim() ? evidence.story.id : typeof evidence.candidate.story_cluster_id === "string" && evidence.candidate.story_cluster_id.trim() ? evidence.candidate.story_cluster_id : "style-story",
+    creative_brief_id: null,
+    slides,
+    caption: object(value.caption) ? { body: typeof value.caption.body === "string" ? value.caption.body : "", cta: typeof value.caption.cta === "string" ? value.caption.cta : null } : { body: "", cta: null },
+    editor_warning: value.editor_warning ?? null,
+    internal_grounding: internalGrounding,
+  };
 }
 
 export function validateCreativeBrief(
@@ -90,7 +123,8 @@ export function validateCreativeBrief(
         return;
       }
       if (slide.slide_number !== index + 1) errors.push(error("SLIDE_NUMBER", `${path}.slide_number`));
-      if (!nonblank(slide.headline) || !nonblank(slide.body)) errors.push(error("SLIDE_TEXT_BLANK", path));
+      const hookMayBeBodyless = config.enable_style_validator === true && (slide.role === "HOOK" || slide.purpose === "HOOK");
+      if (!nonblank(slide.headline) || (!hookMayBeBodyless && !nonblank(slide.body))) errors.push(error("SLIDE_TEXT_BLANK", path));
       const visual = slide.visual_direction;
       if (config.require_visual_direction && (!object(visual) || !nonblank(visual.subject) || !nonblank(visual.image_type) || !nonblank(visual.layout_intent) || !Array.isArray(visual.text_hierarchy) || visual.text_hierarchy.length === 0)) {
         errors.push(error("VISUAL_DIRECTION_MISSING", `${path}.visual_direction`));
@@ -130,6 +164,14 @@ export function validateCreativeBrief(
   if (mode === "NEWS_UPDATE") {
     const reliableSource = evidence.sources.some((source) => (source.reliability_score ?? 0) >= 8);
     if (!reliableSource || !Array.isArray(output.sources) || output.sources.length === 0) errors.push(error("NEWS_EVIDENCE_BLOCKED", "sources"));
+  }
+
+  if (config.enable_style_validator === true) {
+    if (output.style_profile !== config.style_profile || output.style_version !== config.style_version) {
+      errors.push(error("STYLE_IDENTITY", "style_profile"));
+    }
+    const styleResult = validateManutdEditorDraft(styleDraft(output as unknown as CreativeBriefOutput, evidence), new Set(evidence.evidence_ids));
+    for (const entry of styleResult.errors) errors.push(error(`STYLE_${entry.code}`, entry.path ?? "root"));
   }
 
   return { valid: errors.length === 0, errors };

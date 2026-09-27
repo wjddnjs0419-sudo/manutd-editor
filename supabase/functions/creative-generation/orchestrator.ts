@@ -40,6 +40,9 @@ function qualityConfig(config: GenerationConfig) {
   return {
     min_slides: Number(value.min_slides ?? 4), max_slides: Number(value.max_slides ?? 7), hook_count: Number(value.hook_count ?? 3),
     max_repair_attempts: Number(value.max_repair_attempts ?? 1), require_visual_direction: value.require_visual_direction !== false,
+    style_profile: typeof value.style_profile === "string" ? value.style_profile : undefined,
+    style_version: typeof value.style_version === "string" ? value.style_version : undefined,
+    enable_style_validator: value.style_profile === "manutd_editor" && value.style_version === "manutd-editor-v1",
   };
 }
 
@@ -108,7 +111,8 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
   const revision = await dependencies.repository.nextRevision(trigger.candidate_id);
   const brief = await dependencies.repository.insertCreativeBrief({
     candidate_id: trigger.candidate_id, version: revision, headline: output.hooks[0]?.text ?? output.angle, angle: output.angle, format: "INSTAGRAM_CAROUSEL", slide_count: output.slides.length,
-    slides_json: { slides: output.slides, key_takeaway: output.key_takeaway }, design_json: { slides: output.slides.map((slide) => ({ slide_number: slide.slide_number, visual_direction: slide.visual_direction })) }, caption_draft: output.caption.body, cta: output.caption.cta, status: "READY", content_mode: output.content_mode, match_phase: output.match_phase, generation_config_id: config.id, input_fingerprint: fingerprint, evidence_snapshot: snapshot, hooks_json: output.hooks, grounding_json: { claims: output.slides.flatMap((slide) => slide.claims) }, generation_metadata: { config_version: config.version, classifier_config_version: config.classifier_config.version, classification_source: classification.source, trigger_type: trigger.trigger_type }, generation_quality: output.generation_quality, model_name: String(config.generation_config.model), generated_at: runAt.toISOString(),
+    slides_json: { slides: output.slides, key_takeaway: output.key_takeaway, editor_warning: output.editor_warning ?? null, internal_grounding: output.internal_grounding ?? null }, design_json: { slides: output.slides.map((slide) => ({ slide_number: slide.slide_number, visual_direction: slide.visual_direction })) }, caption_draft: output.caption.body, cta: output.caption.cta, status: "READY", content_mode: output.content_mode, match_phase: output.match_phase, generation_config_id: config.id, input_fingerprint: fingerprint, evidence_snapshot: snapshot, hooks_json: output.hooks, grounding_json: { claims: output.slides.flatMap((slide) => slide.claims), internal_grounding: output.internal_grounding ?? null }, generation_metadata: { config_version: config.version, classifier_config_version: config.classifier_config.version, classification_source: classification.source, trigger_type: trigger.trigger_type }, generation_quality: output.generation_quality, model_name: String(config.generation_config.model), generated_at: runAt.toISOString(),
+    style_profile: output.style_profile ?? (qualityConfig(config).style_profile === "manutd_editor" ? "manutd_editor" : undefined), style_version: output.style_version ?? qualityConfig(config).style_version,
   });
   await dependencies.repository.updateJob(job.id, { status: "READY", creative_brief_id: brief.id, repair_attempted: checked.repair_attempted, completed_at: runAt.toISOString(), lease_owner: null, lease_expires_at: null });
   return { status: "READY", candidate_id: trigger.candidate_id, creative_brief_id: brief.id, revision, input_fingerprint: fingerprint };

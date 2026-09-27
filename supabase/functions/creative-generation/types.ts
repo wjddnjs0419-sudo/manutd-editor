@@ -100,6 +100,10 @@ export interface CreativeBriefSlide {
   readonly purpose: string;
   readonly headline: string;
   readonly body: string;
+  readonly index?: number;
+  readonly role?: "HOOK" | "CONTEXT" | "KEY_FACT" | "IMPLICATION";
+  readonly highlight?: string | null;
+  readonly closing_line?: string | null;
   readonly claims: readonly CreativeBriefClaim[];
   readonly visual_direction: VisualDirection;
 }
@@ -115,4 +119,8 @@ export interface CreativeBriefOutput {
   readonly slides: readonly CreativeBriefSlide[];
   readonly caption: { body: string; cta: string };
   readonly sources: readonly { evidence_id: string; label: string }[];
+  readonly style_profile?: "manutd_editor";
+  readonly style_version?: "manutd-editor-v1";
+  readonly editor_warning?: string | null;
+  readonly internal_grounding?: JsonObject;
 }

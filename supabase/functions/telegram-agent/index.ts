@@ -11,11 +11,12 @@ import { createTelegramClient } from "../_shared/m6/telegram_client.ts";
 import { createM6Repository } from "../_shared/m6/repository.ts";
 import { createEditorialConsoleRepository, paginateStories, shortCallbackToken, type CanonicalStory, type ConsoleView } from "../_shared/m6/editorial_console.ts";
 import { dispatchEditorialConsoleAction, parseConsoleCallback, parseConsoleIntent, type ConsoleAction, type ConsoleState } from "../_shared/m6/editorial_console_actions.ts";
+import { invokeCanonicalCarousel } from "../_shared/m6/console_generation.ts";
 import { createTelegramAgentHandler } from "./handler.ts";
 import { answerNaturalLanguage, type CanonicalConversationContext } from "./conversation.ts";
 import type { StoredCreativeBrief } from "../creative-generation/repository.ts";
 import type { CreativeBriefSlide } from "../creative-generation/types.ts";
-import type { ManutdEditorCarouselDraft } from "../_shared/editorial-style/types.ts";
+import type { EditorialSlideRole, ManutdEditorCarouselDraft } from "../_shared/editorial-style/types.ts";
 
 const invokeSecret = Deno.env.get("TELEGRAM_AGENT_INVOKE_SECRET") ?? "";
 const webhookSecret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
@@ -269,10 +270,13 @@ function storedBriefToManutdDraft(row: Record<string, unknown>, story: Canonical
     const body = typeof slide.body === "string" ? slide.body : null;
     const claims = Array.isArray(slide.claims) ? slide.claims.filter(isObject) : [];
     const evidenceIds = claims.flatMap((claim) => Array.isArray(claim.evidence_ids) ? claim.evidence_ids.filter((value): value is string => typeof value === "string") : []);
-    const role = index === 0 ? "HOOK" : index === 1 ? "CONTEXT" : index === 2 ? "KEY_FACT" : "IMPLICATION";
-    return { index: index + 1, role: role as "HOOK" | "CONTEXT" | "KEY_FACT" | "IMPLICATION", headline: typeof slide.headline === "string" && slide.headline.trim() ? slide.headline : story.title, highlight: null, body: role === "HOOK" ? null : body, closing_line: null, evidence_ids: [...new Set(evidenceIds)] };
+    const role: EditorialSlideRole = slide.role === "HOOK" || slide.role === "CONTEXT" || slide.role === "KEY_FACT" || slide.role === "IMPLICATION" ? slide.role : index === 0 ? "HOOK" : index === 1 ? "CONTEXT" : index === 2 ? "KEY_FACT" : "IMPLICATION";
+    return { index: typeof slide.index === "number" ? slide.index : index + 1, role, headline: typeof slide.headline === "string" && slide.headline.trim() ? slide.headline : story.title, highlight: typeof slide.highlight === "string" ? slide.highlight : null, body: role === "HOOK" ? null : body, closing_line: typeof slide.closing_line === "string" ? slide.closing_line : null, evidence_ids: [...new Set(evidenceIds)] };
   });
   const caption = typeof row.caption_draft === "string" ? row.caption_draft : "";
+  const groundingJson = isObject(row.grounding_json) ? row.grounding_json : {};
+  const storedGrounding = isObject(slidesJson.internal_grounding) ? slidesJson.internal_grounding : isObject(groundingJson.internal_grounding) ? groundingJson.internal_grounding : {};
+  const stringList = (value: unknown): string[] => Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
   return {
     style_profile: typeof row.style_profile === "string" ? row.style_profile : "manutd_editor",
     style_version: typeof row.style_version === "string" ? row.style_version : "manutd-editor-v1",
@@ -280,8 +284,8 @@ function storedBriefToManutdDraft(row: Record<string, unknown>, story: Canonical
     creative_brief_id: typeof row.id === "string" ? row.id : null,
     slides,
     caption: { body: caption, cta: typeof row.cta === "string" ? row.cta : null },
-    editor_warning: slides.length < 3 ? "현재 근거로는 3장까지 구성하는 것이 적절합니다." : null,
-    internal_grounding: { evidence_ids: story.evidence.map((evidence) => evidence.evidence_id), source_caveats: story.grounding_status === "VERIFIED" ? [] : [story.grounding_status], unsupported_claims: [] },
+    editor_warning: typeof slidesJson.editor_warning === "string" ? slidesJson.editor_warning : typeof row.editor_warning === "string" ? row.editor_warning : slides.length < 3 ? "현재 근거로는 3장까지 구성하는 것이 적절합니다." : null,
+    internal_grounding: { evidence_ids: stringList(storedGrounding.evidence_ids).length > 0 ? stringList(storedGrounding.evidence_ids) : story.evidence.map((evidence) => evidence.evidence_id), source_caveats: stringList(storedGrounding.source_caveats).length > 0 ? stringList(storedGrounding.source_caveats) : story.grounding_status === "VERIFIED" ? [] : [story.grounding_status], unsupported_claims: stringList(storedGrounding.unsupported_claims) },
   };
 }
 
@@ -289,11 +293,14 @@ async function generateCanonicalCarousel(story: CanonicalStory): Promise<ManutdE
   if (!story.candidate_id) throw new Error("CANDIDATE_NOT_FOUND");
   const secret = Deno.env.get("COLLECTOR_INVOKE_SECRET") ?? "";
   if (!secret) throw new Error("COLLECTOR_INVOKE_SECRET_MISSING");
-  const response = await fetch(`${base}/functions/v1/creative-generation`, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify({ candidate_id: story.candidate_id, trigger_type: "MANUAL" }) });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok || !isObject(result) || (result.status !== "READY" && result.status !== "NOOP") || typeof result.creative_brief_id !== "string") throw new Error("CREATIVE_GENERATION_FAILED");
-  const brief = await rowById(`/rest/v1/creative_briefs?select=*&id=eq.${encodeURIComponent(result.creative_brief_id)}&limit=1`);
-  if (!brief) throw new Error("CREATIVE_BRIEF_NOT_FOUND");
+  const brief = await invokeCanonicalCarousel(story.candidate_id, {
+    invoke: async (input) => {
+      const response = await fetch(`${base}/functions/v1/creative-generation`, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify(input) });
+      const result = await response.json().catch(() => ({}));
+      return response.ok ? result : { status: "FAILED_PROVIDER" };
+    },
+    loadBrief: async (id) => await rowById(`/rest/v1/creative_briefs?select=*&id=eq.${encodeURIComponent(id)}&limit=1`),
+  });
   return storedBriefToManutdDraft(brief, story);
 }
 

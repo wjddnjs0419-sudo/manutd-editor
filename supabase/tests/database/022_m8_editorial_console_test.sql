@@ -4,7 +4,7 @@ set role postgres;
 create extension if not exists pgtap with schema extensions;
 set search_path = pgtap, extensions, public;
 
-select plan(35);
+select plan(36);
 
 select has_table('app_private', 'telegram_console_state', 'console state table exists');
 select has_column('app_private', 'telegram_console_state', 'thread_id', 'console state belongs to a Telegram thread');
@@ -48,6 +48,18 @@ select ok(
 
 select has_column('public', 'creative_briefs', 'style_profile', 'creative briefs store style profile');
 select has_column('public', 'creative_briefs', 'style_version', 'creative briefs store style version');
+select ok(
+  exists (
+    select 1
+    from public.creative_generation_configs
+    where is_active
+      and quality_gate_config ->> 'style_profile' = 'manutd_editor'
+      and quality_gate_config ->> 'style_version' = 'manutd-editor-v1'
+      and (quality_gate_config ->> 'min_slides')::integer = 3
+      and (quality_gate_config ->> 'max_slides')::integer = 4
+  ),
+  'active creative generation config uses the ManUtd Editor style contract'
+);
 select ok(
   exists (
     select 1 from pg_constraint
