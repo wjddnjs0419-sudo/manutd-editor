@@ -27,7 +27,7 @@ export interface BriefingCandidateRow {
 }
 
 export interface M6Repository extends FixtureSyncRepository {
-  listBriefingCandidates(rankingDate: string): Promise<readonly BriefingCandidateRow[]>;
+  listBriefingCandidates(rankingDate: string, minimumCalculatedAt?: string): Promise<readonly BriefingCandidateRow[]>;
   getIntelligenceReadiness(rankingDate: string): Promise<IntelligenceReadinessRecord | null>;
 }
 
@@ -163,8 +163,9 @@ export function createM6Repository(options: M6RepositoryOptions): M6Repository {
       const result = await request(`/rest/v1/telegram_alert_events?on_conflict=event_fingerprint`, { method: "POST", headers: { prefer: "resolution=ignore-duplicates,return=representation" }, body: JSON.stringify(event) }, "app_private");
       return Array.isArray(result) && result.length > 0;
     },
-    async listBriefingCandidates(rankingDate) {
-      const rawCandidates = await request(`/rest/v1/content_candidates?select=id,rank,priority_score,first_mover_flag,must_cover_flag,story_cluster_id,creative_briefs(version,status)&ranking_date=eq.${encodeURIComponent(rankingDate)}&order=rank.asc.nullslast,priority_score.desc`);
+    async listBriefingCandidates(rankingDate, minimumCalculatedAt) {
+      const calculatedAtFilter = minimumCalculatedAt ? `&calculated_at=gte.${encodeURIComponent(minimumCalculatedAt)}` : "";
+      const rawCandidates = await request(`/rest/v1/content_candidates?select=id,rank,priority_score,first_mover_flag,must_cover_flag,story_cluster_id,creative_briefs(version,status)&ranking_date=eq.${encodeURIComponent(rankingDate)}${calculatedAtFilter}&order=rank.asc.nullslast,priority_score.desc`);
       if (!Array.isArray(rawCandidates)) throw new M6RepositoryError("RESPONSE");
       const [rawPosts, editorialRankings, factObservations, sources] = await Promise.all([
         request(`/rest/v1/story_cluster_posts?select=story_cluster_id,raw_post_id,match_confidence,raw_posts(permalink,published_at,media_type,media_product_type,source_accounts(username),media_assets(id,asset_type,carousel_index,storage_path))`),

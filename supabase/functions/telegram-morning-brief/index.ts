@@ -55,7 +55,7 @@ async function runMorningBrief(): Promise<MorningBriefResult> {
   if (!readinessState || readinessState.status === "RUNNING") return { status: "NOT_READY", briefing_date: briefingDate, messages_sent: 0, render_mode: "FALLBACK_TEMPLATE", readiness: "NOT_READY", warning: "오늘 Intelligence 파이프라인이 아직 완료되지 않았습니다." };
   if (readinessState.status === "FAILED") return { status: "DEGRADED", briefing_date: briefingDate, messages_sent: 0, render_mode: "FALLBACK_TEMPLATE", readiness: "DEGRADED", warning: `오늘 Intelligence 파이프라인이 실패했습니다.${readinessState.error_category ? ` (${readinessState.error_category})` : ""}` };
 
-  const rows = await repository.listBriefingCandidates(briefingDate);
+  const rows = await repository.listBriefingCandidates(briefingDate, readinessState.started_at);
   const readiness = classifyReadiness(readinessState, briefingDate, countReadinessCandidates(rows));
   if (readiness === "NOT_READY") return { status: "NOT_READY", briefing_date: briefingDate, messages_sent: 0, render_mode: "FALLBACK_TEMPLATE", readiness, warning: "오늘 Intelligence 결과가 아직 확정되지 않았습니다." };
   if (readiness === "DEGRADED") return { status: "DEGRADED", briefing_date: briefingDate, messages_sent: 0, render_mode: "FALLBACK_TEMPLATE", readiness, warning: "오늘 Intelligence 후보 상태가 일치하지 않아 브리핑을 보내지 않았습니다." };

@@ -1,5 +1,6 @@
 import { parseCommand, type ParsedCommand } from "../_shared/m6/commands.ts";
 import { businessDate } from "../_shared/m6/business_date.ts";
+import { selectBriefingCandidates } from "../_shared/m6/briefing.ts";
 import { classifyReadiness, countReadinessCandidates } from "../_shared/m6/readiness.ts";
 import { formatCurrentReply, snapshotCurrentCandidates } from "./current.ts";
 import { MEMORY_SYSTEM_RULES, maybeRollSummary, type MemoryMessage, type MemoryThread } from "../_shared/m6/memory.ts";
@@ -267,11 +268,12 @@ async function commandReply(command: ParsedCommand, thread: ThreadRow): Promise<
   if (command.type === "CURRENT") {
     const briefingDate = businessDate(new Date(), "Asia/Seoul");
     const state = await repository.getIntelligenceReadiness(briefingDate);
-    const rows = await repository.listBriefingCandidates(briefingDate);
+    const rows = await repository.listBriefingCandidates(briefingDate, state?.started_at);
     const readiness = classifyReadiness(state, briefingDate, countReadinessCandidates(rows));
-    const snapshot = snapshotCurrentCandidates(briefingDate, rows);
+    const visibleRows = selectBriefingCandidates(rows);
+    const snapshot = snapshotCurrentCandidates(briefingDate, visibleRows);
     await saveCurrentSnapshot(thread, snapshot);
-    return formatCurrentReply({ briefingDate, readiness, candidateCount: rows.length, items: snapshot.items.map((item) => ({ position: item.position, candidateId: item.candidate_id, priorityScore: item.priority_score, username: item.reference_username, title: item.title, sourceName: item.source_name })) });
+    return formatCurrentReply({ briefingDate, readiness, candidateCount: visibleRows.length, items: snapshot.items.map((item) => ({ position: item.position, candidateId: item.candidate_id, priorityScore: item.priority_score, username: item.reference_username, title: item.title, sourceName: item.source_name })) });
   }
   if (command.type === "STATUS") return thread.active_candidate_id ? `현재 후보 ${thread.active_candidate_id}의 최신 상태를 확인하세요.` : "활성 후보가 없습니다. /today 또는 /open으로 시작하세요.";
   if (command.type === "BACK") return "이전 작업 맥락으로 돌아갔습니다.";

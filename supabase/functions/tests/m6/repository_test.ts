@@ -40,11 +40,12 @@ Deno.test("M6 repository consumes same-date editorial ranking and preserves safe
       return new Response(JSON.stringify([]));
     },
   });
-  const rows = await repository.listBriefingCandidates("2026-09-20");
+  const rows = await repository.listBriefingCandidates("2026-09-20", "2026-09-20T00:00:00.000Z");
   assertEquals(rows.map((row) => row.candidate_id), ["candidate-b", "candidate-a"]);
   assertEquals(rows[0]?.grounding_status, "VERIFIED");
   assertEquals(rows[0]?.news_eligible, true);
   assertEquals(requests.some((url) => url.includes("ranking_date=eq.2026-09-20")), true);
+  assertEquals(requests.some((url) => url.includes("calculated_at=gte.2026-09-20T00%3A00%3A00.000Z")), true);
 });
 
 Deno.test("M6 repository exposes same-day fact observations as standalone briefing candidates", async () => {
