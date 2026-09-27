@@ -74,6 +74,8 @@ Deno.test("provider failures are isolated and successful observations still prod
   assertEquals(result.observationCount, 1);
   assertEquals(result.providerStatuses.find((item) => item.providerId === "broken")?.status, "FAILED");
   assertEquals(repo.snapshots.length, 1);
+  assertEquals(repo.observations[0]?.discoveryQueryId, "query-row-1");
+  assertEquals(repo.snapshots[0]?.sourceCount, 1);
 });
 
 Deno.test("repeating a discovery run does not inflate observations or stories", async () => {

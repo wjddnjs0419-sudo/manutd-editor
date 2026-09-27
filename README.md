@@ -413,6 +413,57 @@ M8 local regression smoke:
 ./scripts/run-milestone-8-phase-b-c-smoke.sh
 ```
 
+### M8.5 Trend Discovery Engine
+
+M8 decides which known stories are worth publishing. M8.5 discovers which
+stories should become known to the system. A bounded discovery run expands
+queries, calls isolated provider adapters, filters secondary Manchester United
+mentions, deduplicates observations, clusters duplicate discussions, stores
+append-only trend snapshots, and then leaves M8 grounding and editorial
+ranking as the source of truth for factual readiness.
+
+Trend discovery and fact grounding are intentionally separate:
+
+```text
+Trend: what is getting attention now?
+Grounding: which claims are supportable by FACT_PRIMARY or FACT_INDEPENDENT?
+```
+
+`DISCOVERY_COMPETITOR`, `DISCOVERY_COMMUNITY`, and `DISCOVERY_VIDEO` can create
+research leads but can never make a claim `VERIFIED`. Trend Score is stored
+separately from Editorial Score. The deterministic `m8.5-v1` score uses
+velocity, source/platform diversity, normalized engagement, freshness, novelty,
+and Manchester United relevance. Missing engagement is explicit and neutral;
+missing publication time lowers freshness rather than being replaced by
+observation time.
+
+The first live adapter is a bounded RSS/Atom/HTML feed provider. Provider
+configuration is read from `SOURCE_DISCOVERY_FEEDS_JSON`; unsupported or
+disabled source roles are skipped. Community, competitor, and video adapters
+remain modular and disabled until a stable public feed/API is configured.
+Provider failure is isolated and returned as `PARTIAL` run status. No raw
+provider payloads, credentials, or copyrighted video bytes are persisted.
+
+Telegram adds:
+
+- `📈 지금 뜨는 소재` / `OPEN_TRENDING`: latest trend-ranked canonical stories,
+  showing Trend, Editorial, state, source/platform diversity, and grounding.
+- `🔎 더 찾아보기` / `DISCOVER_MORE`: invokes a fresh bounded discovery run;
+  it is not pagination over existing stories.
+- `REFRESH_DISCOVERY` and Korean deterministic intents such as “지금 뭐 뜨고
+  있어?” and “좀 더 찾아봐”.
+
+Run the deterministic M8.5 smoke with:
+
+```bash
+./scripts/run-milestone-8-5-smoke.sh
+```
+
+Local-only migration and database verification remain separate from production
+deployment. After local reset and full tests pass, the deployment commands are
+the existing Supabase commands documented below; this milestone does not run
+`supabase db push` or `supabase functions deploy`.
+
 이 task는 Figma 파일/토큰/렌더러, Instagram 자동 발행, 완성 영상, 자동 승인 또는
 TikTok/YouTube 발행을 추가하지 않습니다.
 

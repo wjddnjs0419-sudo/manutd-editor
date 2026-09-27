@@ -435,7 +435,9 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
     },
     async listTrendingStories(rankingDate) {
       const stories = await this.listCanonicalStories(rankingDate);
-      return [...stories].sort((left, right) => (right.trend_score ?? -1) - (left.trend_score ?? -1) || (left.rank ?? Number.MAX_SAFE_INTEGER) - (right.rank ?? Number.MAX_SAFE_INTEGER));
+      return [...stories]
+        .filter((story) => story.trend_score !== null)
+        .sort((left, right) => (right.trend_score ?? -1) - (left.trend_score ?? -1) || (left.rank ?? Number.MAX_SAFE_INTEGER) - (right.rank ?? Number.MAX_SAFE_INTEGER));
     },
   };
 }

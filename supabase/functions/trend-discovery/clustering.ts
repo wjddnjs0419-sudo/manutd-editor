@@ -5,6 +5,7 @@ export interface ObservationCluster {
   readonly representativeTitle: string;
   readonly observations: readonly DiscoveryObservation[];
   readonly sourceCategories: readonly string[];
+  readonly sourceNames: readonly string[];
   readonly platforms: readonly string[];
 }
 
@@ -39,6 +40,7 @@ export function clusterObservations(observations: readonly DiscoveryObservation[
         representativeTitle: observation.title,
         observations: [observation],
         sourceCategories: [observation.sourceRole],
+        sourceNames: [observation.sourceCanonicalName],
         platforms: [observation.platform],
       });
       continue;
@@ -48,6 +50,7 @@ export function clusterObservations(observations: readonly DiscoveryObservation[
       ...current,
       observations: [...current.observations, observation],
       sourceCategories: [...new Set([...current.sourceCategories, observation.sourceRole])],
+      sourceNames: [...new Set([...current.sourceNames, observation.sourceCanonicalName])],
       platforms: [...new Set([...current.platforms, observation.platform])],
     };
   }

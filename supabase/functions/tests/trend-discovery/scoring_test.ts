@@ -1,6 +1,27 @@
 import { assert, assertEquals, assertGreater, assertLess } from "jsr:@std/assert@1.0.8";
-import { calculateTrendScore, deriveOpportunityLabels, deriveTrendState, TREND_SCORING_CONFIG, type TrendSignalInput } from "../../trend-discovery/scoring.ts";
+import { calculateTrendScore, deriveOpportunityLabels, deriveTrendState, normalizedEngagementScore, TREND_SCORING_CONFIG, type TrendSignalInput } from "../../trend-discovery/scoring.ts";
 import { calculateManutdRelevanceScore, isTrendRelevant } from "../../trend-discovery/relevance.ts";
+import type { DiscoveryObservation } from "../../trend-discovery/types.ts";
+
+function baseObservation(platform: DiscoveryObservation["platform"]): DiscoveryObservation {
+  return {
+    providerId: "provider",
+    sourceCanonicalName: "source",
+    sourceRole: "DISCOVERY_COMMUNITY",
+    externalId: "item",
+    canonicalUrl: "https://example.test/item",
+    title: "Manchester United update",
+    excerpt: null,
+    publishedAt: "2026-09-27T11:00:00.000Z",
+    observedAt: "2026-09-27T12:00:00.000Z",
+    platform,
+    engagement: {},
+    engagementAvailable: false,
+    discoveryQueryId: "query",
+    contentFingerprint: "fingerprint",
+    metadata: {},
+  };
+}
 
 function signals(overrides: Partial<TrendSignalInput> = {}): TrendSignalInput {
   return {
@@ -47,6 +68,11 @@ Deno.test("engagement unavailable is explicit and neutral", () => {
   const result = calculateTrendScore(signals({ normalizedEngagementScore: null, engagementAvailable: false }));
   assertEquals(result.engagementAvailable, false);
   assertEquals(result.components.engagement, 50);
+});
+
+Deno.test("engagement normalization is platform-aware and remains unavailable without metrics", () => {
+  assertEquals(normalizedEngagementScore([{ ...baseObservation("WEB"), engagement: {}, engagementAvailable: false }]), null);
+  assertGreater(normalizedEngagementScore([{ ...baseObservation("WEB"), engagement: { likes: 5_000, comments: 500 }, engagementAvailable: true }]) ?? 0, 70);
 });
 
 Deno.test("novelty falls after competitor saturation", () => {

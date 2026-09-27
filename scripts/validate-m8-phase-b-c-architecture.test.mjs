@@ -19,7 +19,7 @@ test("M8 B/C documents the source-role policy and canonical ownership", async ()
   assert.match(readme, /Supabase is the canonical database, orchestration layer, scheduler, and Edge Function runtime/u);
 });
 
-test("M8 B/C preserves the exact worker chain and 09:00 Cron owner", async () => {
+test("M8 B/C preserves its grounding/ranking chain after additive M8.5 discovery", async () => {
   const types = await text("supabase/functions/orchestration-worker/types.ts");
   const worker = await text("supabase/functions/orchestration-worker/worker.ts");
   const schedule = await text("supabase/migrations/20260926151957_milestone_7_phase_2_scheduling.sql");
@@ -27,7 +27,8 @@ test("M8 B/C preserves the exact worker chain and 09:00 Cron owner", async () =>
   assert.match(types, /"GROUND_CLAIMS"/u);
   assert.match(types, /"RANK_EDITORIAL"/u);
   assert.match(worker, /RUN_INTELLIGENCE: "DISCOVER_SOURCES"/u);
-  assert.match(worker, /DISCOVER_SOURCES: "GROUND_CLAIMS"/u);
+  assert.match(worker, /DISCOVER_SOURCES: "DISCOVER_TRENDS"/u);
+  assert.match(worker, /DISCOVER_TRENDS: "GROUND_CLAIMS"/u);
   assert.match(worker, /GROUND_CLAIMS: "RANK_EDITORIAL"/u);
   assert.match(worker, /RANK_EDITORIAL: "GENERATE_PRIORITY"/u);
   assert.match(schedule, /m7-morning-brief-0900-asia-seoul/u);
@@ -56,4 +57,3 @@ test("local smoke and feed configuration are production-safe by default", async 
   assert.doesNotMatch(env, /SOURCE_DISCOVERY_FEEDS_JSON=https?:/u);
   assert.doesNotMatch(smoke, /supabase\.co|SUPABASE_SECRET_KEY='[A-Za-z0-9]/u);
 });
-

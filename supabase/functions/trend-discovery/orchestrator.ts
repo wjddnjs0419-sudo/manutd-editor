@@ -1,7 +1,7 @@
 import { clusterObservations } from "./clustering.ts";
 import { expandDiscoveryQueries } from "./query_expansion.ts";
 import { calculateManutdRelevanceScore, isTrendRelevant } from "./relevance.ts";
-import { calculateTrendScore, deriveOpportunityLabels, deriveTrendState, trendSignalsFromObservations } from "./scoring.ts";
+import { calculateTrendScore, deriveOpportunityLabels, deriveTrendState, normalizedEngagementScore, trendSignalsFromObservations } from "./scoring.ts";
 import type { TrendDiscoveryRepository } from "./repository.ts";
 import type { DiscoveryEntityContext, DiscoveryMode, DiscoveryObservation, DiscoveryProvider, DiscoveryRunSummary, ProviderRunStatus, TrendSnapshot } from "./types.ts";
 
@@ -23,6 +23,23 @@ function safeNow(now: () => Date): Date {
 
 function groundingStatus(observations: readonly DiscoveryObservation[]): string {
   return observations.some((item) => item.sourceRole === "FACT_PRIMARY" || item.sourceRole === "FACT_INDEPENDENT") ? "VERIFIED" : "DISCOVERY_ONLY";
+}
+
+function mentionWindows(observations: readonly DiscoveryObservation[], asOf: Date | string): { mentionsLast1h: number; mentionsLast3h: number; mentionsPrevious3h: number; mentionsLast12h: number } {
+  const reference = asOf instanceof Date ? asOf.getTime() : new Date(asOf).getTime();
+  let mentionsLast1h = 0;
+  let mentionsLast3h = 0;
+  let mentionsPrevious3h = 0;
+  let mentionsLast12h = 0;
+  for (const observation of observations) {
+    if (!observation.publishedAt) continue;
+    const ageHours = Math.max(0, reference - new Date(observation.publishedAt).getTime()) / 3_600_000;
+    if (ageHours <= 1) mentionsLast1h += 1;
+    if (ageHours <= 3) mentionsLast3h += 1;
+    else if (ageHours <= 6) mentionsPrevious3h += 1;
+    if (ageHours <= 12) mentionsLast12h += 1;
+  }
+  return { mentionsLast1h, mentionsLast3h, mentionsPrevious3h, mentionsLast12h };
 }
 
 export async function runTrendDiscovery(options: RunTrendDiscoveryOptions): Promise<DiscoveryRunSummary> {
@@ -48,7 +65,7 @@ export async function runTrendDiscovery(options: RunTrendDiscoveryOptions): Prom
       try {
         const values = await provider.discover(query);
         for (const value of values) {
-          const observation = { ...value, discoveryQueryId: query.queryId };
+          const observation = { ...value, discoveryQueryId: queryRowIds.get(query.queryId) ?? query.queryId };
           if (!isTrendRelevant({ title: observation.title, excerpt: observation.excerpt })) continue;
           const key = `${observation.providerId}\u0000${observation.externalId}`;
           if (!observations.has(key)) {
@@ -64,22 +81,31 @@ export async function runTrendDiscovery(options: RunTrendDiscoveryOptions): Prom
   }
   const accepted = [...observations.values()];
   const persistence = await Promise.all(accepted.map((observation) => options.repository.upsertObservation(observation, runId)));
+  const storyClusterByObservation = new Map(accepted.map((observation, index) => [
+    `${observation.providerId}\u0000${observation.externalId}`,
+    persistence[index]?.storyClusterId ?? null,
+  ]));
   const clusters = clusterObservations(accepted);
   const snapshots: TrendSnapshot[] = [];
   for (const cluster of clusters) {
     const clusterObservations = cluster.observations;
+    const engagementScore = normalizedEngagementScore(clusterObservations);
     const scores = calculateTrendScore(trendSignalsFromObservations(clusterObservations, asOf, {
-      normalizedEngagementScore: clusterObservations.some((item) => item.engagementAvailable) ? 50 : null,
-      engagementAvailable: clusterObservations.some((item) => item.engagementAvailable),
+      normalizedEngagementScore: engagementScore,
+      engagementAvailable: engagementScore !== null,
       novelty: { competitorAccountCount: new Set(clusterObservations.filter((item) => item.sourceRole === "DISCOVERY_COMPETITOR").map((item) => item.sourceCanonicalName)).size, similarPostCount: Math.max(0, clusterObservations.length - 1), alreadyPublished: false },
       manutdRelevanceScore: Math.round(clusterObservations.reduce((sum, item) => sum + calculateManutdRelevanceScore({ title: item.title, excerpt: item.excerpt }), 0) / Math.max(1, clusterObservations.length)),
       groundingStatus: groundingStatus(clusterObservations),
       editorialScore: null,
+      mentionWindows: mentionWindows(clusterObservations, asOf),
     }));
     const state = deriveTrendState({ trendScore: scores.trendScore, velocityScore: scores.components.velocity, crossSourceScore: scores.components.crossSource, freshnessScore: scores.components.freshness, noveltyScore: scores.components.novelty, acceleration: scores.acceleration });
     const relevance = scores.components.manutdRelevance;
+    const storyClusterId = clusterObservations
+      .map((observation) => storyClusterByObservation.get(`${observation.providerId}\u0000${observation.externalId}`) ?? null)
+      .find((value): value is string => value !== null) ?? null;
     const snapshot: TrendSnapshot = {
-      storyClusterId: persistence.find((item) => item.storyClusterId)?.storyClusterId ?? null,
+      storyClusterId,
       clusterKey: cluster.clusterKey,
       snapshotAt: startedAt.toISOString(),
       trendScore: scores.trendScore,
@@ -92,10 +118,10 @@ export async function runTrendDiscovery(options: RunTrendDiscoveryOptions): Prom
       state,
       opportunityLabels: deriveOpportunityLabels({ ...scores.components, trendScore: scores.trendScore, state, groundingStatus: groundingStatus(clusterObservations), competitorAccountCount: new Set(clusterObservations.filter((item) => item.sourceRole === "DISCOVERY_COMPETITOR").map((item) => item.sourceCanonicalName)).size }),
       mentionCount: clusterObservations.length,
-      sourceCount: cluster.sourceCategories.length,
+      sourceCount: cluster.sourceNames.length,
       platformCount: cluster.platforms.length,
       engagementAvailable: scores.engagementAvailable,
-      inputSnapshot: { config_version: "m8.5-v1", query_ids: clusterObservations.map((item) => item.discoveryQueryId), source_roles: cluster.sourceCategories, platform_names: cluster.platforms },
+      inputSnapshot: { config_version: "m8.5-v1", query_ids: clusterObservations.map((item) => item.discoveryQueryId), source_roles: cluster.sourceCategories, source_names: cluster.sourceNames, platform_names: cluster.platforms },
     };
     snapshots.push(snapshot);
     await options.repository.saveSnapshot(snapshot);

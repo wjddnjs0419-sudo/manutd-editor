@@ -1,4 +1,4 @@
-import type { DiscoveryObservation, TrendState } from "./types.ts";
+import type { DiscoveryObservation, EngagementMetrics, TrendState } from "./types.ts";
 
 export const TREND_SCORING_CONFIG = {
   version: "m8.5-v1",
@@ -85,6 +85,34 @@ function date(value: Date | string): Date {
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter((value) => value !== ""))];
+}
+
+const ENGAGEMENT_BENCHMARKS: Record<DiscoveryObservation["platform"], Partial<Record<keyof EngagementMetrics, number>>> = {
+  WEB: { likes: 1_000, comments: 200, views: 100_000 },
+  RSS: {},
+  ATOM: {},
+  REDDIT: { upvotes: 1_000, replies: 200, views: 10_000 },
+  INSTAGRAM: { likes: 10_000, comments: 1_000, views: 100_000 },
+  YOUTUBE: { likes: 10_000, comments: 1_000, views: 1_000_000 },
+  OTHER: { likes: 1_000, comments: 200, views: 100_000, upvotes: 1_000, replies: 200 },
+};
+
+function normalizedMetric(value: number, benchmark: number): number {
+  return clamp(Math.log1p(value) / Math.log1p(benchmark) * 100);
+}
+
+/** Normalize only available metrics against conservative platform benchmarks. */
+export function normalizedEngagementScore(observations: readonly DiscoveryObservation[]): number | null {
+  const scores: number[] = [];
+  for (const observation of observations) {
+    if (!observation.engagementAvailable) continue;
+    const benchmarks = ENGAGEMENT_BENCHMARKS[observation.platform];
+    for (const [key, benchmark] of Object.entries(benchmarks)) {
+      const value = observation.engagement[key as keyof EngagementMetrics];
+      if (typeof value === "number" && value >= 0 && benchmark) scores.push(normalizedMetric(value, benchmark));
+    }
+  }
+  return scores.length === 0 ? null : round(scores.reduce((sum, value) => sum + value, 0) / scores.length);
 }
 
 function velocity(input: TrendSignalInput): { score: number; acceleration: number } {

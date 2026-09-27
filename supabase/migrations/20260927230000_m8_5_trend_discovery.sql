@@ -127,6 +127,14 @@ create index discovery_observations_cluster_idx on app_private.discovery_observa
 create index trend_snapshots_cluster_time_idx on app_private.trend_snapshots (cluster_key, snapshot_at desc);
 create index trend_snapshots_score_idx on app_private.trend_snapshots (snapshot_at desc, trend_score desc);
 
+alter table app_private.telegram_console_state
+  drop constraint if exists telegram_console_state_view_check;
+
+alter table app_private.telegram_console_state
+  add constraint telegram_console_state_view_check check (
+    view_name in ('HOME', 'RECOMMENDED', 'ALL', 'TRENDING', 'DETAIL', 'EVIDENCE', 'DRAFT', 'REEL')
+  );
+
 create trigger discovery_queries_set_updated_at
 before update on app_private.discovery_queries
 for each row execute function app_private.set_updated_at();
