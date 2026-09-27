@@ -11,6 +11,9 @@ const BOUNDARIES: Record<EditorialJobType, { path: string; secret: "collector" |
   COLLECT_INSTAGRAM: { path: "collect-instagram", secret: "collector" },
   ANALYZE_CONTENT: { path: "analyze-content", secret: "collector" },
   RUN_INTELLIGENCE: { path: "intelligence", secret: "collector" },
+  DISCOVER_SOURCES: { path: "source-discovery", secret: "collector" },
+  GROUND_CLAIMS: { path: "ground-claims", secret: "collector" },
+  RANK_EDITORIAL: { path: "rank-editorial", secret: "collector" },
   GENERATE_PRIORITY: { path: "creative-generation-priority", secret: "collector" },
   SYNC_NOTION: { path: "sync-notion-intelligence", secret: "collector" },
   PROJECT_NOTION: { path: "project-notion", secret: "collector" },
@@ -38,7 +41,7 @@ function requestBody(jobType: EditorialJobType, payload: Record<string, unknown>
       ...(typeof payload.limit === "number" && Number.isSafeInteger(payload.limit) ? { limit: payload.limit } : {}),
     };
   }
-  if (jobType === "RUN_INTELLIGENCE" || jobType === "SYNC_NOTION") {
+  if (jobType === "RUN_INTELLIGENCE" || jobType === "SYNC_NOTION" || jobType === "DISCOVER_SOURCES" || jobType === "GROUND_CLAIMS" || jobType === "RANK_EDITORIAL") {
     return typeof payload.as_of === "string" ? { as_of: payload.as_of } : {};
   }
   if (jobType === "PROJECT_NOTION") {

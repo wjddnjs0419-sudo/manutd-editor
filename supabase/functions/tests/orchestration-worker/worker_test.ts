@@ -205,6 +205,22 @@ Deno.test("intelligence already_running is safe but does not start priority gene
   assert.deepEqual(queue.completed, ["intelligence-1"]);
 });
 
+Deno.test("source grounding and ranking stages form the Phase B/C chain", async () => {
+  const stages: EditorialJobType[] = ["RUN_INTELLIGENCE", "DISCOVER_SOURCES", "GROUND_CLAIMS", "RANK_EDITORIAL"];
+  for (const [index, stage] of stages.entries()) {
+    const queue = queueWith([job(`stage-${index}`, stage)]);
+    const worker = createOrchestrationWorker({
+      queue,
+      invoker: invoker(async () => ({ status: 200, body: { status: "COMPLETED" } })),
+      workerId: "worker-1",
+      now: () => now,
+    });
+    await worker.processBatch();
+    const expected = stages[index + 1] ?? "GENERATE_PRIORITY";
+    assert.deepEqual([...queue.enqueued.keys()], [`pipeline-1:${expected}`]);
+  }
+});
+
 Deno.test("Notion failure is isolated and does not enqueue selected polling", async () => {
   const queue = queueWith([job("notion-1", "SYNC_NOTION")]);
   const worker = createOrchestrationWorker({
