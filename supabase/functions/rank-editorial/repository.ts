@@ -1,4 +1,5 @@
 import type { EditorialRankingInput, EditorialRankingRepository } from "./types.ts";
+import { isManchesterUnitedRelevant } from "../_shared/m8/manchester_united_relevance.ts";
 
 interface RepositoryOptions {
   readonly supabaseUrl: string;
@@ -11,6 +12,13 @@ function record(value: unknown): value is Record<string, unknown> { return typeo
 function number(value: unknown): number { return typeof value === "number" && Number.isFinite(value) ? value : 0; }
 function bounded(value: number): number { return Math.max(0, Math.min(100, value)); }
 function date(value: unknown): Date | null { if (typeof value !== "string") return null; const parsed = new Date(value); return Number.isFinite(parsed.getTime()) ? parsed : null; }
+interface ClusterRow {
+  readonly id: string;
+  readonly last_seen_at: string | null;
+  readonly canonical_title?: string;
+  readonly summary?: string | null;
+  readonly signature_json?: unknown;
+}
 
 export function createEditorialRankingRepository(options: RepositoryOptions): EditorialRankingRepository {
   if (!options.supabaseUrl.trim() || !options.serviceRoleKey.trim()) throw new Error("Database configuration is required");
@@ -25,23 +33,42 @@ export function createEditorialRankingRepository(options: RepositoryOptions): Ed
   }
   return {
     async listInputs(asOf, rankingDate) {
-      const [claimsValue, evidenceValue, observationsValue, clustersValue, matchesValue] = await Promise.all([
+      const [claimsValue, evidenceValue, observationsValue, clustersValue, clusterPostsValue, matchesValue] = await Promise.all([
         request("/rest/v1/story_claims?select=story_cluster_id,grounding_status,grounding_confidence&limit=2000", { method: "GET" }, "app_private"),
         request("/rest/v1/claim_evidence?select=claim_id,editorial_role,source_observation_id&limit=5000", { method: "GET" }, "app_private"),
         request("/rest/v1/source_observations?select=id,discovery_signal,observed_at&limit=5000", { method: "GET" }, "app_private"),
-        request("/rest/v1/story_clusters?select=id,last_seen_at&limit=1000", { method: "GET" }),
+        request("/rest/v1/story_clusters?select=id,last_seen_at,canonical_title,summary,signature_json&limit=1000", { method: "GET" }),
+        request("/rest/v1/story_cluster_posts?select=story_cluster_id,raw_posts(source_accounts(username))&limit=5000", { method: "GET" }),
         request("/rest/v1/matches?select=id,status,kickoff_at&status=in.(SCHEDULED,LIVE)&limit=20", { method: "GET" }),
       ]);
+      const clusterRows = Array.isArray(clustersValue) ? clustersValue.filter((item): item is ClusterRow => record(item) && typeof item.id === "string") : [];
+      const sourceUsernamesByCluster = new Map<string, string[]>();
+      if (Array.isArray(clusterPostsValue)) for (const item of clusterPostsValue) {
+        if (!record(item) || typeof item.story_cluster_id !== "string") continue;
+        const rawPost = record(item.raw_posts) ? item.raw_posts : null;
+        const sourceAccount = rawPost && record(rawPost.source_accounts) ? rawPost.source_accounts : null;
+        if (!sourceAccount || typeof sourceAccount.username !== "string") continue;
+        sourceUsernamesByCluster.set(item.story_cluster_id, [
+          ...(sourceUsernamesByCluster.get(item.story_cluster_id) ?? []),
+          sourceAccount.username,
+        ]);
+      }
+      const relevantClusterIds = new Set(clusterRows.filter((cluster) => isManchesterUnitedRelevant({
+        canonicalTitle: cluster.canonical_title,
+        summary: cluster.summary,
+        signature: cluster.signature_json,
+        sourceUsernames: sourceUsernamesByCluster.get(cluster.id),
+      })).map((cluster) => cluster.id));
       const observationById = new Map<string, { signal: number; observedAt: Date | null }>();
       if (Array.isArray(observationsValue)) for (const item of observationsValue) if (record(item) && typeof item.id === "string") observationById.set(item.id, { signal: bounded(number(item.discovery_signal)), observedAt: date(item.observed_at) });
       const claimById = new Map<string, { clusterId: string; status: string; confidence: number }>();
       const claimRows = Array.isArray(claimsValue) ? claimsValue : [];
-      for (const [index, item] of claimRows.entries()) if (record(item) && typeof item.story_cluster_id === "string") claimById.set(String(index), { clusterId: item.story_cluster_id, status: typeof item.grounding_status === "string" ? item.grounding_status : "INSUFFICIENT", confidence: bounded(number(item.grounding_confidence) * 100) });
+      for (const [index, item] of claimRows.entries()) if (record(item) && typeof item.story_cluster_id === "string" && relevantClusterIds.has(item.story_cluster_id)) claimById.set(String(index), { clusterId: item.story_cluster_id, status: typeof item.grounding_status === "string" ? item.grounding_status : "INSUFFICIENT", confidence: bounded(number(item.grounding_confidence) * 100) });
       const stats = new Map<string, { verified: number; contradicted: number; factScore: number; discoveryCount: number; discoverySignal: number; freshness: Date | null }>();
       const ensure = (clusterId: string) => { const current = stats.get(clusterId) ?? { verified: 0, contradicted: 0, factScore: 0, discoveryCount: 0, discoverySignal: 0, freshness: null }; stats.set(clusterId, current); return current; };
       for (const claim of claimById.values()) { const current = ensure(claim.clusterId); if (claim.status === "VERIFIED") { current.verified += 1; current.factScore = Math.max(current.factScore, claim.confidence || 100); } if (claim.status === "CONTRADICTED") current.contradicted += 1; }
       if (Array.isArray(evidenceValue)) for (const item of evidenceValue) if (record(item) && typeof item.claim_id === "string" && typeof item.editorial_role === "string") { const claim = claimById.get(item.claim_id); const observation = typeof item.source_observation_id === "string" ? observationById.get(item.source_observation_id) : undefined; if (!claim || !observation) continue; const current = ensure(claim.clusterId); if (item.editorial_role.startsWith("DISCOVERY_")) { current.discoveryCount += 1; current.discoverySignal += observation.signal; } }
-      if (Array.isArray(clustersValue)) for (const item of clustersValue) if (record(item) && typeof item.id === "string") { const current = ensure(item.id); current.freshness = date(item.last_seen_at); }
+      for (const item of clusterRows) if (relevantClusterIds.has(item.id)) { const current = ensure(item.id); current.freshness = date(item.last_seen_at); }
       const hasMatchContext = Array.isArray(matchesValue) && matchesValue.length > 0;
       const reference = asOf ?? now();
       const targetDate = rankingDate ?? reference.toISOString().slice(0, 10);

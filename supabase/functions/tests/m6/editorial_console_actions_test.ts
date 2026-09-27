@@ -68,6 +68,7 @@ Deno.test("parses compact callback actions and rejects stale-shaped payloads", (
 });
 
 Deno.test("natural-language console intents resolve to the same business actions as buttons", () => {
+  assertEquals(parseConsoleIntent("/today"), { type: "OPEN_RECOMMENDED", page: 1 });
   assertEquals(parseConsoleIntent("오늘 뭐 있어?"), { type: "OPEN_RECOMMENDED", page: 1 });
   assertEquals(parseConsoleIntent("전체 수집한 거 보여줘"), { type: "OPEN_ALL", page: 1 });
   assertEquals(parseConsoleIntent("이거 카드뉴스로 만들어줘", story.id), { type: "GENERATE_CAROUSEL", token: story.id });

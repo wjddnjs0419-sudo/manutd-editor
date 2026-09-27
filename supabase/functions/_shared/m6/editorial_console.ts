@@ -1,4 +1,5 @@
 import type { ManutdEditorCarouselDraft, EditorialSlide } from "../editorial-style/types.ts";
+import { isManchesterUnitedRelevant } from "../m8/manchester_united_relevance.ts";
 
 export interface EditorialEvidence {
   evidence_id: string;
@@ -297,7 +298,7 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
     async listCanonicalStories(rankingDate) {
       const [rankings, clusters, candidates, clusterSources, claims, claimEvidence, observations, informationSources, briefs] = await Promise.all([
         request(`/rest/v1/editorial_rankings?select=story_cluster_id,ranking_date,ranking_version,rank,editorial_score,information_gap_score,fact_grounding_score,discovery_audience_signal_score,grounding_status,news_eligible&ranking_date=eq.${encodeURIComponent(rankingDate)}&order=rank.asc.nullslast,editorial_score.desc`, "app_private"),
-        request("/rest/v1/story_clusters?select=id,canonical_title,summary,status&status=neq.ARCHIVED"),
+        request("/rest/v1/story_clusters?select=id,canonical_title,summary,status,signature_json&status=neq.ARCHIVED"),
         request(`/rest/v1/content_candidates?select=id,story_cluster_id,ranking_date&ranking_date=eq.${encodeURIComponent(rankingDate)}`),
         request("/rest/v1/story_cluster_sources?select=story_cluster_id,information_source_id,information_sources(canonical_name)"),
         request("/rest/v1/story_claims?select=id,story_cluster_id,claim_text,grounding_status", "app_private"),
@@ -346,6 +347,7 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
         if (typeof ranking.story_cluster_id !== "string") continue;
         const cluster = clusterById.get(ranking.story_cluster_id);
         if (!cluster || typeof ranking.ranking_date !== "string" || typeof ranking.ranking_version !== "string" || typeof cluster.canonical_title !== "string") continue;
+        if (!isManchesterUnitedRelevant({ canonicalTitle: cluster.canonical_title, summary: cluster.summary, signature: cluster.signature_json })) continue;
         const editorialScore = number(ranking.editorial_score) ?? 0;
         const informationGap = number(ranking.information_gap_score) ?? 0;
         const audienceSignal = number(ranking.discovery_audience_signal_score) ?? 0;

@@ -151,6 +151,32 @@ Deno.test("eligible snapshot excludes pending and unsupported capabilities", asy
   assert.deepEqual(captured?.eligible.map((account) => account.id), ["global-account"]);
 });
 
+Deno.test("does not create a ManUtd cluster for an unrelated football post", async () => {
+  let created = 0;
+  const result = await runIntelligence(options(repository({
+    listRecentPosts: async () => [{
+      id: "unrelated-post",
+      sourceAccountId: "broad-account",
+      caption: "손흥민 대표팀 부상 소식",
+      mediaType: "IMAGE",
+      publishedAt: "2026-09-18T11:00:00.000Z",
+      collectedAt: "2026-09-18T11:05:00.000Z",
+      likeCount: null,
+      commentsCount: null,
+      followersCountAtCollection: null,
+      createdAt: "2026-09-18T11:05:00.000Z",
+    }],
+    createCluster: async () => {
+      created += 1;
+      return "unexpected-cluster";
+    },
+  })));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.clustersProcessed, 0);
+  assert.equal(created, 0);
+});
+
 Deno.test("rerunning the same input is idempotent and invokes scoring once per run", async () => {
   let memberships = 0;
   const methods: string[] = [];

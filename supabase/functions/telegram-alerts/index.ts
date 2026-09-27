@@ -33,7 +33,7 @@ async function runAlerts() {
       return Array.isArray(rows) ? rows.flatMap((value) => typeof value === "object" && value !== null && typeof (value as Record<string, unknown>).story_cluster_id === "string" && typeof (value as Record<string, unknown>).ranking_version === "string" && typeof (value as Record<string, unknown>).editorial_score === "number" && typeof (value as Record<string, unknown>).information_gap_score === "number" && typeof (value as Record<string, unknown>).discovery_audience_signal_score === "number" && typeof (value as Record<string, unknown>).grounding_status === "string" ? [value as never] : []) : [];
     },
     listClusters: async (ids) => {
-      const rows = await rest(`/rest/v1/story_clusters?select=id,canonical_title&id=in.(${ids.map((id) => encodeURIComponent(id)).join(",")})`);
+      const rows = await rest(`/rest/v1/story_clusters?select=id,canonical_title,summary,signature_json&id=in.(${ids.map((id) => encodeURIComponent(id)).join(",")})`);
       return Array.isArray(rows) ? rows.flatMap((value) => typeof value === "object" && value !== null && typeof (value as Record<string, unknown>).id === "string" && typeof (value as Record<string, unknown>).canonical_title === "string" ? [value as never] : []) : [];
     },
     insertEvent: async (event) => {

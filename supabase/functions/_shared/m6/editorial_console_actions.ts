@@ -91,7 +91,7 @@ export function parseConsoleCallback(value: string): ParsedCallback | null {
 
 export function parseConsoleIntent(value: string, activeStoryToken?: string | null): ConsoleAction | null {
   const normalized = value.trim().toLocaleLowerCase("ko-KR").replace(/\s+/gu, " ");
-  if (/^(오늘 뭐 있어\??|오늘 올릴 거 보여줘|추천 소재)$/u.test(normalized)) return { type: "OPEN_RECOMMENDED", page: 1 };
+  if (/^(\/today|오늘 뭐 있어\??|오늘 올릴 거 보여줘|추천 소재)$/u.test(normalized)) return { type: "OPEN_RECOMMENDED", page: 1 };
   if (/^(전체 수집한 거 보여줘|전체 소재|전체 수집본)$/u.test(normalized)) return { type: "OPEN_ALL", page: 1 };
   if (normalized === "다음 거 보여줘") return { type: "NEXT_PAGE" };
   if (/^이거 카드뉴스로 (?:만들어줘|만들거야|만들어야)$/u.test(normalized)) return { type: "GENERATE_CAROUSEL", token: activeStoryToken ?? null };

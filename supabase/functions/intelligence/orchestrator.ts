@@ -30,6 +30,7 @@ import {
   type StoryClusterContext,
 } from "./repository.ts";
 import { businessDate } from "../_shared/m6/business_date.ts";
+import { isManchesterUnitedRelevant } from "../_shared/m8/manchester_united_relevance.ts";
 
 export type LifecycleStatus = "OPEN" | "ACTIVE" | "STALE" | "ARCHIVED";
 
@@ -277,6 +278,21 @@ export async function runIntelligence(
     for (const post of posts) {
       if (processedPostIds.has(post.id)) continue;
       const features = extractStoryFeatures(post.caption, post.publishedAt, dictionary, post.contentUnderstanding);
+      if (!isManchesterUnitedRelevant({
+        canonicalTitle: post.caption,
+        signature: {
+          entities: features.entities,
+          events: features.events,
+          sources: features.sources,
+          multimodal_context: features.multimodalContext ?? [],
+        },
+        sourceUsernames: post.sourceAccount?.username ? [post.sourceAccount.username] : [],
+      })) {
+        // Leave the raw post intact for audit/history, but do not turn an
+        // unrelated football post into a ManUtd editorial cluster.
+        processedPostIds.add(post.id);
+        continue;
+      }
       const candidates: Array<{
         context: StoryClusterContext;
         features: StoryFeatures;

@@ -1,4 +1,5 @@
 import { buildIntelligenceCompleteFingerprint, type IntelligenceSummaryInput, type IntelligenceSummaryStory } from "../_shared/m6/alerts.ts";
+import { isManchesterUnitedRelevant } from "../_shared/m8/manchester_united_relevance.ts";
 
 export interface IntelligenceRankingRow {
   story_cluster_id: string;
@@ -14,6 +15,8 @@ export interface IntelligenceRankingRow {
 export interface IntelligenceClusterRow {
   id: string;
   canonical_title: string;
+  summary?: string | null;
+  signature_json?: unknown;
 }
 
 export interface IntelligenceSummaryEvent {
@@ -39,13 +42,14 @@ export async function materializeIntelligenceCompleteAlert(input: {
   if (!input.threadId || !(await input.repository.intelligenceSucceeded(input.businessDate))) return false;
   const rankings = await input.repository.listRankings(input.businessDate);
   if (rankings.length === 0) return false;
-  const titles = new Map((await input.repository.listClusters(rankings.map((ranking) => ranking.story_cluster_id))).map((cluster) => [cluster.id, cluster.canonical_title] as const));
+  const clusters = await input.repository.listClusters(rankings.map((ranking) => ranking.story_cluster_id));
+  const clusterById = new Map(clusters.map((cluster) => [cluster.id, cluster] as const));
   const stories: IntelligenceSummaryStory[] = rankings.flatMap((ranking) => {
-    const title = titles.get(ranking.story_cluster_id);
-    if (!title) return [];
+    const cluster = clusterById.get(ranking.story_cluster_id);
+    if (!cluster || !isManchesterUnitedRelevant({ canonicalTitle: cluster.canonical_title, summary: cluster.summary, signature: cluster.signature_json })) return [];
     return [{
       story_id: ranking.story_cluster_id,
-      title,
+      title: cluster.canonical_title,
       rank: ranking.rank,
       editorial_score: ranking.editorial_score,
       information_gap_score: ranking.information_gap_score,
@@ -64,4 +68,3 @@ export async function materializeIntelligenceCompleteAlert(input: {
     status: "PENDING",
   });
 }
-
