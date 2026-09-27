@@ -47,6 +47,13 @@ function blocks(xml: string): string[] {
   return [...xml.matchAll(/<(item|entry)\b[^>]*>([\s\S]*?)<\/\1>/giu)].map((match) => match[2]);
 }
 
+function included(feed: SourceFeed, title: string, excerpt: string | null): boolean {
+  const terms = feed.includeTerms ?? [];
+  if (terms.length === 0) return true;
+  const haystack = `${title} ${excerpt ?? ""}`.toLocaleLowerCase("en-US");
+  return terms.some((term) => haystack.includes(term.toLocaleLowerCase("en-US")));
+}
+
 async function parseOfficialHtml(
   html: string,
   feed: SourceFeed,
@@ -111,6 +118,7 @@ export async function parseFeedDocument(
     if (parsedUrl.protocol !== "https:") continue;
     const excerptValue = text(field(block, "description") || field(block, "summary") || field(block, "content"));
     const excerpt = excerptValue ? excerptValue.slice(0, options.maxExcerptChars) : null;
+    if (!included(feed, title, excerpt)) continue;
     const publishedAt = parseDate(field(block, "pubDate") || field(block, "published") || field(block, "updated"));
     const normalizedUrl = parsedUrl.toString();
     result.push({

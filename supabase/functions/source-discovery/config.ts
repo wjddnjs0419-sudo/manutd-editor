@@ -59,12 +59,19 @@ function feedsEnv(readEnv: EnvReader): readonly SourceFeed[] {
     const format = typeof value.format === "string" && FORMATS.has(value.format as NonNullable<SourceFeed["format"]>)
       ? value.format as NonNullable<SourceFeed["format"]>
       : "RSS";
+    const includeTerms = value.include_terms === undefined ? undefined : (() => {
+      if (!Array.isArray(value.include_terms) || value.include_terms.length > 16) throw new Error("Invalid configuration: SOURCE_DISCOVERY_FEEDS_JSON");
+      const terms = value.include_terms.map((term) => typeof term === "string" ? term.trim() : "");
+      if (terms.some((term) => term === "" || term.length > 100)) throw new Error("Invalid configuration: SOURCE_DISCOVERY_FEEDS_JSON");
+      return terms;
+    })();
     return {
       canonicalName: value.canonical_name.trim(),
       editorialRole: value.editorial_role as EditorialSourceRole,
       entityType,
       url: value.url.trim(),
       format,
+      ...(includeTerms ? { includeTerms } : {}),
     } satisfies SourceFeed;
   });
 }
