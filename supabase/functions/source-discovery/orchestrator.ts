@@ -53,7 +53,7 @@ export async function runSourceDiscovery(options: RunSourceDiscoveryOptions): Pr
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
     try {
-      const response = await options.fetch(feed.url, { method: "GET", headers: { accept: "application/rss+xml, application/atom+xml, text/xml" }, signal: controller.signal });
+      const response = await options.fetch(feed.url, { method: "GET", headers: { accept: "application/rss+xml, application/atom+xml, text/xml, text/html" }, signal: controller.signal });
       if (!response.ok) throw new Error(`HTTP_${Math.floor(response.status / 100)}XX`);
       const xml = await readBounded(response, options.maxBytes);
       const sourceId = await options.repository.ensureSource(feed);

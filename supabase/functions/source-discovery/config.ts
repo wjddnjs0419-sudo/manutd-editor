@@ -18,6 +18,7 @@ const ENTITY_TYPES = new Set<InformationSourceEntityType>([
   "GOVERNING_BODY",
   "OTHER",
 ]);
+const FORMATS = new Set<NonNullable<SourceFeed["format"]>>(["RSS", "ATOM", "HTML"]);
 
 export interface SourceDiscoveryConfig {
   readonly feeds: readonly SourceFeed[];
@@ -55,11 +56,15 @@ function feedsEnv(readEnv: EnvReader): readonly SourceFeed[] {
     const entityType = typeof value.entity_type === "string" && ENTITY_TYPES.has(value.entity_type as InformationSourceEntityType)
       ? value.entity_type as InformationSourceEntityType
       : "OTHER";
+    const format = typeof value.format === "string" && FORMATS.has(value.format as NonNullable<SourceFeed["format"]>)
+      ? value.format as NonNullable<SourceFeed["format"]>
+      : "RSS";
     return {
       canonicalName: value.canonical_name.trim(),
       editorialRole: value.editorial_role as EditorialSourceRole,
       entityType,
       url: value.url.trim(),
+      format,
     } satisfies SourceFeed;
   });
 }

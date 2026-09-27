@@ -47,6 +47,47 @@ function blocks(xml: string): string[] {
   return [...xml.matchAll(/<(item|entry)\b[^>]*>([\s\S]*?)<\/\1>/giu)].map((match) => match[2]);
 }
 
+async function parseOfficialHtml(
+  html: string,
+  feed: SourceFeed,
+  options: FeedParserOptions,
+): Promise<readonly ParsedFeedObservation[]> {
+  const result: ParsedFeedObservation[] = [];
+  const seen = new Set<string>();
+  const cards = /<a\b([^>]*data-testid=["']article-card__floating-link["'][^>]*)>([\s\S]*?)<\/a>/giu;
+  for (const match of html.matchAll(cards)) {
+    const attributes = match[1] ?? "";
+    const href = attributes.match(/\bhref=["']([^"']+)["']/iu)?.[1] ?? "";
+    const title = text(match[2]?.match(/<span\b[^>]*>([\s\S]*?)<\/span>/iu)?.[1] ?? "");
+    if (!href || !title) continue;
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(href, feed.url);
+    } catch {
+      continue;
+    }
+    if (parsedUrl.protocol !== "https:") continue;
+    const normalizedUrl = parsedUrl.toString();
+    if (seen.has(normalizedUrl)) continue;
+    seen.add(normalizedUrl);
+    const externalId = normalizedUrl.slice(0, 320);
+    result.push({
+      sourceCanonicalName: feed.canonicalName,
+      editorialRole: feed.editorialRole,
+      externalId,
+      canonicalUrl: normalizedUrl.slice(0, 2_000),
+      title: title.slice(0, 500),
+      excerpt: null,
+      publishedAt: null,
+      discoverySignal: feed.editorialRole.startsWith("DISCOVERY_") ? 0.7 : 0.5,
+      contentFingerprint: await fingerprint(`${externalId}\u0000${title}\u0000${normalizedUrl}`),
+      metadata: { feed_url: feed.url, format: "HTML" },
+    });
+    if (result.length >= options.maxItems) break;
+  }
+  return result;
+}
+
 export async function parseFeedDocument(
   xml: string,
   feed: SourceFeed,
@@ -54,6 +95,7 @@ export async function parseFeedDocument(
 ): Promise<readonly ParsedFeedObservation[]> {
   const url = new URL(feed.url);
   if (url.protocol !== "https:") throw new Error("INVALID_FEED_URL");
+  if (feed.format === "HTML") return parseOfficialHtml(xml, feed, options);
   const result: ParsedFeedObservation[] = [];
   for (const block of blocks(xml).slice(0, options.maxItems)) {
     const externalId = text(field(block, "guid") || field(block, "id"));

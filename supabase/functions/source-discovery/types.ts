@@ -19,6 +19,7 @@ export interface SourceFeed {
   readonly editorialRole: EditorialSourceRole;
   readonly entityType: InformationSourceEntityType;
   readonly url: string;
+  readonly format?: "RSS" | "ATOM" | "HTML";
 }
 
 export interface SourceObservationInput {
