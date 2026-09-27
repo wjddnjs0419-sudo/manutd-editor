@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1.0.8";
 import {
   buildCanonicalStories,
   createEditorialConsoleRepository,

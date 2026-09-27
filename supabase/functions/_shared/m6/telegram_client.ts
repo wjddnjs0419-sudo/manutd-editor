@@ -7,11 +7,22 @@ export class TelegramClientError extends Error {
   }
 }
 
+export interface TelegramInlineKeyboardButton {
+  text: string;
+  callback_data: string;
+}
+
+export interface TelegramInlineKeyboardMarkup {
+  inline_keyboard: TelegramInlineKeyboardButton[][];
+}
+
 export interface TelegramSendResult { message_id: number | null; }
 
 export interface TelegramClient {
-  sendText(chatId: string | number, text: string): Promise<TelegramSendResult>;
-  sendPhoto(chatId: string | number, photoUrl: string, caption: string): Promise<TelegramSendResult>;
+  sendText(chatId: string | number, text: string, replyMarkup?: TelegramInlineKeyboardMarkup): Promise<TelegramSendResult>;
+  sendPhoto(chatId: string | number, photoUrl: string, caption: string, replyMarkup?: TelegramInlineKeyboardMarkup): Promise<TelegramSendResult>;
+  editMessageText(chatId: string | number, messageId: number, text: string, replyMarkup?: TelegramInlineKeyboardMarkup): Promise<TelegramSendResult>;
+  answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void>;
 }
 
 interface TelegramClientOptions {
@@ -44,7 +55,7 @@ export function createTelegramClient(options: TelegramClientOptions): TelegramCl
   const sleep = options.sleep ?? ((delay) => new Promise<void>((resolve) => setTimeout(resolve, delay)));
   const maxAttempts = options.maxAttempts ?? 3;
 
-  async function send(method: "sendMessage" | "sendPhoto", body: Record<string, unknown>): Promise<TelegramSendResult> {
+  async function send(method: "sendMessage" | "sendPhoto" | "editMessageText" | "answerCallbackQuery", body: Record<string, unknown>): Promise<TelegramSendResult> {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response: Response;
       try {
@@ -71,7 +82,9 @@ export function createTelegramClient(options: TelegramClientOptions): TelegramCl
   }
 
   return {
-    sendText: (chatId, text) => send("sendMessage", { chat_id: chatId, text }),
-    sendPhoto: (chatId, photoUrl, caption) => send("sendPhoto", { chat_id: chatId, photo: photoUrl, caption }),
+    sendText: (chatId, text, replyMarkup) => send("sendMessage", { chat_id: chatId, text, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) }),
+    sendPhoto: (chatId, photoUrl, caption, replyMarkup) => send("sendPhoto", { chat_id: chatId, photo: photoUrl, caption, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) }),
+    editMessageText: (chatId, messageId, text, replyMarkup) => send("editMessageText", { chat_id: chatId, message_id: messageId, text, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) }),
+    answerCallbackQuery: async (callbackQueryId, text) => { await send("answerCallbackQuery", { callback_query_id: callbackQueryId, ...(text ? { text } : {}) }); },
   };
 }

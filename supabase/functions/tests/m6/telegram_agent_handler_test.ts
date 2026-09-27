@@ -144,3 +144,14 @@ Deno.test("agent handler parses a JSON-encoded n8n item before owner validation"
   assertEquals(response.status, 200);
   assertEquals(received, update);
 });
+
+Deno.test("agent handler accepts owner callback queries and deduplicates them", async () => {
+  let runs = 0;
+  const callbackUpdate = { update_id: 17, callback_query: { id: "callback-1", from: { id: 42 }, message: { message_id: 8, chat: { id: 42 } }, data: "ideas:recommended:1" } };
+  const handler = createTelegramAgentHandler({ invokeSecret: "secret", ownerUserId: "42", claimUpdate: async () => { runs += 1; return runs === 1; }, run: async (update) => ({ status: "OK", reply: JSON.stringify(update) }) });
+  const first = await handler(new Request("https://example.test", { method: "POST", headers: { authorization: "Bearer secret" }, body: JSON.stringify(callbackUpdate) }));
+  assertEquals(first.status, 200);
+  assertEquals((await first.json()).status, "OK");
+  const second = await handler(new Request("https://example.test", { method: "POST", headers: { authorization: "Bearer secret" }, body: JSON.stringify(callbackUpdate) }));
+  assertEquals(await second.json(), { status: "ALREADY_PROCESSED" });
+});

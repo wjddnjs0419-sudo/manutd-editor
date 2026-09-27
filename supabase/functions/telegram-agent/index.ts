@@ -9,10 +9,13 @@ import { retrieveHistoricalContext, type HistoricalContext, type RetrievalThread
 import { reviseCaption, reviseSlide, selectHook } from "../_shared/m6/revisions.ts";
 import { createTelegramClient } from "../_shared/m6/telegram_client.ts";
 import { createM6Repository } from "../_shared/m6/repository.ts";
+import { createEditorialConsoleRepository, paginateStories, shortCallbackToken, type CanonicalStory, type ConsoleView } from "../_shared/m6/editorial_console.ts";
+import { dispatchEditorialConsoleAction, parseConsoleCallback, parseConsoleIntent, type ConsoleAction, type ConsoleState } from "../_shared/m6/editorial_console_actions.ts";
 import { createTelegramAgentHandler } from "./handler.ts";
 import { answerNaturalLanguage, type CanonicalConversationContext } from "./conversation.ts";
 import type { StoredCreativeBrief } from "../creative-generation/repository.ts";
 import type { CreativeBriefSlide } from "../creative-generation/types.ts";
+import type { ManutdEditorCarouselDraft } from "../_shared/editorial-style/types.ts";
 
 const invokeSecret = Deno.env.get("TELEGRAM_AGENT_INVOKE_SECRET") ?? "";
 const webhookSecret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
@@ -22,6 +25,7 @@ const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceKey = Deno.env.get("SUPABASE_SECRET_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const base = supabaseUrl.replace(/\/$/u, "");
 const repository = createM6Repository({ supabaseUrl, serviceRoleKey: serviceKey });
+const consoleRepository = createEditorialConsoleRepository({ supabaseUrl, serviceRoleKey: serviceKey });
 
 function profileHeaders(profile: string): Record<string, string> { return { apikey: serviceKey, authorization: `Bearer ${serviceKey}`, accept: "application/json", "accept-profile": profile, "content-profile": profile }; }
 async function rest(path: string, init: RequestInit = {}, profile?: string): Promise<unknown> {
@@ -146,7 +150,11 @@ async function rollSummary(threadId: string, config: AgentConfig, provider?: (pa
   });
 }
 
-interface TelegramUpdate { update_id?: number; message?: { text?: string; from?: { id?: number; first_name?: string }; chat?: { id?: number } } }
+interface TelegramUpdate {
+  update_id?: number;
+  message?: { message_id?: number; text?: string; from?: { id?: number; first_name?: string }; chat?: { id?: number } };
+  callback_query?: { id?: string; data?: string; from?: { id?: number; first_name?: string }; message?: { message_id?: number; chat?: { id?: number } } };
+}
 interface ThreadRow { id: string; telegram_user_id: string; active_candidate_id: string | null; active_source_observation_id: string | null; active_brief_id: string | null; active_match_id: string | null; context_history: unknown[]; conversation_summary: string | null; summary_message_count: number; pending_action: Record<string, unknown> | null; pending_action_expires_at: string | null; }
 interface AgentConfig { recent_message_limit: number; summary_trigger_count: number; model_config: Record<string, unknown>; }
 
@@ -166,10 +174,15 @@ function defaultAgentConfig(): AgentConfig {
 }
 
 function update(value: unknown): TelegramUpdate { return value as TelegramUpdate; }
-function content(value: TelegramUpdate): string { return value.message?.text?.trim() || "[Telegram update]"; }
+function isCallbackUpdate(value: TelegramUpdate): boolean { return typeof value.callback_query?.id === "string"; }
+function telegramChatId(value: TelegramUpdate): number | null { return value.message?.chat?.id ?? value.callback_query?.message?.chat?.id ?? null; }
+function telegramUserId(value: TelegramUpdate): number | null { return value.message?.from?.id ?? value.callback_query?.from?.id ?? null; }
+function callbackMessageId(value: TelegramUpdate): number | null { return value.callback_query?.message?.message_id ?? null; }
+function callbackId(value: TelegramUpdate): string | null { return value.callback_query?.id ?? null; }
+function content(value: TelegramUpdate): string { return value.message?.text?.trim() || value.callback_query?.data?.trim() || "[Telegram update]"; }
 
 async function ensureThread(value: TelegramUpdate): Promise<ThreadRow> {
-  const chatId = value.message?.chat?.id;
+  const chatId = telegramChatId(value);
   if (typeof chatId !== "number" || !ownerUserId) throw new Error("TELEGRAM_THREAD_CONFIGURATION_MISSING");
   const users = await rest("/rest/v1/telegram_users?on_conflict=telegram_user_id", { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify({ telegram_user_id: Number(ownerUserId), display_name: value.message?.from?.first_name ?? null, role: "OWNER", is_active: true }) }, "app_private");
   const user = Array.isArray(users) ? users[0] as { id?: string } | undefined : undefined;
@@ -184,7 +197,7 @@ async function claimUpdate(value: unknown): Promise<boolean> {
   const incoming = update(value);
   if (typeof incoming.update_id !== "number") return true;
   const thread = await ensureThread(incoming);
-  const claimed = await rest("/rest/v1/telegram_messages?on_conflict=telegram_update_id", { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=ignore-duplicates,return=representation" }, body: JSON.stringify({ thread_id: thread.id, telegram_update_id: incoming.update_id, role: "USER", message_type: parseCommand(content(incoming)) ? "COMMAND" : "TEXT", content: content(incoming), metadata: {} }) }, "app_private");
+  const claimed = await rest("/rest/v1/telegram_messages?on_conflict=telegram_update_id", { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=ignore-duplicates,return=representation" }, body: JSON.stringify({ thread_id: thread.id, telegram_update_id: incoming.update_id, role: "USER", message_type: isCallbackUpdate(incoming) ? "CONSOLE" : parseCommand(content(incoming)) ? "COMMAND" : "TEXT", content: content(incoming), metadata: isCallbackUpdate(incoming) ? { callback_query_id: callbackId(incoming) } : {} }) }, "app_private");
   return Array.isArray(claimed) && claimed.length > 0;
 }
 
@@ -192,6 +205,151 @@ async function sendAndPersist(thread: ThreadRow, value: TelegramUpdate, reply: s
   const client = createTelegramClient({ token: botToken });
   const sent = await client.sendText(value.message?.chat?.id ?? "", reply);
   await rest("/rest/v1/telegram_messages", { method: "POST", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ thread_id: thread.id, telegram_message_id: sent.message_id, telegram_update_id: null, role: "ASSISTANT", message_type: "TEXT", content: reply, metadata: { in_reply_to_update_id: value.update_id ?? null } }) }, "app_private");
+}
+
+function emptyConsoleState(messageId: number | null = null): ConsoleState {
+  return { view: "HOME", mode: null, page: 1, story_id: null, story_fingerprint: null, brief_id: null, telegram_message_id: messageId, state_version: 1 };
+}
+
+function consoleStateFromRow(value: Record<string, unknown>): ConsoleState {
+  const json = isObject(value.state_json) ? value.state_json : {};
+  const viewName = value.view_name;
+  const view = viewName === "DETAIL" ? "DETAIL" : viewName === "EVIDENCE" ? "EVIDENCE" : viewName === "REEL" ? "REEL" : viewName === "DRAFT" ? "DRAFT" : viewName === "ALL" || viewName === "RECOMMENDED" ? "LIST" : "HOME";
+  const mode = viewName === "ALL" ? "all" : viewName === "RECOMMENDED" ? "recommended" : json.mode === "all" ? "all" : json.mode === "recommended" ? "recommended" : null;
+  return {
+    view,
+    mode,
+    page: typeof value.page === "number" && value.page > 0 ? value.page : 1,
+    story_id: typeof value.story_cluster_id === "string" ? value.story_cluster_id : null,
+    story_fingerprint: typeof json.story_fingerprint === "string" ? json.story_fingerprint : null,
+    brief_id: typeof value.brief_id === "string" ? value.brief_id : null,
+    telegram_message_id: typeof value.telegram_message_id === "number" ? value.telegram_message_id : null,
+    state_version: typeof value.state_version === "number" && value.state_version > 0 ? value.state_version : 1,
+  };
+}
+
+async function loadConsoleState(threadId: string): Promise<ConsoleState> {
+  const rows = await rest(`/rest/v1/telegram_console_state?select=*&thread_id=eq.${encodeURIComponent(threadId)}&limit=1`, {}, "app_private");
+  if (Array.isArray(rows) && isObject(rows[0])) return consoleStateFromRow(rows[0]);
+  const created = await rest("/rest/v1/telegram_console_state", { method: "POST", headers: { "content-type": "application/json", prefer: "return=representation" }, body: JSON.stringify({ thread_id: threadId }) }, "app_private");
+  return Array.isArray(created) && isObject(created[0]) ? consoleStateFromRow(created[0]) : emptyConsoleState();
+}
+
+async function saveConsoleState(threadId: string, state: ConsoleState): Promise<void> {
+  const viewName = state.view === "LIST" ? state.mode === "all" ? "ALL" : "RECOMMENDED" : state.view;
+  await rest(`/rest/v1/telegram_console_state?thread_id=eq.${encodeURIComponent(threadId)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ view_name: viewName, page: state.page, story_cluster_id: state.story_id, brief_id: state.brief_id, telegram_message_id: state.telegram_message_id, state_version: state.state_version, state_json: { mode: state.mode, story_fingerprint: state.story_fingerprint } }) }, "app_private");
+}
+
+async function skippedFingerprints(threadId: string, rankingDate: string): Promise<ReadonlySet<string>> {
+  const rows = await rest(`/rest/v1/telegram_editorial_dispositions?select=story_fingerprint&thread_id=eq.${encodeURIComponent(threadId)}&ranking_date=eq.${encodeURIComponent(rankingDate)}&disposition=eq.SKIPPED`, {}, "app_private");
+  return new Set(Array.isArray(rows) ? rows.flatMap((value) => isObject(value) && typeof value.story_fingerprint === "string" ? [value.story_fingerprint] : []) : []);
+}
+
+async function currentConsoleStories(thread: ThreadRow, mode: "recommended" | "all"): Promise<readonly CanonicalStory[]> {
+  const date = businessDate(new Date(), "Asia/Seoul");
+  const stories = await consoleRepository.listCanonicalStories(date);
+  if (mode === "all") return stories;
+  const skipped = await skippedFingerprints(thread.id, date);
+  return stories.filter((story) => story.recommended && !skipped.has(story.story_fingerprint));
+}
+
+async function resolveConsoleStory(thread: ThreadRow, token: string): Promise<CanonicalStory | null> {
+  const stories = await consoleRepository.listCanonicalStories(businessDate(new Date(), "Asia/Seoul"));
+  return stories.find((story) => story.id === token || story.candidate_id === token || shortCallbackToken(story.id) === token) ?? null;
+}
+
+async function recordConsoleEvent(threadId: string, incoming: TelegramUpdate, event: { action: string; status: string; metadata?: Record<string, unknown> }): Promise<void> {
+  await rest("/rest/v1/telegram_console_events", { method: "POST", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ thread_id: threadId, action: event.action, status: event.status, telegram_update_id: incoming.update_id ?? null, metadata: event.metadata ?? {} }) }, "app_private").catch(() => undefined);
+}
+
+function storedBriefToManutdDraft(row: Record<string, unknown>, story: CanonicalStory): ManutdEditorCarouselDraft {
+  const slidesJson = isObject(row.slides_json) ? row.slides_json : {};
+  const rawSlides = Array.isArray(slidesJson.slides) ? slidesJson.slides.filter(isObject) : [];
+  const slides = rawSlides.map((slide, index) => {
+    const body = typeof slide.body === "string" ? slide.body : null;
+    const claims = Array.isArray(slide.claims) ? slide.claims.filter(isObject) : [];
+    const evidenceIds = claims.flatMap((claim) => Array.isArray(claim.evidence_ids) ? claim.evidence_ids.filter((value): value is string => typeof value === "string") : []);
+    const role = index === 0 ? "HOOK" : index === 1 ? "CONTEXT" : index === 2 ? "KEY_FACT" : "IMPLICATION";
+    return { index: index + 1, role: role as "HOOK" | "CONTEXT" | "KEY_FACT" | "IMPLICATION", headline: typeof slide.headline === "string" && slide.headline.trim() ? slide.headline : story.title, highlight: null, body: role === "HOOK" ? null : body, closing_line: null, evidence_ids: [...new Set(evidenceIds)] };
+  });
+  const caption = typeof row.caption_draft === "string" ? row.caption_draft : "";
+  return {
+    style_profile: typeof row.style_profile === "string" ? row.style_profile : "manutd_editor",
+    style_version: typeof row.style_version === "string" ? row.style_version : "manutd-editor-v1",
+    story_id: story.id,
+    creative_brief_id: typeof row.id === "string" ? row.id : null,
+    slides,
+    caption: { body: caption, cta: typeof row.cta === "string" ? row.cta : null },
+    editor_warning: slides.length < 3 ? "현재 근거로는 3장까지 구성하는 것이 적절합니다." : null,
+    internal_grounding: { evidence_ids: story.evidence.map((evidence) => evidence.evidence_id), source_caveats: story.grounding_status === "VERIFIED" ? [] : [story.grounding_status], unsupported_claims: [] },
+  };
+}
+
+async function generateCanonicalCarousel(story: CanonicalStory): Promise<ManutdEditorCarouselDraft> {
+  if (!story.candidate_id) throw new Error("CANDIDATE_NOT_FOUND");
+  const secret = Deno.env.get("COLLECTOR_INVOKE_SECRET") ?? "";
+  if (!secret) throw new Error("COLLECTOR_INVOKE_SECRET_MISSING");
+  const response = await fetch(`${base}/functions/v1/creative-generation`, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify({ candidate_id: story.candidate_id, trigger_type: "MANUAL" }) });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !isObject(result) || (result.status !== "READY" && result.status !== "NOOP") || typeof result.creative_brief_id !== "string") throw new Error("CREATIVE_GENERATION_FAILED");
+  const brief = await rowById(`/rest/v1/creative_briefs?select=*&id=eq.${encodeURIComponent(result.creative_brief_id)}&limit=1`);
+  if (!brief) throw new Error("CREATIVE_BRIEF_NOT_FOUND");
+  return storedBriefToManutdDraft(brief, story);
+}
+
+async function skipCanonicalStory(thread: ThreadRow, story: CanonicalStory): Promise<void> {
+  await rest(`/rest/v1/telegram_editorial_dispositions?on_conflict=thread_id,story_cluster_id,ranking_date,story_fingerprint`, { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify({ thread_id: thread.id, candidate_id: story.candidate_id, story_cluster_id: story.id, ranking_date: story.ranking_date, story_fingerprint: story.story_fingerprint, disposition: "SKIPPED" }) }, "app_private");
+}
+
+async function selectCanonicalDraft(thread: ThreadRow, token: string): Promise<void> {
+  const state = await loadConsoleState(thread.id);
+  const briefId = state.brief_id && (state.brief_id === token || shortCallbackToken(state.brief_id) === token) ? state.brief_id : token;
+  await rest(`/rest/v1/creative_briefs?id=eq.${encodeURIComponent(briefId)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ status: "SELECTED", selected_at: new Date().toISOString() }) });
+}
+
+function consoleDependencies(thread: ThreadRow) {
+  return {
+    listStories: async (mode: "recommended" | "all", page: number) => paginateStories(await currentConsoleStories(thread, mode), page),
+    getStoryByToken: async (token: string) => await resolveConsoleStory(thread, token),
+    skipStory: async (story: CanonicalStory) => await skipCanonicalStory(thread, story),
+    generateCarousel: async (story: CanonicalStory) => await generateCanonicalCarousel(story),
+    selectDraft: async (token: string) => await selectCanonicalDraft(thread, token),
+  };
+}
+
+async function sendConsoleView(thread: ThreadRow, incoming: TelegramUpdate, state: ConsoleState, view: ConsoleView): Promise<ConsoleState> {
+  const client = createTelegramClient({ token: botToken });
+  const chatId = telegramChatId(incoming) ?? "";
+  const messageId = callbackMessageId(incoming);
+  let sentMessageId: number | null = messageId;
+  const markup = { inline_keyboard: view.inline_keyboard };
+  if (messageId !== null) {
+    try { await client.editMessageText(chatId, messageId, view.text, markup); } catch { const sent = await client.sendText(chatId, view.text, markup); sentMessageId = sent.message_id; }
+  } else {
+    const sent = await client.sendText(chatId, view.text, markup);
+    sentMessageId = sent.message_id;
+  }
+  const next = { ...state, telegram_message_id: sentMessageId };
+  await saveConsoleState(thread.id, next);
+  await rest("/rest/v1/telegram_messages", { method: "POST", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ thread_id: thread.id, telegram_message_id: sentMessageId, telegram_update_id: null, role: "ASSISTANT", message_type: "CONSOLE", content: view.text, metadata: { in_reply_to_update_id: incoming.update_id ?? null } }) }, "app_private");
+  return next;
+}
+
+async function runConsoleAction(thread: ThreadRow, incoming: TelegramUpdate, action: ConsoleAction): Promise<{ status: string; reply: string }> {
+  const client = createTelegramClient({ token: botToken });
+  const queryId = callbackId(incoming);
+  if (queryId) await client.answerCallbackQuery(queryId).catch(() => undefined);
+  const state = await loadConsoleState(thread.id);
+  const incomingMessageId = callbackMessageId(incoming);
+  if (incomingMessageId !== null && state.telegram_message_id !== null && incomingMessageId !== state.telegram_message_id) {
+    if (queryId) await client.answerCallbackQuery(queryId, "이전 화면입니다. 최신 목록을 열어 주세요.").catch(() => undefined);
+    await recordConsoleEvent(thread.id, incoming, { action: "STALE_CALLBACK", status: "STALE" });
+    return { status: "STALE", reply: "이전 화면입니다. 최신 목록을 열어 주세요." };
+  }
+  const result = await dispatchEditorialConsoleAction(action, { ...state, telegram_message_id: incomingMessageId ?? state.telegram_message_id }, consoleDependencies(thread));
+  await recordConsoleEvent(thread.id, incoming, result.event);
+  await sendConsoleView(thread, incoming, result.next_state, result.view);
+  return { status: result.event.status, reply: result.view.text };
 }
 
 async function activeBrief(thread: ThreadRow): Promise<StoredCreativeBrief | null> {
@@ -316,7 +474,18 @@ async function commandReply(command: ParsedCommand, thread: ThreadRow): Promise<
 async function runAgent(value: unknown): Promise<{ status: string; reply: string }> {
   const incoming = update(value);
   const thread = await ensureThread(incoming);
+  if (isCallbackUpdate(incoming)) {
+    const action = parseConsoleCallback(incoming.callback_query?.data ?? "");
+    if (!action) {
+      const queryId = callbackId(incoming);
+      if (queryId) await createTelegramClient({ token: botToken }).answerCallbackQuery(queryId, "지원하지 않는 버튼입니다.").catch(() => undefined);
+      return { status: "INVALID_CALLBACK", reply: "지원하지 않는 버튼입니다." };
+    }
+    return await runConsoleAction(thread, incoming, action);
+  }
   const text = content(incoming);
+  const consoleIntent = parseConsoleIntent(text, thread.active_candidate_id);
+  if (consoleIntent) return await runConsoleAction(thread, incoming, consoleIntent);
   const command = parseCommand(text);
   const config = await loadAgentConfig();
   const provider = Deno.env.get("OPENAI_API_KEY") ? createOpenAIGenerator({ apiKey: Deno.env.get("OPENAI_API_KEY") ?? "", model: typeof config.model_config.conversation_model === "string" ? config.model_config.conversation_model : undefined }) : undefined;

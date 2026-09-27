@@ -8,9 +8,16 @@ export interface TelegramAgentHandlerDependencies {
 
 interface TelegramUpdate {
   update_id: number;
-  message: {
-    from: { id: number | string };
+  message?: {
+    from?: { id: number | string };
     chat: { id: number | string };
+    [key: string]: unknown;
+  };
+  callback_query?: {
+    id: string;
+    from: { id: number | string };
+    message?: { message_id?: number; chat: { id: number | string }; [key: string]: unknown };
+    data?: string;
     [key: string]: unknown;
   };
   [key: string]: unknown;
@@ -57,8 +64,11 @@ function isTelegramId(value: unknown): value is number | string {
 
 function isTelegramUpdate(value: unknown): value is TelegramUpdate {
   if (!isRecord(value) || typeof value.update_id !== "number" || !Number.isInteger(value.update_id) || value.update_id < 0) return false;
-  if (!isRecord(value.message) || !isRecord(value.message.from) || !isRecord(value.message.chat)) return false;
-  return isTelegramId(value.message.from.id) && isTelegramId(value.message.chat.id);
+  if (isRecord(value.message) && isRecord(value.message.chat) && isRecord(value.message.from)) {
+    return isTelegramId(value.message.from.id) && isTelegramId(value.message.chat.id);
+  }
+  if (!isRecord(value.callback_query) || typeof value.callback_query.id !== "string" || !isRecord(value.callback_query.from) || !isTelegramId(value.callback_query.from.id)) return false;
+  return isRecord(value.callback_query.message) && isRecord(value.callback_query.message.chat) && isTelegramId(value.callback_query.message.chat.id);
 }
 
 async function authenticationMode(
@@ -74,7 +84,7 @@ async function authenticationMode(
 }
 
 function fromId(update: TelegramUpdate): string {
-  return String(update.message.from.id);
+  return String(update.message?.from?.id ?? update.callback_query?.from.id ?? "");
 }
 
 export function createTelegramAgentHandler(
