@@ -77,7 +77,7 @@ export function createSourceDiscoveryRepository(options: RepositoryOptions): Sou
           content_fingerprint: observation.contentFingerprint,
           metadata: observation.metadata,
         }),
-      });
+      }, "app_private");
       const result = await response.json() as unknown;
       return Array.isArray(result) && result.length > 0;
     },
