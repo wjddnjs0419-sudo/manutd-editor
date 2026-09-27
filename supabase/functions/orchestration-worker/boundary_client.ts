@@ -43,7 +43,7 @@ function requestBody(jobType: EditorialJobType, payload: Record<string, unknown>
     return Object.keys(value).length === 0 ? undefined : value;
   }
   if (jobType === "RUN_INTELLIGENCE" || jobType === "SYNC_NOTION" || jobType === "DISCOVER_SOURCES" || jobType === "GROUND_CLAIMS" || jobType === "RANK_EDITORIAL") {
-    return typeof payload.as_of === "string" ? { as_of: payload.as_of } : {};
+    return typeof payload.as_of === "string" ? { as_of: payload.as_of } : undefined;
   }
   if (jobType === "PROJECT_NOTION") {
     return typeof payload.creative_brief_id === "string" ? { creative_brief_id: payload.creative_brief_id } : {};

@@ -125,5 +125,7 @@ Deno.test("boundary client preserves empty-body contracts for unscoped collectio
   });
   await invoker.invoke("COLLECT_INSTAGRAM", {});
   await invoker.invoke("ANALYZE_CONTENT", {});
-  assert.deepEqual(bodies, [null, null]);
+  await invoker.invoke("RUN_INTELLIGENCE", {});
+  await invoker.invoke("SYNC_NOTION", {});
+  assert.deepEqual(bodies, [null, null, null, null]);
 });
