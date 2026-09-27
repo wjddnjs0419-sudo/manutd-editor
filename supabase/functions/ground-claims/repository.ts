@@ -57,14 +57,18 @@ export function createGroundingRepository(options: RepositoryOptions): Grounding
       return claims;
     },
     async listObservations() {
-      const value = await request("/rest/v1/source_observations?select=id,editorial_role,title,excerpt,metadata,information_sources(canonical_name)&order=observed_at.desc&limit=500", { method: "GET" }, "app_private");
+      const [value, sources] = await Promise.all([
+        request("/rest/v1/source_observations?select=id,information_source_id,editorial_role,title,excerpt,metadata&order=observed_at.desc&limit=500", { method: "GET" }, "app_private"),
+        request("/rest/v1/information_sources?select=id,canonical_name&limit=500", { method: "GET" }),
+      ]);
       if (!Array.isArray(value)) return [];
+      const sourceNames = new Map<string, string>();
+      if (Array.isArray(sources)) for (const source of sources) if (record(source) && typeof source.id === "string" && typeof source.canonical_name === "string") sourceNames.set(source.id, source.canonical_name);
       return value.flatMap((item): GroundingObservation[] => {
         if (!record(item) || typeof item.id !== "string" || typeof item.editorial_role !== "string" || typeof item.title !== "string") return [];
-        const source = record(item.information_sources) ? item.information_sources : null;
         const metadata = record(item.metadata) ? item.metadata : {};
         const relation = metadata.relation === "CONTRADICTS" ? "CONTRADICTS" : "SUPPORTS";
-        return [{ id: item.id, editorialRole: item.editorial_role as GroundingObservation["editorialRole"], canonicalName: typeof source?.canonical_name === "string" ? source.canonical_name : "Unknown source", title: item.title, excerpt: string(item.excerpt), relation }];
+        return [{ id: item.id, editorialRole: item.editorial_role as GroundingObservation["editorialRole"], canonicalName: typeof item.information_source_id === "string" ? sourceNames.get(item.information_source_id) ?? "Unknown source" : "Unknown source", title: item.title, excerpt: string(item.excerpt), relation }];
       });
     },
     async upsertClaim(claim, version) {
