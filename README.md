@@ -323,6 +323,91 @@ M5는 `creative-generation`, `creative-generation-priority`, `creative-generatio
 
 이 runner는 local DB assertion과 fixture integration test를 수행하며, 기본적으로 `supabase/functions/.env.local`을 자동 로드합니다. `OPENAI_API_KEY`가 없으면 외부 OpenAI 호출을 명시적으로 건너뜁니다. 실제 OpenAI/Notion smoke는 배포된 함수와 해당 credential 및 database ID가 준비된 환경에서 별도로 실행해야 합니다.
 
+### Milestone 8 Telegram Editorial Console + ManUtd Editor Style
+
+M8의 운영 흐름은 다음과 같습니다.
+
+```text
+Sources
+  → M8 multimodal intelligence / grounding / ranking
+  → canonical story clusters
+  → editorial ranking
+  → Telegram Editorial Console
+  → ManUtd Editor creative generation
+  → structured carousel draft
+  → M9 Figma rendering (not implemented here)
+```
+
+M8는 “무엇을 다룰 가치가 있는가?”를 결정하고, `manutd_editor-v1` 스타일 계약은
+“맨유 에디터가 어떻게 말할 것인가?”를 결정합니다. Telegram은 자연어 명령을
+기다리는 채팅이 아니라 버튼 중심의 편집 콘솔입니다. M8 intelligence가 성공하고
+현재 canonical story가 있으면 `telegram-alerts`가 중복 제거된 한 건의 요약을 보냅니다.
+편집자는 `🔥 추천 소재` 또는 `📚 전체 소재`를 누르고, canonical story를 연 뒤
+`📝 카드뉴스 생성`을 누릅니다. 목록은 기본 5개씩 페이지네이션하며 동일 사건의 원문
+게시물은 여러 개가 아니라 하나의 story로 표시됩니다.
+
+```text
+📡 오늘의 맨유 인텔리전스
+새롭게 확인된 소재 12개 · 추천 후보 5개
+
+[🔥 추천 소재] [📚 전체 소재]
+        ↓
+[1] [2] [3] [4] [5] [다음 ▶]
+        ↓
+[📝 카드뉴스 생성] [🎬 릴스 초안] [🔎 근거] [❌ 제외]
+        ↓
+creative-generation(candidate_id, trigger_type=MANUAL)
+        ↓
+3–4장 ManUtd Editor 구조화 초안
+```
+
+버튼 callback과 지원하는 자연어 fallback은 같은 canonical action layer를 사용합니다.
+`/today`, `/open`, `/brief`, `/hook`, `/slide`, `/caption`, `/select`, `/status`,
+`/back`, `/reset` 등 기존 slash command는 power-user/debug 경로로 유지됩니다.
+Telegram은 callback마다 최신 DB story/brief를 다시 읽으며, 오래된 message callback,
+중복 update, 반복 generation은 안전하게 무시하거나 기존 READY brief를 재사용합니다.
+`❌ 제외`는 canonical source/story를 삭제하지 않고 thread·ranking window·story
+fingerprint 기준의 editorial disposition만 저장합니다.
+
+공개 carousel copy와 내부 intelligence는 분리됩니다. 공개 슬라이드는 Korean
+football-fan copy, 강한 근거 기반 hook, 짧은 CONTEXT/KEY_FACT, 필요한 경우에만
+IMPLICATION을 사용합니다. `현재 확보된 자료`, `자료가 부족`, `확인할 수 없습니다`
+같은 research limitation은 슬라이드에 들어가지 않고 `editor_warning` 또는
+`internal_grounding`에 남습니다. 3장으로 충분하면 filler를 만들지 않으며, 출처
+주의사항과 unsupported claim은 editor-facing evidence/grounding 영역에만 둡니다.
+
+Canonical output은 `style_profile`, `style_version`, `story_id`, `creative_brief_id`,
+`slides[]` (`index`, `role`, `headline`, `highlight`, `body`, `closing_line`),
+`caption`, `editor_warning`, `internal_grounding`을 보존합니다. 기존 M5 brief는
+nullable style fields와 legacy slide shape를 통해 계속 읽을 수 있습니다. `🎬 릴스
+초안`은 TEXT_REEL용 hook·duration·scene/text 계획만 만들며 영상 편집이나 자동 발행은
+하지 않습니다. Figma 렌더링은 M9 범위입니다.
+
+필수 runtime 환경 변수는 다음과 같습니다. 값은 `.env.local` 또는 Supabase Secrets에만
+두고 커밋하지 않습니다.
+
+```text
+SUPABASE_URL
+SUPABASE_SECRET_KEY 또는 SUPABASE_SECRET_KEYS
+OPENAI_API_KEY
+COLLECTOR_INVOKE_SECRET
+TELEGRAM_BOT_TOKEN
+TELEGRAM_WEBHOOK_SECRET
+TELEGRAM_AGENT_INVOKE_SECRET
+TELEGRAM_OWNER_USER_ID
+TELEGRAM_OWNER_CHAT_ID
+TELEGRAM_OWNER_THREAD_ID
+```
+
+M8 local regression smoke:
+
+```bash
+./scripts/run-milestone-8-phase-b-c-smoke.sh
+```
+
+이 task는 Figma 파일/토큰/렌더러, Instagram 자동 발행, 완성 영상, 자동 승인 또는
+TikTok/YouTube 발행을 추가하지 않습니다.
+
 ### 로컬 함수 실행
 
 ```bash
@@ -424,6 +509,9 @@ supabase migration list --linked
 ```bash
 supabase db push --linked
 supabase db lint --linked --schema public,app_private --level warning
+supabase functions deploy telegram-agent --project-ref byymtttpwmllqvggnddm --no-verify-jwt
+supabase functions deploy telegram-alerts --project-ref byymtttpwmllqvggnddm --no-verify-jwt
+supabase functions deploy creative-generation --project-ref byymtttpwmllqvggnddm --no-verify-jwt
 ```
 
 ## 테스트 범위

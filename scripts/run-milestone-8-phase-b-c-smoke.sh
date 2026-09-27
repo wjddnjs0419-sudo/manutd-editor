@@ -58,6 +58,7 @@ docker run --rm \
 node --test \
   "$repo_dir/scripts/validate-m7-architecture.test.mjs" \
   "$repo_dir/scripts/validate-m8-phase-b-c-architecture.test.mjs" \
+  "$repo_dir/scripts/validate-m8-editorial-console-architecture.test.mjs" \
   "$repo_dir/scripts/validate-n8n-workflow.test.mjs"
 
 if rg -n --hidden --glob '!.git/**' --glob '!.superpowers/**' --glob '!*.md' --glob '!*.json' --glob '!*.env*' \
