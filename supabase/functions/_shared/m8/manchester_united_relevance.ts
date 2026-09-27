@@ -82,6 +82,29 @@ const MANCHESTER_CITY_ONLY_TERMS = [
   "맨시티",
 ];
 
+const OTHER_CLUB_TERMS = [
+  "arsenal",
+  "아스날",
+  "아스널",
+  "liverpool",
+  "리버풀",
+  "chelsea",
+  "첼시",
+  "tottenham",
+  "토트넘",
+  "fulham",
+  "풀럼",
+  "brighton",
+  "브라이튼",
+  "barcelona",
+  "바르셀로나",
+  "psg",
+  "paris saint germain",
+  "유벤투스",
+  "juventus",
+  ...MANCHESTER_CITY_ONLY_TERMS,
+];
+
 function normalize(value: string): string {
   return value
     .normalize("NFKC")
@@ -95,6 +118,39 @@ function normalize(value: string): string {
 
 function termsPresent(haystack: string, terms: readonly string[]): boolean {
   return terms.some((term) => haystack.includes(normalize(term)));
+}
+
+function firstTermPosition(haystack: string, terms: readonly string[]): number {
+  const positions = terms.map((term) => haystack.indexOf(normalize(term))).filter((position) => position >= 0);
+  return positions.length > 0 ? Math.min(...positions) : -1;
+}
+
+function termOccurrences(haystack: string, term: string): number {
+  const needle = normalize(term);
+  if (!needle) return 0;
+  let count = 0;
+  let offset = 0;
+  while (offset < haystack.length) {
+    const position = haystack.indexOf(needle, offset);
+    if (position < 0) break;
+    count += 1;
+    offset = position + needle.length;
+  }
+  return count;
+}
+
+function hasSecondaryUnitedMention(haystack: string): boolean {
+  const unitedPosition = firstTermPosition(haystack, [...EXPLICIT_MANCHESTER_UNITED_TERMS, ...MANCHESTER_UNITED_RELATED_TERMS]);
+  if (unitedPosition < 0) return false;
+  const competitorPosition = firstTermPosition(haystack, OTHER_CLUB_TERMS);
+  if (competitorPosition < 0) return false;
+  const competitorOccurrences = OTHER_CLUB_TERMS.reduce((total, term) => total + termOccurrences(haystack, term), 0);
+
+  // Broad sources often put a generic league/listicle setup first and mention
+  // United only in a ranking or as the next opponent. Keep match-like copy
+  // with United in the opening subject, but reject those secondary mentions.
+  if (unitedPosition >= 80) return true;
+  return competitorPosition < unitedPosition && competitorOccurrences >= 2;
 }
 
 function signatureText(value: unknown): string {
@@ -129,7 +185,10 @@ export function isManchesterUnitedRelevant(input: ManchesterUnitedRelevanceInput
     signatureText(input.signature),
   ].join(" "));
   const explicitUnitedSignal = termsPresent(haystack, EXPLICIT_MANCHESTER_UNITED_TERMS);
-  if (explicitUnitedSignal) return true;
+  if (explicitUnitedSignal || termsPresent(haystack, MANCHESTER_UNITED_RELATED_TERMS)) {
+    if (hasSecondaryUnitedMention(haystack)) return false;
+    return true;
+  }
 
   // Do not let a generic story about Manchester City pass merely because a
   // comparison or league context mentions United elsewhere.

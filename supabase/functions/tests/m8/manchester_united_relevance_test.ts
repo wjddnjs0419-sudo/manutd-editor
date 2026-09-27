@@ -21,3 +21,25 @@ Deno.test("rejects unrelated football and Manchester City-only stories", () => {
   assertFalse(isManchesterUnitedRelevant({ signature: { entities: ["italy_national_football_team"] } }));
   assertEquals(isManchesterUnitedFocusedSource("todayfootball"), false);
 });
+
+Deno.test("rejects broad-source listicles where United is only a secondary mention", () => {
+  assertFalse(isManchesterUnitedRelevant({
+    canonicalTitle: "토트넘 초비상 토트넘 최하위 추락, 다음 상대 맨유",
+    sourceUsernames: ["footballoop.mag"],
+  }));
+  assertFalse(isManchesterUnitedRelevant({
+    canonicalTitle: "슈퍼컴퓨터 PL 우승 확률, 아스날 맨시티 리버풀 뒤 맨유 0.9%",
+    sourceUsernames: ["footballoop.mag"],
+  }));
+  assertFalse(isManchesterUnitedRelevant({
+    canonicalTitle: "빅클럽 클럽 레코드 바르셀로나 PSG 맨유 유벤투스 리버풀",
+    sourceUsernames: ["footballoop.mag"],
+  }));
+});
+
+Deno.test("keeps a broad-source United-led story when United is the opening subject", () => {
+  assert(isManchesterUnitedRelevant({
+    canonicalTitle: "맨유 풀럼 못 이긴 이유, 원정에서 승점 1점",
+    sourceUsernames: ["footballoop.mag"],
+  }));
+});
