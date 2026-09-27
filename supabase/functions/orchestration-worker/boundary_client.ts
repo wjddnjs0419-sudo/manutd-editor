@@ -36,10 +36,11 @@ function requestBody(jobType: EditorialJobType, payload: Record<string, unknown>
       : undefined;
   }
   if (jobType === "ANALYZE_CONTENT") {
-    return {
+    const value = {
       ...(typeof payload.as_of === "string" ? { as_of: payload.as_of } : {}),
       ...(typeof payload.limit === "number" && Number.isSafeInteger(payload.limit) ? { limit: payload.limit } : {}),
     };
+    return Object.keys(value).length === 0 ? undefined : value;
   }
   if (jobType === "RUN_INTELLIGENCE" || jobType === "SYNC_NOTION" || jobType === "DISCOVER_SOURCES" || jobType === "GROUND_CLAIMS" || jobType === "RANK_EDITORIAL") {
     return typeof payload.as_of === "string" ? { as_of: payload.as_of } : {};

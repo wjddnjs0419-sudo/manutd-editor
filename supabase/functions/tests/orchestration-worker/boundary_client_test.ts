@@ -110,3 +110,20 @@ Deno.test("boundary client returns status-only failures without retaining upstre
 
   assert.deepEqual(await invoker.invoke("SYNC_NOTION", {}), { status: 502 });
 });
+
+Deno.test("boundary client preserves empty-body contracts for unscoped collection and analysis", async () => {
+  const bodies: Array<unknown> = [];
+  const invoker = createBoundaryInvoker({
+    functionsUrl: "https://supabase.test/functions/v1",
+    collectorSecret: "collector-secret",
+    telegramSecret: "telegram-secret",
+    request: async (_input, init) => {
+      const body = (init as globalThis.RequestInit | undefined)?.body;
+      bodies.push(body ? JSON.parse(String(body)) : null);
+      return response({ status: "completed" });
+    },
+  });
+  await invoker.invoke("COLLECT_INSTAGRAM", {});
+  await invoker.invoke("ANALYZE_CONTENT", {});
+  assert.deepEqual(bodies, [null, null]);
+});
