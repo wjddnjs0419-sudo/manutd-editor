@@ -1,4 +1,4 @@
-import type { TelegramClient } from "./telegram_client.ts";
+import type { TelegramClient, TelegramInlineKeyboardMarkup } from "./telegram_client.ts";
 
 export interface CandidateAlertState {
   first_mover_flag: boolean;
@@ -32,6 +32,67 @@ export interface PendingAlert {
   payload: Record<string, unknown>;
 }
 
+export interface IntelligenceSummaryStory {
+  story_id: string;
+  title: string;
+  rank: number | null;
+  editorial_score: number;
+  information_gap_score: number;
+  discovery_audience_signal_score: number;
+  grounding_status: string;
+  news_eligible: boolean;
+}
+
+export interface IntelligenceSummaryInput {
+  business_date: string;
+  ranking_version: string;
+  stories: readonly IntelligenceSummaryStory[];
+}
+
+export interface RenderedAlert {
+  text: string;
+  reply_markup?: TelegramInlineKeyboardMarkup;
+}
+
+export function buildIntelligenceCompleteFingerprint(input: IntelligenceSummaryInput): string {
+  const stableStories = [...input.stories].map((story) => ({
+    story_id: story.story_id,
+    rank: story.rank,
+    editorial_score: story.editorial_score,
+    information_gap_score: story.information_gap_score,
+    discovery_audience_signal_score: story.discovery_audience_signal_score,
+    grounding_status: story.grounding_status,
+    news_eligible: story.news_eligible,
+  }));
+  return `INTELLIGENCE_COMPLETE:${input.business_date}:${input.ranking_version}:${JSON.stringify(stableStories)}`;
+}
+
+function intelligenceSummary(input: IntelligenceSummaryInput): RenderedAlert {
+  const stories = [...input.stories].sort((left, right) => (left.rank === null ? 1 : right.rank === null ? -1 : left.rank - right.rank));
+  const recommended = stories.filter((story) => story.rank !== null && story.rank <= 5);
+  const top = stories[0];
+  const text = [
+    "📡 오늘의 맨유 인텔리전스",
+    "",
+    `새롭게 확인된 소재 ${stories.length}개`,
+    `추천 후보 ${recommended.length}개`,
+    top ? `\n🔥 가장 유력한 소재\n${top.title}` : "",
+  ].filter((line) => line !== "").join("\n");
+  return {
+    text,
+    reply_markup: {
+      inline_keyboard: [[
+        { text: "🔥 추천 소재", callback_data: "ideas:recommended:1" },
+        { text: "📚 전체 소재", callback_data: "ideas:all:1" },
+      ]],
+    },
+  };
+}
+
+export function renderIntelligenceCompleteSummary(input: IntelligenceSummaryInput): RenderedAlert {
+  return intelligenceSummary(input);
+}
+
 export interface AlertDispatchSummary {
   attempted: number;
   sent: number;
@@ -44,16 +105,24 @@ export interface AlertDispatchDependencies {
   client: TelegramClient;
   markSent: (id: string, sentAt: string) => Promise<void>;
   markFailed: (id: string, message: string) => Promise<void>;
-  render?: (alert: PendingAlert) => string;
+  render?: (alert: PendingAlert) => string | RenderedAlert;
 }
 
-function defaultAlertText(alert: PendingAlert): string {
+function defaultAlert(alert: PendingAlert): RenderedAlert {
+  if (alert.event_type === "INTELLIGENCE_COMPLETE") {
+    const payload = alert.payload;
+    const stories = Array.isArray(payload.stories) ? payload.stories.filter((value): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)).flatMap((value) => {
+      if (typeof value.story_id !== "string" || typeof value.title !== "string" || typeof value.editorial_score !== "number" || typeof value.information_gap_score !== "number" || typeof value.discovery_audience_signal_score !== "number" || typeof value.grounding_status !== "string" || typeof value.news_eligible !== "boolean") return [];
+      return [{ story_id: value.story_id, title: value.title, rank: typeof value.rank === "number" ? value.rank : null, editorial_score: value.editorial_score, information_gap_score: value.information_gap_score, discovery_audience_signal_score: value.discovery_audience_signal_score, grounding_status: value.grounding_status, news_eligible: value.news_eligible }];
+    }) : [];
+    return intelligenceSummary({ business_date: typeof payload.business_date === "string" ? payload.business_date : "", ranking_version: typeof payload.ranking_version === "string" ? payload.ranking_version : "", stories });
+  }
   const payload = alert.payload;
   const prefix = alert.event_type === "FIRST_MOVER" ? "🚨 FIRST_MOVER" : alert.event_type === "MUST_COVER" ? "🚨 MUST_COVER" : "📅 경기 일정 변경";
   const lines = [prefix, typeof payload.title === "string" ? payload.title : "새 알림이 있습니다."];
   if (typeof payload.permalink === "string") lines.push(`🔗 원문: ${payload.permalink}`);
   if (typeof payload.kickoff_at === "string") lines.push(`킥오프: ${payload.kickoff_at}`);
-  return lines.join("\n");
+  return { text: lines.join("\n") };
 }
 
 export async function dispatchPendingAlerts(dependencies: AlertDispatchDependencies): Promise<AlertDispatchSummary> {
@@ -63,7 +132,9 @@ export async function dispatchPendingAlerts(dependencies: AlertDispatchDependenc
   for (const alert of pending) {
     try {
       const chatId = await dependencies.resolveChatId(alert);
-      await dependencies.client.sendText(chatId, dependencies.render?.(alert) ?? defaultAlertText(alert));
+      const custom = dependencies.render?.(alert);
+      const rendered = typeof custom === "string" ? { text: custom } : custom ?? defaultAlert(alert);
+      await dependencies.client.sendText(chatId, rendered.text, rendered.reply_markup);
       await dependencies.markSent(alert.id, new Date().toISOString());
       sent += 1;
     } catch (error) {
