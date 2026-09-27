@@ -35,7 +35,7 @@
 - Create: `supabase/functions/trend-discovery/types.ts`
 - Create: `supabase/functions/trend-discovery/query_expansion.ts`
 - Test: `supabase/functions/tests/trend-discovery/query_expansion_test.ts`
-- Modify: `supabase/migrations/20260927071446_m8_5_trend_discovery.sql`
+- Modify: `supabase/migrations/20260927230000_m8_5_trend_discovery.sql`
 
 **Interfaces:**
 - Produces `DiscoveryMode`, `DiscoveryQuery`, `DiscoveryObservation`, `TrendSnapshot`, `DiscoveryProvider`, and `expandDiscoveryQueries(input)`.
@@ -93,7 +93,7 @@
 - Modify: `supabase/functions/orchestration-worker/types.ts`
 - Modify: `supabase/functions/orchestration-worker/worker.ts`
 - Modify: `supabase/functions/orchestration-worker/boundary_client.ts`
-- Modify: `supabase/migrations/20260927071446_m8_5_trend_discovery.sql`
+- Modify: `supabase/migrations/20260927230000_m8_5_trend_discovery.sql`
 - Test: `supabase/functions/tests/orchestration-worker/worker_test.ts`
 - Test: `supabase/functions/tests/orchestration-worker/boundary_client_test.ts`
 
