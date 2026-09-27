@@ -54,6 +54,8 @@ Deno.test("uses Responses API strict JSON Schema without web search", async () =
   assertEquals(body.model, "gpt-5.6-terra");
   assertEquals(body.text.format.type, "json_schema");
   assertEquals(body.text.format.strict, true);
+  assertEquals(body.text.format.schema.properties.hooks.minItems, 3);
+  assertEquals(body.text.format.schema.properties.hooks.maxItems, 3);
   assertEquals(body.tools, undefined);
   assertEquals(body.store, false);
   assertEquals(request?.headers instanceof Headers ? request.headers.get("authorization") : undefined, undefined);

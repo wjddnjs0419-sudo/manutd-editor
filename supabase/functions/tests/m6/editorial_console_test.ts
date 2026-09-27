@@ -2,6 +2,7 @@ import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1.0.8";
 import {
   buildCanonicalStories,
   createEditorialConsoleRepository,
+  findCanonicalStoryByToken,
   paginateStories,
   renderEvidenceView,
   renderRecommendedList,
@@ -60,6 +61,14 @@ Deno.test("all stories retains lower-ranked discovery-only canonical stories", (
   assertEquals(stories.length, 2);
   assertEquals(stories[1]?.grounding_status, "DISCOVERY_ONLY");
   assertEquals(stories[1]?.news_eligible, false);
+});
+
+Deno.test("canonical story resolver accepts the visible list rank as a natural-language selection token", () => {
+  const stories = buildCanonicalStories([firstStory, secondStory]);
+  assertEquals(findCanonicalStoryByToken(stories, "1")?.id, stories[0]?.id);
+  assertEquals(findCanonicalStoryByToken(stories, "1번")?.id, stories[0]?.id);
+  assertEquals(findCanonicalStoryByToken(stories, "2")?.id, stories[1]?.id);
+  assertEquals(findCanonicalStoryByToken(stories, "9"), null);
 });
 
 Deno.test("pagination uses five stories and preserves page boundaries", () => {

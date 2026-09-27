@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1.0.8";
 import {
   dispatchEditorialConsoleAction,
+  canHandleStaleConsoleCallback,
   parseConsoleCallback,
   parseConsoleIntent,
   type ConsoleActionDependencies,
@@ -67,10 +68,22 @@ Deno.test("parses compact callback actions and rejects stale-shaped payloads", (
   assertEquals(parseConsoleCallback("unknown:action"), null);
 });
 
+Deno.test("allows stale callbacks only for actions that re-resolve canonical story state", () => {
+  assertEquals(canHandleStaleConsoleCallback({ type: "OPEN_STORY", token: story.id }), true);
+  assertEquals(canHandleStaleConsoleCallback({ type: "OPEN_EVIDENCE", token: story.id }), true);
+  assertEquals(canHandleStaleConsoleCallback({ type: "GENERATE_CAROUSEL", token: story.id }), true);
+  assertEquals(canHandleStaleConsoleCallback({ type: "SKIP_STORY", token: story.id }), true);
+  assertEquals(canHandleStaleConsoleCallback({ type: "SELECT_DRAFT", token: "brief-1" }), false);
+  assertEquals(canHandleStaleConsoleCallback({ type: "EDIT_DRAFT", token: "brief-1" }), false);
+});
+
 Deno.test("natural-language console intents resolve to the same business actions as buttons", () => {
   assertEquals(parseConsoleIntent("/today"), { type: "OPEN_RECOMMENDED", page: 1 });
   assertEquals(parseConsoleIntent("오늘 뭐 있어?"), { type: "OPEN_RECOMMENDED", page: 1 });
   assertEquals(parseConsoleIntent("전체 수집한 거 보여줘"), { type: "OPEN_ALL", page: 1 });
+  assertEquals(parseConsoleIntent("1"), { type: "OPEN_STORY", token: "1" });
+  assertEquals(parseConsoleIntent("1번 소재 선택"), { type: "OPEN_STORY", token: "1" });
+  assertEquals(parseConsoleIntent("첫 번째 소재"), { type: "OPEN_STORY", token: "1" });
   assertEquals(parseConsoleIntent("이거 카드뉴스로 만들어줘", story.id), { type: "GENERATE_CAROUSEL", token: story.id });
   assertEquals(parseConsoleIntent("이거 카드뉴스로 만들거야", story.id), { type: "GENERATE_CAROUSEL", token: story.id });
   assertEquals(parseConsoleIntent("카드뉴스 생성"), { type: "GENERATE_CAROUSEL", token: null });
@@ -116,6 +129,20 @@ Deno.test("card generation without a selected story never invokes the canonical 
 Deno.test("natural-language generation can reuse the story currently open in the console", async () => {
   let calls = 0;
   const result = await dispatchEditorialConsoleAction({ type: "GENERATE_CAROUSEL", token: null }, state({ view: "DETAIL", story_id: story.id }), dependencies({ generateCarousel: async (value) => { calls += 1; assertEquals(value.id, story.id); return draft; } }));
+  assertEquals(calls, 1);
+  assert(result.view.text.includes("📱 카드뉴스 초안"));
+});
+
+Deno.test("card generation falls back to the console-selected story when the agent candidate is stale", async () => {
+  let calls = 0;
+  const result = await dispatchEditorialConsoleAction(
+    { type: "GENERATE_CAROUSEL", token: "stale-agent-candidate" },
+    state({ view: "DETAIL", story_id: story.id }),
+    dependencies({
+      getStoryByToken: async (token) => token === story.id ? story : null,
+      generateCarousel: async (value) => { calls += 1; assertEquals(value.id, story.id); return draft; },
+    }),
+  );
   assertEquals(calls, 1);
   assert(result.view.text.includes("📱 카드뉴스 초안"));
 });

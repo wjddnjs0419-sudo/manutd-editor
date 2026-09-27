@@ -98,6 +98,64 @@ function bool(value: unknown): boolean {
   return value === true;
 }
 
+function m8GroundedSources(
+  claimsValue: unknown,
+  evidenceValue: unknown,
+  observationsValue: unknown,
+  informationSourcesValue: unknown,
+): CandidateEvidenceInput["sources"] {
+  const verifiedClaims = new Set(
+    Array.isArray(claimsValue)
+      ? claimsValue.flatMap((value) => {
+        const row = object(value);
+        return typeof row.id === "string" && row.grounding_status === "VERIFIED" ? [row.id] : [];
+      })
+      : [],
+  );
+  const sourceNames = new Map<string, { name: string; entityType: string; reliability: number | null }>();
+  if (Array.isArray(informationSourcesValue)) for (const value of informationSourcesValue) {
+    const row = object(value);
+    if (typeof row.id !== "string" || typeof row.canonical_name !== "string") continue;
+    sourceNames.set(row.id, {
+      name: row.canonical_name,
+      entityType: string(row.entity_type),
+      reliability: number(row.reliability_score),
+    });
+  }
+  const observations = new Map<string, { sourceId: string; title: string; excerpt: string | null }>();
+  if (Array.isArray(observationsValue)) for (const value of observationsValue) {
+    const row = object(value);
+    if (typeof row.id !== "string" || typeof row.information_source_id !== "string" || typeof row.title !== "string" || typeof row.canonical_url !== "string") continue;
+    observations.set(row.id, { sourceId: row.information_source_id, title: row.title, excerpt: typeof row.excerpt === "string" ? row.excerpt : null });
+  }
+  const grounded = new Map<string, CandidateEvidenceInput["sources"][number]>();
+  if (Array.isArray(evidenceValue)) for (const value of evidenceValue) {
+    const row = object(value);
+    if (typeof row.claim_id !== "string" || !verifiedClaims.has(row.claim_id) || row.is_grounding !== true || row.relation === "CONTRADICTS") continue;
+    if (row.editorial_role !== "FACT_PRIMARY" && row.editorial_role !== "FACT_INDEPENDENT") continue;
+    if (typeof row.source_observation_id !== "string") continue;
+    const observation = observations.get(row.source_observation_id);
+    if (!observation) continue;
+    const source = sourceNames.get(observation.sourceId);
+    if (!source) continue;
+    const existing = grounded.get(row.source_observation_id);
+    if (existing) {
+      grounded.set(row.source_observation_id, { ...existing, citation_count: existing.citation_count + 1 });
+      continue;
+    }
+    grounded.set(row.source_observation_id, {
+      source_id: `m8-observation:${row.source_observation_id}`,
+      canonical_name: source.name,
+      entity_type: source.entityType,
+      reliability_score: source.reliability,
+      evidence_text: `${source.name}: ${observation.title}${observation.excerpt ? ` — ${observation.excerpt}` : ""}`.slice(0, 2_000),
+      first_cited_post_id: null,
+      citation_count: 1,
+    });
+  }
+  return [...grounded.values()].sort((left, right) => left.source_id.localeCompare(right.source_id));
+}
+
 function candidateFromRow(row: Record<string, unknown>): CandidateEvidenceInput["candidate"] {
   return {
     id: string(row.id), story_cluster_id: string(row.story_cluster_id), ranking_date: string(row.ranking_date),
@@ -147,16 +205,24 @@ export function createRestGenerationRepository(options: RestRepositoryOptions): 
       const candidate = candidateFromRow(candidateRow);
       const clusterRow = await getOne(`/story_clusters?select=id,canonical_title,status,first_seen_at,last_seen_at&id=eq.${encodeURIComponent(candidate.story_cluster_id)}&limit=1`);
       if (!clusterRow) return null;
-      const postRows = await request(`/story_cluster_posts?select=raw_post_id,raw_posts(id,source_account_id,caption,permalink,published_at,media_type,source_accounts(username,region))&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&order=raw_post_id.asc`);
-      const sourceRows = await request(`/story_cluster_sources?select=information_source_id,first_cited_post_id,citation_count,evidence_text,information_sources(canonical_name,entity_type,reliability_score)&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&order=information_source_id.asc`);
+      const [postRows, sourceRows, m8Claims, m8Evidence, m8Observations, m8InformationSources] = await Promise.all([
+        request(`/story_cluster_posts?select=raw_post_id,raw_posts(id,source_account_id,caption,permalink,published_at,media_type,source_accounts(username,region))&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&order=raw_post_id.asc`),
+        request(`/story_cluster_sources?select=information_source_id,first_cited_post_id,citation_count,evidence_text,information_sources(canonical_name,entity_type,reliability_score)&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&order=information_source_id.asc`),
+        request(`/story_claims?select=id,grounding_status&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&limit=2000`, {}, "app_private"),
+        request("/claim_evidence?select=claim_id,source_observation_id,editorial_role,relation,is_grounding&limit=5000", {}, "app_private"),
+        request("/source_observations?select=id,information_source_id,editorial_role,canonical_url,title,excerpt&limit=5000", {}, "app_private"),
+        request("/information_sources?select=id,canonical_name,entity_type,reliability_score&limit=500", {}),
+      ]);
       const posts = Array.isArray(postRows) ? postRows.map((row) => {
         const value = object(row); const post = object(value.raw_posts); const account = object(post.source_accounts);
         return { raw_post_id: string(post.id || value.raw_post_id), source_account_id: string(post.source_account_id), account_username: string(account.username), region: string(account.region), caption: typeof post.caption === "string" ? post.caption : null, permalink: typeof post.permalink === "string" ? post.permalink : null, published_at: string(post.published_at), media_type: string(post.media_type) };
       }).filter((post) => post.raw_post_id) : [];
-      const sources = Array.isArray(sourceRows) ? sourceRows.map((row) => {
+      const legacySources = Array.isArray(sourceRows) ? sourceRows.map((row) => {
         const value = object(row); const source = object(value.information_sources);
         return { source_id: string(value.information_source_id), canonical_name: string(source.canonical_name), entity_type: string(source.entity_type), reliability_score: number(source.reliability_score), evidence_text: typeof value.evidence_text === "string" ? value.evidence_text : null, first_cited_post_id: typeof value.first_cited_post_id === "string" ? value.first_cited_post_id : null, citation_count: number(value.citation_count) ?? 0 };
       }).filter((source) => source.source_id) : [];
+      const m8Sources = m8GroundedSources(m8Claims, m8Evidence, m8Observations, m8InformationSources);
+      const sources = [...legacySources, ...m8Sources.filter((source) => !legacySources.some((legacy) => legacy.source_id === source.source_id))];
       return { candidate, story: { id: string(clusterRow.id), canonical_title: typeof clusterRow.canonical_title === "string" ? clusterRow.canonical_title : null, status: string(clusterRow.status), first_seen_at: string(clusterRow.first_seen_at), last_seen_at: string(clusterRow.last_seen_at) }, posts, sources };
     },
     async getActiveConfig() {

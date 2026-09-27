@@ -116,6 +116,18 @@ export function shortCallbackToken(value: string): string {
   return value.replaceAll("-", "").slice(0, 12);
 }
 
+export function findCanonicalStoryByToken(stories: readonly CanonicalStory[], token: string): CanonicalStory | null {
+  const normalized = token.trim();
+  const rankMatch = /^(\d+)번?$/u.exec(normalized);
+  const rank = rankMatch ? Number(rankMatch[1]) : null;
+  return stories.find((story) =>
+    story.id === normalized ||
+    story.candidate_id === normalized ||
+    shortCallbackToken(story.id) === normalized ||
+    (rank !== null && Number.isInteger(rank) && rank > 0 && story.rank === rank)
+  ) ?? null;
+}
+
 export function callbackData(action: string, value: string): string {
   return `${action}:${shortCallbackToken(value)}`;
 }

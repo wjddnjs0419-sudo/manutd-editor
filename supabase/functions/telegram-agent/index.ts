@@ -9,8 +9,8 @@ import { retrieveHistoricalContext, type HistoricalContext, type RetrievalThread
 import { reviseCaption, reviseSlide, selectHook } from "../_shared/m6/revisions.ts";
 import { createTelegramClient } from "../_shared/m6/telegram_client.ts";
 import { createM6Repository } from "../_shared/m6/repository.ts";
-import { createEditorialConsoleRepository, paginateStories, shortCallbackToken, type CanonicalStory, type ConsoleView } from "../_shared/m6/editorial_console.ts";
-import { dispatchEditorialConsoleAction, parseConsoleCallback, parseConsoleIntent, type ConsoleAction, type ConsoleState } from "../_shared/m6/editorial_console_actions.ts";
+import { createEditorialConsoleRepository, findCanonicalStoryByToken, paginateStories, shortCallbackToken, type CanonicalStory, type ConsoleView } from "../_shared/m6/editorial_console.ts";
+import { canHandleStaleConsoleCallback, dispatchEditorialConsoleAction, parseConsoleCallback, parseConsoleIntent, type ConsoleAction, type ConsoleState } from "../_shared/m6/editorial_console_actions.ts";
 import { invokeCanonicalCarousel } from "../_shared/m6/console_generation.ts";
 import { createTelegramAgentHandler } from "./handler.ts";
 import { answerNaturalLanguage, type CanonicalConversationContext } from "./conversation.ts";
@@ -256,7 +256,7 @@ async function currentConsoleStories(thread: ThreadRow, mode: "recommended" | "a
 
 async function resolveConsoleStory(thread: ThreadRow, token: string): Promise<CanonicalStory | null> {
   const stories = await consoleRepository.listCanonicalStories(businessDate(new Date(), "Asia/Seoul"));
-  return stories.find((story) => story.id === token || story.candidate_id === token || shortCallbackToken(story.id) === token) ?? null;
+  return findCanonicalStoryByToken(stories, token);
 }
 
 async function recordConsoleEvent(threadId: string, incoming: TelegramUpdate, event: { action: string; status: string; metadata?: Record<string, unknown> }): Promise<void> {
@@ -348,7 +348,8 @@ async function runConsoleAction(thread: ThreadRow, incoming: TelegramUpdate, act
   if (queryId) await client.answerCallbackQuery(queryId).catch(() => undefined);
   const state = await loadConsoleState(thread.id);
   const incomingMessageId = callbackMessageId(incoming);
-  if (incomingMessageId !== null && state.telegram_message_id !== null && incomingMessageId !== state.telegram_message_id) {
+  const staleCallback = incomingMessageId !== null && state.telegram_message_id !== null && incomingMessageId !== state.telegram_message_id;
+  if (staleCallback && !canHandleStaleConsoleCallback(action)) {
     if (queryId) await client.answerCallbackQuery(queryId, "이전 화면입니다. 최신 목록을 열어 주세요.").catch(() => undefined);
     await recordConsoleEvent(thread.id, incoming, { action: "STALE_CALLBACK", status: "STALE" });
     return { status: "STALE", reply: "이전 화면입니다. 최신 목록을 열어 주세요." };

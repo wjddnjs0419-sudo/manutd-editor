@@ -70,6 +70,8 @@ const CREATIVE_SCHEMA = {
     key_takeaway: { type: "string" },
     hooks: {
       type: "array",
+      minItems: 3,
+      maxItems: 3,
       items: {
         type: "object",
         additionalProperties: false,

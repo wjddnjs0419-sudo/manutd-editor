@@ -59,3 +59,53 @@ Deno.test("match context and own performance are ignored", () => {
   assert.equal(result.status, "INSUFFICIENT");
   assert.equal(result.evidence.length, 0);
 });
+
+Deno.test("does not verify a Manchester City claim against a Manchester United article", () => {
+  const cityClaim: GroundingClaim = {
+    storyClusterId: "cluster-city-finance",
+    rawPostId: "post-city-finance",
+    claimFingerprint: "claim-city-finance",
+    subject: "Pep Guardiola",
+    predicate: "won Premier League titles and achieved a title streak with Manchester City",
+    object: "6 titles and the first four consecutive titles",
+    claimText: "펩은 PL 6회 우승과 최초의 4연패를 달성했다.",
+    origin: "caption",
+    extractionConfidence: 0.9,
+  };
+  const unrelatedUnitedArticle: GroundingObservation = {
+    id: "bbc-united-tactics",
+    editorialRole: "FACT_INDEPENDENT",
+    canonicalName: "BBC Sport",
+    title: "The teething troubles with Man Utd's tactics under Olid",
+    excerpt: "Manchester United are adjusting their build-up after a difficult start.",
+    relation: "SUPPORTS",
+  };
+
+  const result = classifyClaimEvidence(cityClaim, [unrelatedUnitedArticle]);
+
+  assert.equal(result.status, "INSUFFICIENT");
+  assert.equal(result.evidence.length, 0);
+});
+
+Deno.test("requires an entity anchor instead of generic shared football tokens", () => {
+  const claimWithEntityCollision: GroundingClaim = {
+    ...claim,
+    subject: "Pep Guardiola",
+    predicate: "Manchester City",
+    object: "Pep Guardiola",
+    claimText: "Pep Guardiola Manchester City",
+  };
+  const genericUnitedArticle: GroundingObservation = {
+    id: "bbc-generic-united",
+    editorialRole: "FACT_INDEPENDENT",
+    canonicalName: "BBC Sport",
+    title: "Manchester United",
+    excerpt: "Manchester United and London City are preparing for the weekend.",
+    relation: "SUPPORTS",
+  };
+
+  const result = classifyClaimEvidence(claimWithEntityCollision, [genericUnitedArticle]);
+
+  assert.equal(result.status, "INSUFFICIENT");
+  assert.equal(result.evidence.length, 0);
+});

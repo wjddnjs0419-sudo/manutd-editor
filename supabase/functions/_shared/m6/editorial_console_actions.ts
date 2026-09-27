@@ -59,6 +59,25 @@ export interface ConsoleActionDependencies {
 
 type ParsedCallback = Exclude<ConsoleAction, { type: "NEXT_PAGE" | "BACK" }> | { type: "BACK" };
 
+export function canHandleStaleConsoleCallback(action: ConsoleAction): boolean {
+  switch (action.type) {
+    case "OPEN_RECOMMENDED":
+    case "OPEN_ALL":
+    case "NEXT_PAGE":
+    case "OPEN_STORY":
+    case "OPEN_EVIDENCE":
+    case "SKIP_STORY":
+    case "GENERATE_CAROUSEL":
+    case "OPEN_REEL":
+    case "BACK":
+      return true;
+    case "SELECT_DRAFT":
+    case "SHOW_ALTERNATE_HOOKS":
+    case "EDIT_DRAFT":
+      return false;
+  }
+}
+
 function positivePage(value: string): number | null {
   const page = Number(value);
   return Number.isInteger(page) && page > 0 && page <= 999 ? page : null;
@@ -93,6 +112,13 @@ export function parseConsoleIntent(value: string, activeStoryToken?: string | nu
   const normalized = value.trim().toLocaleLowerCase("ko-KR").replace(/\s+/gu, " ");
   if (/^(\/today|오늘 뭐 있어\??|오늘 올릴 거 보여줘|추천 소재)$/u.test(normalized)) return { type: "OPEN_RECOMMENDED", page: 1 };
   if (/^(전체 수집한 거 보여줘|전체 소재|전체 수집본)$/u.test(normalized)) return { type: "OPEN_ALL", page: 1 };
+  const numericSelection = /^(\d{1,3})번?\s*(?:소재\s*)?(?:선택(?:해줘)?|열어(?:줘)?|보여줘)?$/u.exec(normalized);
+  if (numericSelection) return { type: "OPEN_STORY", token: numericSelection[1]! };
+  const ordinalSelection = /^(첫|첫째|두|둘째|세|셋째|네|넷째|다섯|다섯째)\s*번째?\s*(?:소재\s*)?(?:선택(?:해줘)?|열어(?:줘)?|보여줘)?$/u.exec(normalized);
+  if (ordinalSelection) {
+    const ordinal = { 첫: 1, 첫째: 1, 두: 2, 둘째: 2, 세: 3, 셋째: 3, 네: 4, 넷째: 4, 다섯: 5, 다섯째: 5 }[ordinalSelection[1]!];
+    return { type: "OPEN_STORY", token: String(ordinal) };
+  }
   if (normalized === "다음 거 보여줘") return { type: "NEXT_PAGE" };
   if (normalized === "카드뉴스 생성") return { type: "GENERATE_CAROUSEL", token: activeStoryToken ?? null };
   if (/^이거 카드뉴스로 (?:만들어줘|만들거야|만들어야)$/u.test(normalized)) return { type: "GENERATE_CAROUSEL", token: activeStoryToken ?? null };
@@ -143,7 +169,8 @@ export async function dispatchEditorialConsoleAction(action: ConsoleAction, stat
   if (action.type === "GENERATE_CAROUSEL") {
     const token = action.token ?? state.story_id;
     if (!token) return safeError("먼저 소재를 열어 주세요.", state, "CREATIVE_GENERATION_FAILED");
-    const story = await dependencies.getStoryByToken(token);
+    let story = await dependencies.getStoryByToken(token);
+    if (!story && state.story_id && state.story_id !== token) story = await dependencies.getStoryByToken(state.story_id);
     if (!story || !story.candidate_id) return safeError("최신 canonical 소재를 찾지 못했습니다.", state, "CREATIVE_GENERATION_FAILED");
     if (!story.news_eligible || story.evidence.length === 0 || (story.information_gap_score <= 0 && story.hook_strength <= 0)) {
       return safeError("현재 공개용 카드뉴스 생성에 필요한 검증된 근거가 부족합니다.\n🔎 근거 보기에서 출처를 확인해 주세요.", state, "CREATIVE_GENERATION_BLOCKED");
