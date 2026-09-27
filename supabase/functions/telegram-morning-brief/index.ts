@@ -1,6 +1,6 @@
 import { createEspnFixtureProvider } from "../_shared/m6/espn_fixture_provider.ts";
 import { businessDate } from "../_shared/m6/business_date.ts";
-import { buildMorningBriefingSnapshot } from "../_shared/m6/briefing.ts";
+import { buildMorningBriefingSnapshot, selectBriefingCandidates } from "../_shared/m6/briefing.ts";
 import { runFixtureSync } from "../_shared/m6/fixture_service.ts";
 import { createM6Repository } from "../_shared/m6/repository.ts";
 import { createReferenceSignedUrl, selectRepresentativeReference } from "../_shared/m6/reference_media.ts";
@@ -61,7 +61,8 @@ async function runMorningBrief(): Promise<MorningBriefResult> {
   if (readiness === "DEGRADED") return { status: "DEGRADED", briefing_date: briefingDate, messages_sent: 0, render_mode: "FALLBACK_TEMPLATE", readiness, warning: "오늘 Intelligence 후보 상태가 일치하지 않아 브리핑을 보내지 않았습니다." };
 
   const fixtureResult = await runFixtureSync({ mode: "FORCE", now }, { provider, repository, alertThreadId: ownerThreadId });
-  const candidates = rows.slice(0, Number(config.briefing_top_n ?? 3)).map((row) => ({
+  const eligibleRows = selectBriefingCandidates(rows);
+  const candidates = eligibleRows.slice(0, Number(config.briefing_top_n ?? 3)).map((row) => ({
     candidate_id: row.candidate_id,
     priority_score: row.priority_score,
     first_mover_flag: row.first_mover_flag,
@@ -72,7 +73,7 @@ async function runMorningBrief(): Promise<MorningBriefResult> {
     news_eligible: row.news_eligible,
     representative: selectRepresentativeReference(row.reference_posts),
   }));
-  const snapshot = buildMorningBriefingSnapshot({ briefing_date: briefingDate, timezone, match_day_mode: fixtureResult.match_day_mode, match_context: {}, overnight_counts: { candidates: rows.length }, candidates, blocked_failed: fixtureResult.status === "FAILED" ? [{ type: "FIXTURE_SYNC", error_category: fixtureResult.error_category ?? "UNKNOWN" }] : [] });
+  const snapshot = buildMorningBriefingSnapshot({ briefing_date: briefingDate, timezone, match_day_mode: fixtureResult.match_day_mode, match_context: {}, overnight_counts: { candidates: eligibleRows.length, discovered_candidates: rows.length }, candidates, blocked_failed: fixtureResult.status === "FAILED" ? [{ type: "FIXTURE_SYNC", error_category: fixtureResult.error_category ?? "UNKNOWN" }] : [] });
   const signedItems = await Promise.all(snapshot.items.map(async (item) => ({ ...item, reference_media_url: null as string | null })));
   for (let index = 0; index < snapshot.items.length; index += 1) {
     const path = candidates[index]?.representative?.media_storage_path;

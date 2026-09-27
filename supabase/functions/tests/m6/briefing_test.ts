@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1.0.8";
-import { buildMorningBriefingSnapshot, resolveBriefingPosition } from "../../_shared/m6/briefing.ts";
+import { buildMorningBriefingSnapshot, resolveBriefingPosition, selectBriefingCandidates } from "../../_shared/m6/briefing.ts";
 
 Deno.test("freezes exact candidate and representative identity for /open", () => {
   const saved = buildMorningBriefingSnapshot({
@@ -42,4 +42,21 @@ Deno.test("freezes editorial grounding state when the same-date ranking is avail
   assertEquals(saved.items[0]?.editorial_rank, 1);
   assertEquals(saved.items[0]?.grounding_status, "DISCOVERY_ONLY");
   assertEquals(saved.items[0]?.news_eligible, false);
+});
+
+Deno.test("excludes unverified candidates when editorial grounding is available", () => {
+  const selected = selectBriefingCandidates([
+    { candidate_id: "verified", grounding_status: "VERIFIED", news_eligible: true },
+    { candidate_id: "discovery", grounding_status: "DISCOVERY_ONLY", news_eligible: false },
+    { candidate_id: "insufficient", grounding_status: "INSUFFICIENT", news_eligible: false },
+  ]);
+  assertEquals(selected.map((candidate) => candidate.candidate_id), ["verified"]);
+});
+
+Deno.test("preserves the legacy candidate fallback when no grounding decision exists", () => {
+  const selected = selectBriefingCandidates([
+    { candidate_id: "legacy-a" },
+    { candidate_id: "legacy-b", grounding_status: null, news_eligible: false },
+  ]);
+  assertEquals(selected.map((candidate) => candidate.candidate_id), ["legacy-a", "legacy-b"]);
 });

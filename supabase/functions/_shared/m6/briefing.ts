@@ -50,6 +50,13 @@ export interface MorningBriefingInput {
   blocked_failed: readonly Record<string, unknown>[];
 }
 
+export function selectBriefingCandidates<T extends { grounding_status?: string | null; news_eligible?: boolean }>(
+  candidates: readonly T[],
+): readonly T[] {
+  const hasGroundingDecisions = candidates.some((candidate) => candidate.grounding_status !== undefined && candidate.grounding_status !== null);
+  return hasGroundingDecisions ? candidates.filter((candidate) => candidate.news_eligible === true) : candidates;
+}
+
 export function buildMorningBriefingSnapshot(input: MorningBriefingInput): MorningBriefingSnapshot {
   return {
     briefing_date: input.briefing_date,
