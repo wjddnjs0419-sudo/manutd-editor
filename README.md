@@ -368,8 +368,10 @@ creative-generation(candidate_id, trigger_type=MANUAL)
 ```
 
 버튼 callback과 지원하는 자연어 fallback은 같은 canonical action layer를 사용합니다.
-`/today`, `/open`, `/brief`, `/hook`, `/slide`, `/caption`, `/select`, `/status`,
-`/back`, `/reset` 등 기존 slash command는 power-user/debug 경로로 유지됩니다.
+`/today`는 추천 소재 콘솔의 power-user 진입점으로 동작하고, `/current`는 readiness와
+레거시 후보 상태를 확인하는 진단 경로로 남습니다. `/open`, `/brief`, `/hook`,
+`/slide`, `/caption`, `/select`, `/status`, `/back`, `/reset` 등 나머지 기존 slash
+command도 유지됩니다.
 Telegram은 callback마다 최신 DB story/brief를 다시 읽으며, 오래된 message callback,
 중복 update, 반복 generation은 안전하게 무시하거나 기존 READY brief를 재사용합니다.
 `❌ 제외`는 canonical source/story를 삭제하지 않고 thread·ranking window·story
