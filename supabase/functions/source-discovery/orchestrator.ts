@@ -1,4 +1,5 @@
 import { parseFeedDocument } from "./feed_parser.ts";
+import { extractArticleExcerpt } from "./article_extractor.ts";
 import type { SourceDiscoveryRepository, SourceDiscoveryRunInput, SourceDiscoverySummary, SourceFeed } from "./types.ts";
 
 interface RunSourceDiscoveryOptions extends SourceDiscoveryRunInput {
@@ -43,6 +44,34 @@ function safeCategory(error: unknown): string {
   return "FEED_UNAVAILABLE";
 }
 
+function isFactRole(feed: SourceFeed): boolean {
+  return feed.editorialRole === "FACT_PRIMARY" || feed.editorialRole === "FACT_INDEPENDENT";
+}
+
+async function articleExcerpt(
+  options: RunSourceDiscoveryOptions,
+  feed: SourceFeed,
+  url: string,
+): Promise<string | null> {
+  if (!isFactRole(feed)) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
+  try {
+    const response = await options.fetch(url, {
+      method: "GET",
+      headers: { accept: "text/html,application/xhtml+xml" },
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const html = await readBounded(response, options.maxBytes);
+    return extractArticleExcerpt(html, options.maxExcerptChars ?? 600);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function runSourceDiscovery(options: RunSourceDiscoveryOptions): Promise<SourceDiscoverySummary> {
   if (options.feeds.length === 0) return { status: "NOOP", observed: 0, duplicates: 0, failedFeeds: 0, feedCount: 0 };
   const limit = options.limit ?? options.maxItems;
@@ -60,7 +89,11 @@ export async function runSourceDiscovery(options: RunSourceDiscoveryOptions): Pr
       const items = await parseFeedDocument(xml, feed, { maxItems: Math.min(options.maxItems, limit), maxExcerptChars: options.maxExcerptChars ?? 600 });
       for (const item of items) {
         if (options.asOf && item.publishedAt && new Date(item.publishedAt).getTime() > options.asOf.getTime()) continue;
-        const inserted = await options.repository.saveObservation({ ...item, informationSourceId: sourceId, observedAt: options.now().toISOString() });
+        const fetchedExcerpt = await articleExcerpt(options, feed, item.canonicalUrl);
+        const enrichedItem = fetchedExcerpt && fetchedExcerpt.length > (item.excerpt?.length ?? 0)
+          ? { ...item, excerpt: fetchedExcerpt }
+          : item;
+        const inserted = await options.repository.saveObservation({ ...enrichedItem, informationSourceId: sourceId, observedAt: options.now().toISOString() });
         if (inserted) observed += 1;
         else duplicates += 1;
       }

@@ -49,3 +49,29 @@ Deno.test("missing feeds are a successful NOOP", async () => {
   });
   assert.deepEqual(result, { status: "NOOP", observed: 0, duplicates: 0, failedFeeds: 0, feedCount: 0 });
 });
+
+Deno.test("fact feeds enrich RSS summaries with bounded article paragraphs", async () => {
+  let savedExcerpt: string | null = null;
+  const repository: SourceDiscoveryRepository = {
+    ensureSource: async () => "bbc-source",
+    saveObservation: async (observation) => {
+      savedExcerpt = observation.excerpt;
+      return true;
+    },
+  };
+  const result = await runSourceDiscovery({
+    repository,
+    feeds: [feeds[0]],
+    now: () => new Date("2026-09-27T02:00:00Z"),
+    fetch: async (url) => String(url).includes("/article/")
+      ? new Response("<article><p>United tried to build from the back with shorter passes.</p><p>The manager adjusted the defensive shape after the draw.</p></article>")
+      : new Response("<rss><item><guid>article-1</guid><title>United tactical report</title><description>Short RSS summary.</description><link>https://bbc.test/article/1</link></item></rss>"),
+    maxItems: 5,
+    maxBytes: 10_000,
+    maxExcerptChars: 180,
+    timeoutMs: 100,
+  });
+
+  assert.equal(result.observed, 1);
+  assert.equal(savedExcerpt, "United tried to build from the back with shorter passes. The manager adjusted the defensive shape after the draw.");
+});

@@ -34,3 +34,37 @@ Deno.test("source discovery writes observations through the app_private profile"
   assertEquals(inserted, true);
   assertEquals(requests.at(-1)?.profile, "app_private");
 });
+
+Deno.test("source discovery refreshes an existing observation after a duplicate", async () => {
+  const requests: Array<{ url: string; method: string; body: string | null }> = [];
+  const repository = createSourceDiscoveryRepository({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "test-service-role-key",
+    request: async (input, init) => {
+      const method = init?.method ?? "GET";
+      requests.push({ url: String(input), method, body: typeof init?.body === "string" ? init.body : null });
+      if (String(input).includes("information_sources")) return new Response(JSON.stringify([{ id: "source-1" }]), { status: 200 });
+      if (method === "POST") return new Response(JSON.stringify([]), { status: 200 });
+      return new Response(null, { status: 204 });
+    },
+  });
+
+  const inserted = await repository.saveObservation({
+    informationSourceId: "source-1",
+    sourceCanonicalName: "BBC Sport",
+    editorialRole: "FACT_INDEPENDENT",
+    externalId: "article-1",
+    canonicalUrl: "https://bbc.test/article/1",
+    title: "Tactical report",
+    excerpt: "The article body excerpt.",
+    publishedAt: "2026-09-27T00:00:00.000Z",
+    observedAt: "2026-09-27T02:00:00.000Z",
+    discoverySignal: 0.5,
+    contentFingerprint: "fingerprint",
+    metadata: { format: "RSS" },
+  });
+
+  assertEquals(inserted, false);
+  assertEquals(requests.at(-1)?.method, "PATCH");
+  assertEquals(JSON.parse(requests.at(-1)?.body ?? "{}").excerpt, "The article body excerpt.");
+});

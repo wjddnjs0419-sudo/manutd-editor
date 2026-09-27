@@ -61,24 +61,30 @@ export function createSourceDiscoveryRepository(options: RepositoryOptions): Sou
       return (retryRows[0] as Record<string, string>).id;
     },
     async saveObservation(observation: SourceObservationInput & { readonly informationSourceId: string }): Promise<boolean> {
+      const payload = {
+        information_source_id: observation.informationSourceId,
+        editorial_role: observation.editorialRole,
+        external_id: observation.externalId,
+        canonical_url: observation.canonicalUrl,
+        title: observation.title,
+        excerpt: observation.excerpt,
+        published_at: observation.publishedAt,
+        observed_at: observation.observedAt,
+        discovery_signal: observation.discoverySignal,
+        content_fingerprint: observation.contentFingerprint,
+        metadata: observation.metadata,
+      };
       const response = await request("/rest/v1/source_observations?on_conflict=information_source_id%2Cexternal_id", {
         method: "POST",
         headers: { "content-type": "application/json", prefer: "resolution=ignore-duplicates,return=representation" },
-        body: JSON.stringify({
-          information_source_id: observation.informationSourceId,
-          editorial_role: observation.editorialRole,
-          external_id: observation.externalId,
-          canonical_url: observation.canonicalUrl,
-          title: observation.title,
-          excerpt: observation.excerpt,
-          published_at: observation.publishedAt,
-          observed_at: observation.observedAt,
-          discovery_signal: observation.discoverySignal,
-          content_fingerprint: observation.contentFingerprint,
-          metadata: observation.metadata,
-        }),
+        body: JSON.stringify(payload),
       }, "app_private");
       const result = await response.json() as unknown;
+      await request(`/rest/v1/source_observations?information_source_id=eq.${encodeURIComponent(observation.informationSourceId)}&external_id=eq.${encodeURIComponent(observation.externalId)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", prefer: "return=minimal" },
+        body: JSON.stringify(payload),
+      }, "app_private");
       return Array.isArray(result) && result.length > 0;
     },
   };

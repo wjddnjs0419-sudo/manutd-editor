@@ -12,6 +12,7 @@ export interface MemoryThread {
   summary_message_count: number;
   context_history: readonly unknown[];
   active_candidate_id: string | null;
+  active_source_observation_id?: string | null;
   active_brief_id: string | null;
   active_match_id: string | null;
 }

@@ -13,6 +13,7 @@ import {
 
 export interface CanonicalConversationContext {
   candidate: Record<string, unknown> | null;
+  source_observation?: Record<string, unknown> | null;
   brief: Record<string, unknown> | null;
   match: Record<string, unknown> | null;
 }

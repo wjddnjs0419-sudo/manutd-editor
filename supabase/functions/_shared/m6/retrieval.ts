@@ -7,6 +7,7 @@ export interface HistoricalContext {
 
 export interface RetrievalThreadState {
   active_candidate_id: string | null;
+  active_source_observation_id?: string | null;
   active_brief_id: string | null;
   active_match_id: string | null;
 }
@@ -33,7 +34,7 @@ export async function retrieveHistoricalContext(query: string, thread: Retrieval
     const match = await dependencies.findLastFinishedMatch();
     if (match) return (await dependencies.findByMatch(match)).slice(0, 5);
   }
-  if (dependencies.findByActive && (thread.active_candidate_id || thread.active_brief_id || thread.active_match_id)) {
+  if (dependencies.findByActive && (thread.active_candidate_id || thread.active_source_observation_id || thread.active_brief_id || thread.active_match_id)) {
     const active = await dependencies.findByActive(thread);
     if (active.length > 0) return active.slice(0, 5);
   }

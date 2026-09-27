@@ -64,9 +64,10 @@ async function rowById(path: string, profile?: string): Promise<Record<string, u
 
 async function loadCanonicalContext(state: RetrievalThreadState): Promise<CanonicalConversationContext> {
   const candidate = state.active_candidate_id ? await rowById(`/rest/v1/content_candidates?select=*&id=eq.${encodeURIComponent(state.active_candidate_id)}&limit=1`) : null;
+  const sourceObservation = state.active_source_observation_id ? await rowById(`/rest/v1/source_observations?select=*&id=eq.${encodeURIComponent(state.active_source_observation_id)}&limit=1`, "app_private") : null;
   const brief = state.active_brief_id ? await rowById(`/rest/v1/creative_briefs?select=*&id=eq.${encodeURIComponent(state.active_brief_id)}&limit=1`) : null;
   const match = state.active_match_id ? await rowById(`/rest/v1/matches?select=*&id=eq.${encodeURIComponent(state.active_match_id)}&limit=1`) : null;
-  return { candidate, brief, match };
+  return { candidate, source_observation: sourceObservation, brief, match };
 }
 
 function historicalRecord(kind: HistoricalContext["kind"], value: Record<string, unknown>): HistoricalContext | null {
@@ -146,7 +147,7 @@ async function rollSummary(threadId: string, config: AgentConfig, provider?: (pa
 }
 
 interface TelegramUpdate { update_id?: number; message?: { text?: string; from?: { id?: number; first_name?: string }; chat?: { id?: number } } }
-interface ThreadRow { id: string; telegram_user_id: string; active_candidate_id: string | null; active_brief_id: string | null; active_match_id: string | null; context_history: unknown[]; conversation_summary: string | null; summary_message_count: number; pending_action: Record<string, unknown> | null; pending_action_expires_at: string | null; }
+interface ThreadRow { id: string; telegram_user_id: string; active_candidate_id: string | null; active_source_observation_id: string | null; active_brief_id: string | null; active_match_id: string | null; context_history: unknown[]; conversation_summary: string | null; summary_message_count: number; pending_action: Record<string, unknown> | null; pending_action_expires_at: string | null; }
 interface AgentConfig { recent_message_limit: number; summary_trigger_count: number; model_config: Record<string, unknown>; }
 
 function memoryThread(thread: ThreadRow): MemoryThread { return thread; }
@@ -212,7 +213,7 @@ async function saveRevision(revision: StoredCreativeBrief, thread: ThreadRow): P
   const { id: _id, ...insert } = revision;
   const inserted = await rest("/rest/v1/creative_briefs", { method: "POST", headers: { "content-type": "application/json", prefer: "return=representation" }, body: JSON.stringify(insert) });
   const storedId = Array.isArray(inserted) && inserted[0] && typeof inserted[0].id === "string" ? inserted[0].id : revision.id;
-  await rest(`/rest/v1/telegram_threads?id=eq.${encodeURIComponent(thread.id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ active_brief_id: storedId, active_candidate_id: revision.candidate_id, pending_action: null, pending_action_expires_at: null }) }, "app_private");
+  await rest(`/rest/v1/telegram_threads?id=eq.${encodeURIComponent(thread.id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ active_brief_id: storedId, active_candidate_id: revision.candidate_id, active_source_observation_id: null, pending_action: null, pending_action_expires_at: null }) }, "app_private");
 }
 
 async function revisionForCommand(command: Extract<ParsedCommand, { type: "HOOK" | "SLIDE" | "CAPTION" }>, thread: ThreadRow): Promise<{ reply: string; revision?: StoredCreativeBrief }> {
@@ -258,7 +259,7 @@ async function saveCurrentSnapshot(thread: ThreadRow, snapshot: unknown): Promis
 async function commandReply(command: ParsedCommand, thread: ThreadRow): Promise<string> {
   if (command.type === "HELP") return HELP;
   if (command.type === "RESET") {
-    await rest(`/rest/v1/telegram_threads?id=eq.${encodeURIComponent(thread.id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ active_candidate_id: null, active_brief_id: null, active_match_id: null, context_history: [], pending_action: null, pending_action_expires_at: null }) }, "app_private");
+    await rest(`/rest/v1/telegram_threads?id=eq.${encodeURIComponent(thread.id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ active_candidate_id: null, active_source_observation_id: null, active_brief_id: null, active_match_id: null, context_history: [], pending_action: null, pending_action_expires_at: null }) }, "app_private");
     return "현재 작업 맥락을 초기화했습니다. 대화 기록과 요약은 보존됩니다.";
   }
   if (command.type === "TODAY") {
@@ -275,7 +276,7 @@ async function commandReply(command: ParsedCommand, thread: ThreadRow): Promise<
     await saveCurrentSnapshot(thread, snapshot);
     return formatCurrentReply({ briefingDate, readiness, candidateCount: visibleRows.length, items: snapshot.items.map((item) => ({ position: item.position, candidateId: item.candidate_id, priorityScore: item.priority_score, username: item.reference_username, title: item.title, sourceName: item.source_name })) });
   }
-  if (command.type === "STATUS") return thread.active_candidate_id ? `현재 후보 ${thread.active_candidate_id}의 최신 상태를 확인하세요.` : "활성 후보가 없습니다. /today 또는 /open으로 시작하세요.";
+  if (command.type === "STATUS") return thread.active_candidate_id ? `현재 후보 ${thread.active_candidate_id}의 최신 상태를 확인하세요.` : thread.active_source_observation_id ? `현재 사실 소스 ${thread.active_source_observation_id}를 확인하세요.` : "활성 후보가 없습니다. /today 또는 /open으로 시작하세요.";
   if (command.type === "BACK") return "이전 작업 맥락으로 돌아갔습니다.";
   if (command.type === "CANCEL") return "대기 중인 작업을 취소했습니다.";
   if (command.type === "CONFIRM") {
@@ -294,14 +295,15 @@ async function commandReply(command: ParsedCommand, thread: ThreadRow): Promise<
       const alerts = await rest(`/rest/v1/telegram_alert_events?select=payload,candidate_id,match_id&thread_id=eq.${encodeURIComponent(thread.id)}&status=eq.SENT&order=created_at.desc&limit=1`, {}, "app_private");
       const alert = Array.isArray(alerts) ? alerts[0] as { payload?: { permalink?: unknown }; candidate_id?: unknown; match_id?: unknown } | undefined : undefined;
       if (!alert) return "열 수 있는 최근 alert가 없습니다.";
-      await rest(`/rest/v1/telegram_threads?id=eq.${encodeURIComponent(thread.id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ active_candidate_id: typeof alert.candidate_id === "string" ? alert.candidate_id : null, active_match_id: typeof alert.match_id === "string" ? alert.match_id : null }) }, "app_private");
+      await rest(`/rest/v1/telegram_threads?id=eq.${encodeURIComponent(thread.id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ active_candidate_id: typeof alert.candidate_id === "string" ? alert.candidate_id : null, active_source_observation_id: null, active_match_id: typeof alert.match_id === "string" ? alert.match_id : null }) }, "app_private");
       return `최근 alert를 열었습니다.${typeof alert.payload?.permalink === "string" ? `\n🔗 원문: ${alert.payload.permalink}` : ""}`;
     }
     const rows = await rest(`/rest/v1/telegram_briefings?select=candidate_snapshot&thread_id=eq.${encodeURIComponent(thread.id)}&order=briefing_date.desc&limit=1`, {}, "app_private");
     const snapshot = latestCurrentSnapshot(thread) ?? (Array.isArray(rows) && rows[0] && typeof rows[0].candidate_snapshot === "object" ? rows[0].candidate_snapshot as { items?: Array<Record<string, unknown>> } : {});
     const item = snapshot.items?.find((candidate) => command.target === String(candidate.position) || command.target === String(candidate.candidate_id));
     if (!item || typeof item.candidate_id !== "string") return "현재 브리핑에서 해당 후보를 찾지 못했습니다.";
-    await rest(`/rest/v1/telegram_threads?id=eq.${encodeURIComponent(thread.id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ active_candidate_id: item.candidate_id, active_brief_id: null, pending_action: null, pending_action_expires_at: null }) }, "app_private");
+    const sourceObservationId = item.candidate_id.startsWith("source:") ? item.candidate_id.slice("source:".length) : null;
+    await rest(`/rest/v1/telegram_threads?id=eq.${encodeURIComponent(thread.id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ active_candidate_id: sourceObservationId ? null : item.candidate_id, active_source_observation_id: sourceObservationId, active_brief_id: null, pending_action: null, pending_action_expires_at: null }) }, "app_private");
     const link = typeof item.source_url === "string" ? `\n🔗 원문: ${item.source_url}` : typeof item.reference_permalink === "string" ? `\n🔗 원문: ${item.reference_permalink}` : "";
     return `브리핑의 ${item.position}번 후보를 열었습니다.${link}`;
   }
