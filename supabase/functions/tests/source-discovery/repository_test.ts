@@ -41,8 +41,9 @@ Deno.test("source discovery refreshes an existing observation after a duplicate"
     supabaseUrl: "https://example.supabase.co",
     serviceRoleKey: "test-service-role-key",
     request: async (input, init) => {
-      const method = init?.method ?? "GET";
-      requests.push({ url: String(input), method, body: typeof init?.body === "string" ? init.body : null });
+      const requestInit = init as globalThis.RequestInit | undefined;
+      const method = requestInit?.method ?? "GET";
+      requests.push({ url: String(input), method, body: typeof requestInit?.body === "string" ? requestInit.body : null });
       if (String(input).includes("information_sources")) return new Response(JSON.stringify([{ id: "source-1" }]), { status: 200 });
       if (method === "POST") return new Response(JSON.stringify([]), { status: 200 });
       return new Response(null, { status: 204 });

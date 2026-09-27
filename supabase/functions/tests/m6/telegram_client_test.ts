@@ -32,7 +32,8 @@ Deno.test("does not retry permanent auth errors or expose token", async () => {
 Deno.test("sends inline keyboards, edits navigation messages, and acknowledges callbacks", async () => {
   const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
   const client = createTelegramClient({ token: "secret", fetch: async (input, init) => {
-    calls.push({ method: String(input).split("/").pop() ?? "", body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+    const requestInit = init as globalThis.RequestInit | undefined;
+    calls.push({ method: String(input).split("/").pop() ?? "", body: JSON.parse(String(requestInit?.body)) as Record<string, unknown> });
     return response(200, { ok: true, result: { message_id: 8 } });
   } });
   const markup = { inline_keyboard: [[{ text: "추천", callback_data: "ideas:recommended:1" }]] };
