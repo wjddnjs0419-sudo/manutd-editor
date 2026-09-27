@@ -66,6 +66,8 @@ Deno.test("parses compact callback actions and rejects stale-shaped payloads", (
   assertEquals(parseConsoleCallback("idea:carousel:111111111111"), { type: "GENERATE_CAROUSEL", token: "111111111111" });
   assertEquals(parseConsoleCallback("idea:open:긴-스토리-본문"), null);
   assertEquals(parseConsoleCallback("unknown:action"), null);
+  assertEquals(parseConsoleCallback("ideas:trending:1"), { type: "OPEN_TRENDING", page: 1 });
+  assertEquals(parseConsoleCallback("discovery:more"), { type: "DISCOVER_MORE" });
 });
 
 Deno.test("allows stale callbacks only for actions that re-resolve canonical story state", () => {
@@ -88,7 +90,29 @@ Deno.test("natural-language console intents resolve to the same business actions
   assertEquals(parseConsoleIntent("이거 카드뉴스로 만들거야", story.id), { type: "GENERATE_CAROUSEL", token: story.id });
   assertEquals(parseConsoleIntent("카드뉴스 생성"), { type: "GENERATE_CAROUSEL", token: null });
   assertEquals(parseConsoleIntent("다음 거 보여줘"), { type: "NEXT_PAGE" });
+  assertEquals(parseConsoleIntent("지금 뭐 뜨고 있어?"), { type: "OPEN_TRENDING", page: 1 });
+  assertEquals(parseConsoleIntent("요즘 맨유 뭐가 핫해?"), { type: "OPEN_TRENDING", page: 1 });
+  assertEquals(parseConsoleIntent("좀 더 찾아봐"), { type: "DISCOVER_MORE" });
+  assertEquals(parseConsoleIntent("다른 거 더 없어?"), { type: "DISCOVER_MORE" });
   assertEquals(parseConsoleIntent("이건 그냥 의견이야"), null);
+});
+
+Deno.test("trending action uses injected trend ranking and keeps editorial actions separate", async () => {
+  const trending = { ...story, trend_score: 94, trend_state: "RISING", platform_count: 3, opportunity_labels: ["🔥 빠르게 뜨는 중"] };
+  const result = await dispatchEditorialConsoleAction({ type: "OPEN_TRENDING", page: 1 }, state(), dependencies({ listTrendingStories: async () => paginateStories([trending], 1) }));
+  assert(result.view.text.includes("📈 지금 뜨는 소재"));
+  assert(result.view.text.includes("Trend 94"));
+  assert(result.view.text.includes("Editorial 91"));
+  assertEquals(result.next_state.mode, "trending");
+});
+
+Deno.test("discover more invokes a fresh discovery run and returns deterministic status", async () => {
+  let calls = 0;
+  const result = await dispatchEditorialConsoleAction({ type: "DISCOVER_MORE" }, state(), dependencies({ discoverMore: async () => { calls += 1; return { status: "PARTIAL", run_id: "run-1", new_story_count: 2, provider_failures: 1 }; } }));
+  assertEquals(calls, 1);
+  assert(result.view.text.includes("새 discovery run"));
+  assert(result.view.text.includes("2개"));
+  assertEquals(result.event.action, "DISCOVERY_MORE_COMPLETED");
 });
 
 Deno.test("opening a story reloads canonical state and renders detail", async () => {

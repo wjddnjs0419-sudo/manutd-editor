@@ -4,6 +4,7 @@ import {
   renderCarouselDraft,
   renderEvidenceView,
   renderRecommendedList,
+  renderTrendingList,
   renderStoryDetail,
   renderTextReel,
   type CanonicalStory,
@@ -15,6 +16,9 @@ import type { ManutdEditorCarouselDraft } from "../editorial-style/types.ts";
 export type ConsoleAction =
   | { type: "OPEN_RECOMMENDED"; page: number }
   | { type: "OPEN_ALL"; page: number }
+  | { type: "OPEN_TRENDING"; page: number }
+  | { type: "DISCOVER_MORE" }
+  | { type: "REFRESH_DISCOVERY" }
   | { type: "NEXT_PAGE" }
   | { type: "OPEN_STORY"; token: string }
   | { type: "OPEN_EVIDENCE"; token: string }
@@ -28,7 +32,7 @@ export type ConsoleAction =
 
 export interface ConsoleState {
   view: "HOME" | "LIST" | "DETAIL" | "EVIDENCE" | "REEL" | "DRAFT";
-  mode: "recommended" | "all" | null;
+  mode: "recommended" | "all" | "trending" | null;
   page: number;
   story_id: string | null;
   story_fingerprint: string | null;
@@ -51,6 +55,9 @@ export interface ConsoleActionResult {
 
 export interface ConsoleActionDependencies {
   listStories: (mode: "recommended" | "all", page: number) => Promise<StoryPage>;
+  listTrendingStories?: (page: number) => Promise<StoryPage>;
+  discoverMore?: () => Promise<{ status: string; run_id?: string; new_story_count?: number; provider_failures?: number }>;
+  refreshDiscovery?: () => Promise<{ status: string; run_id?: string; new_story_count?: number; provider_failures?: number }>;
   getStoryByToken: (token: string) => Promise<CanonicalStory | null>;
   skipStory: (story: CanonicalStory) => Promise<void>;
   generateCarousel: (story: CanonicalStory) => Promise<ManutdEditorCarouselDraft>;
@@ -63,6 +70,9 @@ export function canHandleStaleConsoleCallback(action: ConsoleAction): boolean {
   switch (action.type) {
     case "OPEN_RECOMMENDED":
     case "OPEN_ALL":
+    case "OPEN_TRENDING":
+    case "DISCOVER_MORE":
+    case "REFRESH_DISCOVERY":
     case "NEXT_PAGE":
     case "OPEN_STORY":
     case "OPEN_EVIDENCE":
@@ -94,6 +104,13 @@ export function parseConsoleCallback(value: string): ParsedCallback | null {
     const page = positivePage(all[1]!);
     return page ? { type: "OPEN_ALL", page } : null;
   }
+  const trending = /^ideas:trending:(\d{1,3})$/u.exec(value);
+  if (trending) {
+    const page = positivePage(trending[1]!);
+    return page ? { type: "OPEN_TRENDING", page } : null;
+  }
+  if (value === "discovery:more") return { type: "DISCOVER_MORE" };
+  if (value === "discovery:refresh") return { type: "REFRESH_DISCOVERY" };
   const idea = /^idea:(open|evidence|skip|reel|carousel):([A-Za-z0-9_-]{1,32})$/u.exec(value);
   if (idea) {
     const map = { open: "OPEN_STORY", evidence: "OPEN_EVIDENCE", skip: "SKIP_STORY", reel: "OPEN_REEL", carousel: "GENERATE_CAROUSEL" } as const;
@@ -112,6 +129,8 @@ export function parseConsoleIntent(value: string, activeStoryToken?: string | nu
   const normalized = value.trim().toLocaleLowerCase("ko-KR").replace(/\s+/gu, " ");
   if (/^(\/today|오늘 뭐 있어\??|오늘 올릴 거 보여줘|추천 소재)$/u.test(normalized)) return { type: "OPEN_RECOMMENDED", page: 1 };
   if (/^(전체 수집한 거 보여줘|전체 소재|전체 수집본)$/u.test(normalized)) return { type: "OPEN_ALL", page: 1 };
+  if (/^(지금 뭐 뜨고 있어\??|요즘 맨유 뭐가 핫해\??|지금 트렌드 보여줘|지금 뜨는 소재)$/u.test(normalized)) return { type: "OPEN_TRENDING", page: 1 };
+  if (/^(다른 거 더 없어\??|좀 더 찾아봐|새로운 소재 찾아줘|이거 말고 다른 이슈)$/u.test(normalized)) return { type: "DISCOVER_MORE" };
   const numericSelection = /^(\d{1,3})번?\s*(?:소재\s*)?(?:선택(?:해줘)?|열어(?:줘)?|보여줘)?$/u.exec(normalized);
   if (numericSelection) return { type: "OPEN_STORY", token: numericSelection[1]! };
   const ordinalSelection = /^(첫|첫째|두|둘째|세|셋째|네|넷째|다섯|다섯째)\s*번째?\s*(?:소재\s*)?(?:선택(?:해줘)?|열어(?:줘)?|보여줘)?$/u.exec(normalized);
@@ -129,14 +148,15 @@ function safeError(message: string, state: ConsoleState, action: string): Consol
   return { view: { text: `⚠️ ${message}`, inline_keyboard: [[{ text: "◀ 돌아가기", callback_data: "idea:back:list" }]] }, next_state: state, event: { action, status: "FAILED" } };
 }
 
-function listState(state: ConsoleState, mode: "recommended" | "all", page: number): ConsoleState {
+function listState(state: ConsoleState, mode: "recommended" | "all" | "trending", page: number): ConsoleState {
   return { ...state, view: "LIST", mode, page, story_id: null, story_fingerprint: null, brief_id: null, state_version: state.state_version + 1 };
 }
 
-async function listResult(mode: "recommended" | "all", page: number, state: ConsoleState, dependencies: ConsoleActionDependencies, action: string): Promise<ConsoleActionResult> {
-  const result = await dependencies.listStories(mode, page);
+async function listResult(mode: "recommended" | "all" | "trending", page: number, state: ConsoleState, dependencies: ConsoleActionDependencies, action: string): Promise<ConsoleActionResult> {
+  const result = mode === "trending" ? await dependencies.listTrendingStories?.(page) : await dependencies.listStories(mode, page);
+  if (!result) return safeError("트렌드 데이터를 아직 준비하지 못했습니다.", state, "TRENDING_UNAVAILABLE");
   return {
-    view: mode === "recommended" ? renderRecommendedList(result, "recommended") : renderAllStoryList(result),
+    view: mode === "recommended" ? renderRecommendedList(result, "recommended") : mode === "all" ? renderAllStoryList(result) : renderTrendingList(result),
     next_state: listState(state, mode, result.page),
     event: { action, status: "COMPLETED", metadata: { page: result.page, total: result.total, mode } },
   };
@@ -156,6 +176,17 @@ async function storyResult(type: "DETAIL" | "EVIDENCE" | "REEL", token: string, 
 export async function dispatchEditorialConsoleAction(action: ConsoleAction, state: ConsoleState, dependencies: ConsoleActionDependencies): Promise<ConsoleActionResult> {
   if (action.type === "OPEN_RECOMMENDED") return listResult("recommended", action.page, state, dependencies, "LIST_OPENED");
   if (action.type === "OPEN_ALL") return listResult("all", action.page, state, dependencies, "LIST_OPENED");
+  if (action.type === "OPEN_TRENDING") return listResult("trending", action.page, state, dependencies, "TRENDING_OPENED");
+  if (action.type === "DISCOVER_MORE" || action.type === "REFRESH_DISCOVERY") {
+    const result = action.type === "DISCOVER_MORE" ? await dependencies.discoverMore?.() : await (dependencies.refreshDiscovery ?? dependencies.discoverMore)?.();
+    if (!result) return safeError("discovery를 실행할 수 없습니다. 설정된 provider가 없습니다.", state, "DISCOVERY_UNAVAILABLE");
+    const failures = result.provider_failures ?? 0;
+    return {
+      view: { text: `🔎 새 discovery run\n\n상태: ${result.status}\n새롭게 확인된 소재: ${result.new_story_count ?? 0}개\nprovider 실패: ${failures}개`, inline_keyboard: [[{ text: "📈 지금 뜨는 소재", callback_data: "ideas:trending:1" }, { text: "🔎 다시 찾아보기", callback_data: "discovery:more" }]] },
+      next_state: { ...state, mode: "trending", state_version: state.state_version + 1 },
+      event: { action: action.type === "DISCOVER_MORE" ? "DISCOVERY_MORE_COMPLETED" : "DISCOVERY_REFRESHED", status: "COMPLETED", metadata: { run_id: result.run_id ?? null, status: result.status, provider_failures: failures } },
+    };
+  }
   if (action.type === "NEXT_PAGE") return listResult(state.mode ?? "recommended", state.page + 1, state, dependencies, "LIST_OPENED");
   if (action.type === "OPEN_STORY") return storyResult("DETAIL", action.token, state, dependencies);
   if (action.type === "OPEN_EVIDENCE") return storyResult("EVIDENCE", action.token, state, dependencies);

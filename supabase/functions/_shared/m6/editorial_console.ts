@@ -8,6 +8,7 @@ export interface EditorialEvidence {
   claim_text: string;
   status: "SUPPORTED" | "REPORTED" | "CONTRADICTED";
   canonical_url: string | null;
+  editorial_role?: string | null;
 }
 
 export interface EditorialStoryInput {
@@ -28,6 +29,12 @@ export interface EditorialStoryInput {
   evidence: EditorialEvidence[];
   story_fingerprint: string;
   latest_brief_id: string | null;
+  trend_score?: number | null;
+  trend_state?: string | null;
+  trend_source_count?: number | null;
+  trend_platform_count?: number | null;
+  platform_count?: number | null;
+  opportunity_labels?: string[];
 }
 
 export interface CanonicalStory {
@@ -51,6 +58,11 @@ export interface CanonicalStory {
   story_fingerprint: string;
   latest_brief_id: string | null;
   recommended: boolean;
+  trend_score: number | null;
+  trend_state: string | null;
+  trend_source_count: number;
+  trend_platform_count: number;
+  opportunity_labels: readonly string[];
 }
 
 export interface InlineKeyboardButton {
@@ -82,6 +94,7 @@ export interface EditorialConsoleRepositoryOptions {
 
 export interface EditorialConsoleRepository {
   listCanonicalStories(rankingDate: string): Promise<readonly CanonicalStory[]>;
+  listTrendingStories(rankingDate: string): Promise<readonly CanonicalStory[]>;
 }
 
 interface JsonObject {
@@ -170,6 +183,11 @@ export function buildCanonicalStories(
         story_fingerprint: first.story_fingerprint,
         latest_brief_id: first.latest_brief_id,
         recommended: first.rank !== null && first.rank <= 5,
+        trend_score: first.trend_score ?? null,
+        trend_state: first.trend_state ?? null,
+        trend_source_count: first.trend_source_count ?? sources.length,
+        trend_platform_count: first.trend_platform_count ?? first.platform_count ?? 0,
+        opportunity_labels: first.opportunity_labels ?? [],
       } satisfies CanonicalStory;
     })
     .filter((story) => !skippedFingerprints.has(story.story_fingerprint))
@@ -199,12 +217,14 @@ function pageHeader(label: string, page: StoryPage): string {
   return `${label} · ${page.start}–${page.end} / ${page.total}`;
 }
 
-function listButtons(page: StoryPage, mode: "recommended" | "all"): InlineKeyboardButton[][] {
+function listButtons(page: StoryPage, mode: "recommended" | "all" | "trending"): InlineKeyboardButton[][] {
   const itemButtons = page.items.map((story, index) => ({ text: `${index + 1}`, callback_data: callbackData("idea:open", story.id) }));
   const navigation: InlineKeyboardButton[] = [];
   if (page.has_previous) navigation.push({ text: "◀ 이전", callback_data: `ideas:${mode}:${page.page - 1}` });
   if (page.has_next) navigation.push({ text: "다음 ▶", callback_data: `ideas:${mode}:${page.page + 1}` });
   navigation.push({ text: mode === "recommended" ? "📚 전체 소재" : "🔥 추천만 보기", callback_data: mode === "recommended" ? "ideas:all:1" : "ideas:recommended:1" });
+  navigation.push({ text: "📈 지금 뜨는 소재", callback_data: "ideas:trending:1" });
+  if (mode === "trending") navigation.push({ text: "🔎 더 찾아보기", callback_data: "discovery:more" });
   return [itemButtons, navigation];
 }
 
@@ -222,11 +242,21 @@ export function renderAllStoryList(page: StoryPage): ConsoleView {
   return renderList(page, "all");
 }
 
+export function renderTrendingList(page: StoryPage): ConsoleView {
+  const lines = page.items.map((story, index) => {
+    const state = story.trend_state ?? "STABLE";
+    const icon = state === "BREAKING" || state === "HOT" ? "🔥" : state === "RISING" ? "↗" : state === "COOLING" ? "↘" : "→";
+    return `${index + 1}. ${story.title}\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${icon} ${state}\n${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼`;
+  });
+  const empty = page.total === 0 ? "현재 트렌드 소재가 없습니다. 🔎 더 찾아보기를 눌러 새 discovery run을 실행해 보세요." : lines.join("\n\n");
+  return { text: `${pageHeader("📈 지금 뜨는 소재", page)}\n\n${empty}`, inline_keyboard: listButtons(page, "trending") };
+}
+
 export function renderStoryDetail(story: CanonicalStory): ConsoleView {
   const sourceLine = story.sources.length > 0 ? story.sources.join(" / ") : "확인 중";
   const format = story.news_eligible ? "카드뉴스 + 텍스트 릴스" : "텍스트 릴스 검토";
   return {
-    text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n정보격차 ${score10(story.information_gap_score)}\n훅 ${score10(story.hook_strength)}\n공유성 ${score10(story.shareability)}\n출처신뢰 ${score10(story.source_confidence)}\n\n추천 포맷:\n${format}\n\n주요 출처: ${sourceLine}`,
+    text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${story.trend_state ?? "STABLE"} · ${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼\n\n정보격차 ${score10(story.information_gap_score)}\n훅 ${score10(story.hook_strength)}\n공유성 ${score10(story.shareability)}\n출처신뢰 ${score10(story.source_confidence)}\n\n추천 포맷:\n${format}\n\n주요 출처: ${sourceLine}`,
     inline_keyboard: [
       [
         { text: "📝 카드뉴스 생성", callback_data: callbackData("idea:carousel", story.id) },
@@ -242,9 +272,11 @@ export function renderStoryDetail(story: CanonicalStory): ConsoleView {
 }
 
 export function renderEvidenceView(story: CanonicalStory): ConsoleView {
-  const evidence = story.evidence.length === 0 ? "현재 연결된 근거가 없습니다." : story.evidence.map((item) => `✓ ${item.source_name}\n${item.claim_text}\n상태: ${item.status}${item.canonical_url ? `\n${item.canonical_url}` : ""}`).join("\n\n");
+  const render = (items: readonly EditorialEvidence[]) => items.length === 0 ? "없음" : items.map((item) => `✓ ${item.source_name}\n${item.claim_text}\n상태: ${item.status}${item.canonical_url ? `\n${item.canonical_url}` : ""}`).join("\n\n");
+  const discovery = story.evidence.filter((item) => item.editorial_role?.startsWith("DISCOVERY_") === true);
+  const fact = story.evidence.filter((item) => item.editorial_role?.startsWith("DISCOVERY_") !== true);
   return {
-    text: `🔎 근거\n\n${evidence}`,
+    text: `🔎 근거\n\n📈 발견 근거\n${render(discovery)}\n\n✅ 팩트 근거\n${render(fact)}`,
     inline_keyboard: [[{ text: "◀ 돌아가기", callback_data: callbackData("idea:open", story.id) }]],
   };
 }
@@ -309,16 +341,17 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
 
   return {
     async listCanonicalStories(rankingDate) {
-      const [rankings, clusters, candidates, clusterSources, claims, claimEvidence, observations, informationSources, briefs] = await Promise.all([
+      const [rankings, clusters, candidates, clusterSources, claims, claimEvidence, observations, informationSources, briefs, trendSnapshots] = await Promise.all([
         request(`/rest/v1/editorial_rankings?select=story_cluster_id,ranking_date,ranking_version,rank,editorial_score,information_gap_score,fact_grounding_score,discovery_audience_signal_score,grounding_status,news_eligible&ranking_date=eq.${encodeURIComponent(rankingDate)}&order=rank.asc.nullslast,editorial_score.desc`, "app_private"),
         request("/rest/v1/story_clusters?select=id,canonical_title,summary,status,signature_json&status=neq.ARCHIVED"),
         request(`/rest/v1/content_candidates?select=id,story_cluster_id,ranking_date&ranking_date=eq.${encodeURIComponent(rankingDate)}`),
         request("/rest/v1/story_cluster_sources?select=story_cluster_id,information_source_id,information_sources(canonical_name)"),
         request("/rest/v1/story_claims?select=id,story_cluster_id,claim_text,grounding_status", "app_private"),
         request("/rest/v1/claim_evidence?select=claim_id,source_observation_id,evidence_text,is_grounding", "app_private"),
-        request("/rest/v1/source_observations?select=id,information_source_id,canonical_url,title", "app_private"),
+        request("/rest/v1/source_observations?select=id,information_source_id,canonical_url,title,editorial_role", "app_private"),
         request("/rest/v1/information_sources?select=id,canonical_name&limit=500"),
         request("/rest/v1/creative_briefs?select=id,candidate_id,version,status&order=version.desc"),
+        request(`/rest/v1/trend_snapshots?select=story_cluster_id,cluster_key,snapshot_at,trend_score,trend_state,source_count,platform_count,opportunity_labels&snapshot_at=lte.${encodeURIComponent(`${rankingDate}T23:59:59.999Z`)}&order=snapshot_at.desc`, "app_private"),
       ]);
 
       const clusterById = new Map(array(clusters).flatMap((value) => typeof value.id === "string" && typeof value.canonical_title === "string" ? [[value.id, value]] as const : []));
@@ -349,11 +382,17 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
           claim_text: claim.claim_text,
           status,
           canonical_url: observation && typeof observation.canonical_url === "string" ? observation.canonical_url : null,
+          editorial_role: observation && typeof observation.editorial_role === "string" ? observation.editorial_role : null,
         };
         evidenceByCluster.set(claim.story_cluster_id, [...(evidenceByCluster.get(claim.story_cluster_id) ?? []), entry]);
       }
       const latestBriefByCandidate = new Map<string, string>();
       for (const value of array(briefs)) if (typeof value.candidate_id === "string" && typeof value.id === "string" && !latestBriefByCandidate.has(value.candidate_id)) latestBriefByCandidate.set(value.candidate_id, value.id);
+      const trendByCluster = new Map<string, JsonObject>();
+      for (const value of array(trendSnapshots)) {
+        const key = typeof value.story_cluster_id === "string" ? value.story_cluster_id : typeof value.cluster_key === "string" ? value.cluster_key : null;
+        if (key && !trendByCluster.has(key)) trendByCluster.set(key, value);
+      }
 
       const inputs: EditorialStoryInput[] = [];
       for (const ranking of array(rankings)) {
@@ -365,6 +404,8 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
         const informationGap = number(ranking.information_gap_score) ?? 0;
         const audienceSignal = number(ranking.discovery_audience_signal_score) ?? 0;
         const candidateId = candidateByCluster.get(ranking.story_cluster_id) ?? null;
+        const trend = trendByCluster.get(ranking.story_cluster_id);
+        const opportunityLabels = Array.isArray(trend?.opportunity_labels) ? trend.opportunity_labels.filter((value): value is string => typeof value === "string") : [];
         inputs.push({
           story_cluster_id: ranking.story_cluster_id,
           candidate_id: candidateId,
@@ -383,9 +424,18 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
           evidence: evidenceByCluster.get(ranking.story_cluster_id) ?? [],
           story_fingerprint: `story:${ranking.story_cluster_id}:${ranking.ranking_date}:${ranking.ranking_version}`,
           latest_brief_id: candidateId ? latestBriefByCandidate.get(candidateId) ?? null : null,
+          trend_score: number(trend?.trend_score),
+          trend_state: string(trend?.trend_state),
+          trend_source_count: number(trend?.source_count),
+          trend_platform_count: number(trend?.platform_count),
+          opportunity_labels: opportunityLabels,
         });
       }
       return buildCanonicalStories(inputs);
+    },
+    async listTrendingStories(rankingDate) {
+      const stories = await this.listCanonicalStories(rankingDate);
+      return [...stories].sort((left, right) => (right.trend_score ?? -1) - (left.trend_score ?? -1) || (left.rank ?? Number.MAX_SAFE_INTEGER) - (right.rank ?? Number.MAX_SAFE_INTEGER));
     },
   };
 }

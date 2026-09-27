@@ -9,6 +9,7 @@ import {
   renderStoryDetail,
   renderTextReel,
   renderCarouselDraft,
+  renderTrendingList,
   type EditorialStoryInput,
 } from "../../_shared/m6/editorial_console.ts";
 import type { ManutdEditorCarouselDraft } from "../../_shared/editorial-style/types.ts";
@@ -99,6 +100,16 @@ Deno.test("rendered list and detail use compact editorial copy and short callbac
   assert(detail.inline_keyboard.flat().some((button) => button.callback_data.startsWith("idea:carousel:")));
   assertFalse(detail.text.includes("model"));
   assertFalse(detail.text.includes("grounding_json"));
+});
+
+Deno.test("trending renderer exposes trend/editorial scores, state, and platform diversity", () => {
+  const stories = buildCanonicalStories([{ ...firstStory, trend_score: 94, trend_state: "RISING", platform_count: 3, opportunity_labels: ["🔥 빠르게 뜨는 중"] }]);
+  const view = renderTrendingList(paginateStories(stories, 1));
+  assert(view.text.includes("📈 지금 뜨는 소재"));
+  assert(view.text.includes("Trend 94"));
+  assert(view.text.includes("Editorial 91"));
+  assert(view.text.includes("RISING"));
+  assert(view.text.includes("3개 플랫폼"));
 });
 
 Deno.test("evidence view keeps source caveats separate from public copy", () => {

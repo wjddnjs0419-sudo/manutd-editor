@@ -215,8 +215,8 @@ function emptyConsoleState(messageId: number | null = null): ConsoleState {
 function consoleStateFromRow(value: Record<string, unknown>): ConsoleState {
   const json = isObject(value.state_json) ? value.state_json : {};
   const viewName = value.view_name;
-  const view = viewName === "DETAIL" ? "DETAIL" : viewName === "EVIDENCE" ? "EVIDENCE" : viewName === "REEL" ? "REEL" : viewName === "DRAFT" ? "DRAFT" : viewName === "ALL" || viewName === "RECOMMENDED" ? "LIST" : "HOME";
-  const mode = viewName === "ALL" ? "all" : viewName === "RECOMMENDED" ? "recommended" : json.mode === "all" ? "all" : json.mode === "recommended" ? "recommended" : null;
+  const view = viewName === "DETAIL" ? "DETAIL" : viewName === "EVIDENCE" ? "EVIDENCE" : viewName === "REEL" ? "REEL" : viewName === "DRAFT" ? "DRAFT" : viewName === "ALL" || viewName === "TRENDING" || viewName === "RECOMMENDED" ? "LIST" : "HOME";
+  const mode = viewName === "ALL" ? "all" : viewName === "TRENDING" ? "trending" : viewName === "RECOMMENDED" ? "recommended" : json.mode === "all" ? "all" : json.mode === "trending" ? "trending" : json.mode === "recommended" ? "recommended" : null;
   return {
     view,
     mode,
@@ -237,7 +237,7 @@ async function loadConsoleState(threadId: string): Promise<ConsoleState> {
 }
 
 async function saveConsoleState(threadId: string, state: ConsoleState): Promise<void> {
-  const viewName = state.view === "LIST" ? state.mode === "all" ? "ALL" : "RECOMMENDED" : state.view;
+  const viewName = state.view === "LIST" ? state.mode === "all" ? "ALL" : state.mode === "trending" ? "TRENDING" : "RECOMMENDED" : state.view;
   await rest(`/rest/v1/telegram_console_state?thread_id=eq.${encodeURIComponent(threadId)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ view_name: viewName, page: state.page, story_cluster_id: state.story_id, brief_id: state.brief_id, telegram_message_id: state.telegram_message_id, state_version: state.state_version, state_json: { mode: state.mode, story_fingerprint: state.story_fingerprint } }) }, "app_private");
 }
 
@@ -252,6 +252,23 @@ async function currentConsoleStories(thread: ThreadRow, mode: "recommended" | "a
   if (mode === "all") return stories;
   const skipped = await skippedFingerprints(thread.id, date);
   return stories.filter((story) => story.recommended && !skipped.has(story.story_fingerprint));
+}
+
+async function currentTrendingStories(): Promise<readonly CanonicalStory[]> {
+  return await consoleRepository.listTrendingStories(businessDate(new Date(), "Asia/Seoul"));
+}
+
+async function invokeDiscovery(): Promise<{ status: string; run_id?: string; new_story_count?: number; provider_failures?: number }> {
+  const secret = Deno.env.get("COLLECTOR_INVOKE_SECRET") ?? "";
+  if (!secret) return { status: "CONFIGURATION_MISSING", provider_failures: 1 };
+  try {
+    const response = await fetch(`${base}/functions/v1/trend-discovery`, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify({ mode: "GENERAL", max_queries: 24 }) });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok || !isObject(value)) return { status: "FAILED", provider_failures: 1 };
+    return { status: typeof value.status === "string" ? value.status : "COMPLETED", run_id: typeof value.run_id === "string" ? value.run_id : undefined, new_story_count: typeof value.new_story_count === "number" ? value.new_story_count : 0, provider_failures: Array.isArray(value.provider_statuses) ? value.provider_statuses.filter((item) => isObject(item) && item.status === "FAILED").length : 0 };
+  } catch {
+    return { status: "FAILED", provider_failures: 1 };
+  }
 }
 
 async function resolveConsoleStory(thread: ThreadRow, token: string): Promise<CanonicalStory | null> {
@@ -317,6 +334,9 @@ async function selectCanonicalDraft(thread: ThreadRow, token: string): Promise<v
 function consoleDependencies(thread: ThreadRow) {
   return {
     listStories: async (mode: "recommended" | "all", page: number) => paginateStories(await currentConsoleStories(thread, mode), page),
+    listTrendingStories: async (page: number) => paginateStories(await currentTrendingStories(), page),
+    discoverMore: invokeDiscovery,
+    refreshDiscovery: invokeDiscovery,
     getStoryByToken: async (token: string) => await resolveConsoleStory(thread, token),
     skipStory: async (story: CanonicalStory) => await skipCanonicalStory(thread, story),
     generateCarousel: async (story: CanonicalStory) => await generateCanonicalCarousel(story),
