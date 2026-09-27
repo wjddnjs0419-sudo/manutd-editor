@@ -80,6 +80,9 @@ export function createEditorialRankingRepository(options: RepositoryOptions): Ed
         return { storyClusterId, rankingDate: targetDate, groundingStatus, factGroundingScore, discoveryAudienceSignalScore: bounded(current.discoverySignal), matchContextScore: hasMatchContext ? 100 : 0, freshnessScore, informationGapScore: bounded(current.discoveryCount > 0 ? 100 - factGroundingScore : 0), verifiedClaimCount: current.verified, contradictedClaimCount: current.contradicted, discoveryObservationCount: current.discoveryCount };
       });
     },
+    async clearRankings(rankingDate, rankingVersion) {
+      await request(`/rest/v1/editorial_rankings?ranking_date=eq.${encodeURIComponent(rankingDate)}&ranking_version=eq.${encodeURIComponent(rankingVersion)}`, { method: "DELETE", headers: { prefer: "return=minimal" } }, "app_private");
+    },
     async upsertRanking(ranking) {
       await request("/rest/v1/editorial_rankings?on_conflict=story_cluster_id%2Cranking_date%2Cranking_version", { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify({ story_cluster_id: ranking.storyClusterId, ranking_date: ranking.rankingDate, ranking_version: ranking.rankingVersion, editorial_score: ranking.editorialScore, information_gap_score: ranking.informationGapScore, fact_grounding_score: ranking.factGroundingScore, discovery_audience_signal_score: ranking.discoveryAudienceSignalScore, match_context_score: ranking.matchContextScore, freshness_score: ranking.freshnessScore, rank: ranking.rank, news_eligible: ranking.newsEligible, grounding_status: ranking.groundingStatus, reason_codes: ranking.reasonCodes, input_snapshot: ranking.inputSnapshot }) }, "app_private");
     },

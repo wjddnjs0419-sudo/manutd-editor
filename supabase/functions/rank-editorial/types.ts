@@ -25,6 +25,8 @@ export interface EditorialRanking extends EditorialRankingInput {
 
 export interface EditorialRankingRepository {
   listInputs(asOf?: Date, rankingDate?: string): Promise<readonly EditorialRankingInput[]>;
+  /** Replace the derived ranking projection for one date/version. */
+  clearRankings?: (rankingDate: string, rankingVersion: string) => Promise<void>;
   upsertRanking(ranking: EditorialRanking): Promise<void>;
 }
 

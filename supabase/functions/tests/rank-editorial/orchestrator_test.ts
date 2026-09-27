@@ -9,11 +9,14 @@ const inputs: EditorialRankingInput[] = [
 
 Deno.test("ranking persists deterministic positions and summary", async () => {
   const saved: Array<{ id: string; rank: number | null }> = [];
+  const cleared: string[] = [];
   const repository: EditorialRankingRepository = {
     listInputs: async () => inputs,
+    clearRankings: async (rankingDate, rankingVersion) => { cleared.push(`${rankingDate}:${rankingVersion}`); },
     upsertRanking: async (ranking) => { saved.push({ id: ranking.storyClusterId, rank: ranking.rank }); },
   };
   const result = await runEditorialRanking({ repository, rankingDate: "2026-09-27", version: "m8-c-v1" });
   assert.deepEqual(result, { status: "COMPLETED", ranked: 2, newsEligible: 1, researchLeads: 1, version: "m8-c-v1" });
+  assert.deepEqual(cleared, ["2026-09-27:m8-c-v1"]);
   assert.deepEqual(saved, [{ id: "cluster-2", rank: 1 }, { id: "cluster-1", rank: 2 }]);
 });
