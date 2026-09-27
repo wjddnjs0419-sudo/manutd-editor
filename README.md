@@ -2,7 +2,7 @@
 
 맨체스터 유나이티드 관련 Instagram 콘텐츠를 수집·분석하고, 객관적인 우선순위 점수와 실행 가능한 콘텐츠 브리프를 만드는 시스템입니다.
 
-현재 구현 범위는 **Milestone 1–8 Phase A**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. 이어서 intelligence Edge Function이 최근 게시물을 story cluster로 묶고 결정론적인 Priority Score·Data Confidence·FIRST_MOVER/MUST_COVER 결과를 생성합니다. M5는 M4 canonical evidence snapshot만 사용해 deterministic-first content mode를 분류하고, OpenAI Responses structured output을 검증한 뒤 append-only Creative Brief revision을 저장합니다. M8 Phase A는 private Instagram 이미지·캐러셀·Reel thumbnail을 server-only strict multimodal analysis로 보강하며, 원본·private media·M4 deterministic scoring은 유지합니다. Notion은 Supabase canonical state의 독립 projection consumer이며, 사람 소유 편집 필드는 보존합니다.
+현재 구현 범위는 **Milestone 1–8 Phase A/B/C**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. 이어서 intelligence Edge Function이 최근 게시물을 story cluster로 묶고 결정론적인 Priority Score·Data Confidence·FIRST_MOVER/MUST_COVER 결과를 생성합니다. M5는 M4 canonical evidence snapshot만 사용해 deterministic-first content mode를 분류하고, OpenAI Responses structured output을 검증한 뒤 append-only Creative Brief revision을 저장합니다. M8 Phase A는 private Instagram 이미지·캐러셀·Reel thumbnail을 server-only strict multimodal analysis로 보강하며, 원본·private media·M4 deterministic scoring은 유지합니다. M8 Phase B/C는 공식·독립 사실 출처로 claim을 검증하고, 경쟁 계정·Reddit·YouTube는 discovery/audience 신호로만 사용한 뒤 별도 editorial ranking projection을 작성합니다. Notion은 Supabase canonical state의 독립 projection consumer이며, 사람 소유 편집 필드는 보존합니다.
 
 ## Milestone 7 final architecture
 
@@ -12,13 +12,41 @@ Supabase is the canonical database, orchestration layer, scheduler, and Edge Fun
 Supabase Cron
   → app_private.editorial_jobs
   → orchestration-worker
-  → existing collection / intelligence / creative / fixture / briefing boundaries
+  → collection / analysis / intelligence / source discovery / claim grounding / editorial ranking
+  → creative / fixture / briefing boundaries
   → canonical Supabase state
   → independent consumers (Notion projection, Telegram, future Figma drafts)
 
 Telegram → direct `telegram-agent` webhook
 n8n → legacy / not required for production
 ```
+
+M8 Phase B/C의 worker chain은 `RUN_INTELLIGENCE → DISCOVER_SOURCES →
+GROUND_CLAIMS → RANK_EDITORIAL → GENERATE_PRIORITY`입니다. `FACT_PRIMARY`와
+`FACT_INDEPENDENT`만 사실을 검증할 수 있고, `DISCOVERY_COMPETITOR`,
+`DISCOVERY_COMMUNITY`, `DISCOVERY_VIDEO`는 관심도와 research lead만 만듭니다.
+반복 게시·engagement·community 대화는 사실 confidence가 아니며,
+`MATCH_CONTEXT`는 기존 fixture provider의 경기 맥락으로만 사용합니다.
+`published_posts`와 `performance_metrics`는 이 grounding/ranking 경로에
+참여하지 않습니다.
+
+매일 09:00 Asia/Seoul briefing은 기존 `MORNING_BRIEF` Cron과 readiness/
+`ALREADY_SENT` 소유권을 유지합니다. 같은 business date의 ranking projection이
+있으면 후보 순서와 grounding/news eligibility를 frozen snapshot에 보존하고,
+없거나 enrichment가 실패하면 M4 canonical candidate 순서로 즉시 fallback합니다.
+
+로컬 전체 검증:
+
+```bash
+./scripts/run-milestone-8-phase-b-c-smoke.sh
+```
+
+Production rollout 순서는 linked migration, `source-discovery`, `ground-claims`,
+`rank-editorial`, `orchestration-worker`, `telegram-morning-brief` Edge Function
+배포입니다. `SOURCE_DISCOVERY_FEEDS_JSON`가 비어 있으면 discovery는 안전한
+`NOOP`으로 완료하며, 이를 위해 09:00 briefing이 외부 feed를 기다리지는 않습니다.
+운영 중 문제가 생기면 먼저 M7 Cron/worker invocation을 pause하고, source
+enrichment만 비활성화해도 briefing은 M4 fallback으로 계속 동작합니다.
 
 Telegram uses the direct `telegram-agent` webhook.
 

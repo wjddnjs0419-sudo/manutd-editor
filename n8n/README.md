@@ -19,6 +19,7 @@ Supabase-native components.
 | --- | --- |
 | Instagram 30-minute schedule | Supabase Cron → `COLLECT_INSTAGRAM` root job |
 | Collector → intelligence → creative chain | `orchestration-worker` and its bounded editorial job chain |
+| Source discovery → fact grounding → editorial ranking | `DISCOVER_SOURCES → GROUND_CLAIMS → RANK_EDITORIAL` worker stages |
 | Notion projection after generation | canonical `creative_briefs.READY` → `PROJECT_NOTION` consumer |
 | Fixture sync every 15 minutes | Supabase Cron → `FIXTURE_SYNC` → `DISPATCH_ALERTS` |
 | 09:00 Asia/Seoul briefing | Supabase Cron → `MORNING_BRIEF` |
