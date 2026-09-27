@@ -91,6 +91,7 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
     "Bearer telegram-secret", "Bearer telegram-secret", "Bearer telegram-secret",
   ]);
   assert.deepEqual(calls[1]?.body, { as_of: "2026-09-26T00:00:00Z" });
+  assert.equal(calls[0]?.body, null);
   assert.deepEqual(calls[2]?.body, { as_of: "2026-09-26T00:00:00Z" });
   assert.deepEqual(calls[3]?.body, { as_of: "2026-09-26T00:00:00Z" });
   assert.deepEqual(calls[5]?.body, { as_of: "2026-09-26T00:00:00Z" });

@@ -29,11 +29,11 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function requestBody(jobType: EditorialJobType, payload: Record<string, unknown>): Record<string, unknown> {
+function requestBody(jobType: EditorialJobType, payload: Record<string, unknown>): Record<string, unknown> | undefined {
   if (jobType === "COLLECT_INSTAGRAM") {
     return Array.isArray(payload.source_account_ids)
       ? { source_account_ids: payload.source_account_ids }
-      : {};
+      : undefined;
   }
   if (jobType === "ANALYZE_CONTENT") {
     return {
@@ -66,7 +66,10 @@ export function createBoundaryInvoker(options: BoundaryClientOptions): BoundaryI
           authorization: `Bearer ${secret}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify(requestBody(jobType, record(payload))),
+        body: (() => {
+          const value = requestBody(jobType, record(payload));
+          return value === undefined ? undefined : JSON.stringify(value);
+        })(),
       });
       return { status: response.status };
     },
