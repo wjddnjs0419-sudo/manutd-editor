@@ -4,6 +4,11 @@ set role postgres;
 create extension if not exists pgtap with schema extensions;
 set search_path = pgtap, extensions, public;
 
+-- Local pg_cron may enqueue the current root buckets while the suite starts.
+-- This contract owns the queue state it measures, so remove those external
+-- test-environment rows before inserting the deterministic fixture below.
+delete from app_private.editorial_jobs;
+
 select plan(26);
 
 select ok(

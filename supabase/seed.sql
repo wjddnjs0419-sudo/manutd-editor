@@ -40,7 +40,8 @@ insert into public.information_sources (
   instagram_username,
   website_url,
   reliability_score,
-  reliability_rationale
+  reliability_rationale,
+  editorial_role
 )
 values
   (
@@ -50,7 +51,8 @@ values
     'manchesterunited',
     'https://www.manutd.com',
     10,
-    'Official club source for club announcements and first-party information.'
+    'Official club source for club announcements and first-party information.',
+    'FACT_PRIMARY'
   ),
   (
     'Fabrizio Romano',
@@ -59,7 +61,8 @@ values
     'fabriziorom',
     'https://www.fabrizioromano.com',
     9,
-    'Named direct reporter treated as a Tier-1 source in the approved v1 registry.'
+    'Named direct reporter treated as a Tier-1 source in the approved v1 registry.',
+    'FACT_INDEPENDENT'
   ),
   (
     'BBC Sport',
@@ -68,7 +71,8 @@ values
     'bbcsport',
     'https://www.bbc.com/sport',
     8,
-    'Major established media outlet with editorial review.'
+    'Major established media outlet with editorial review.',
+    'FACT_INDEPENDENT'
   ),
   (
     'Sky Sports',
@@ -77,7 +81,8 @@ values
     'skysports',
     'https://www.skysports.com',
     8,
-    'Major established media outlet with editorial review.'
+    'Major established media outlet with editorial review.',
+    'FACT_INDEPENDENT'
   ),
   (
     'The Athletic',
@@ -86,7 +91,8 @@ values
     'theathleticfc',
     'https://www.nytimes.com/athletic',
     8,
-    'Major established sports publication with editorial review.'
+    'Major established sports publication with editorial review.',
+    'FACT_INDEPENDENT'
   )
 on conflict (canonical_name) do update
 set
@@ -96,6 +102,7 @@ set
   website_url = excluded.website_url,
   reliability_score = excluded.reliability_score,
   reliability_rationale = excluded.reliability_rationale,
+  editorial_role = excluded.editorial_role,
   active = true;
 
 update public.scoring_configs
