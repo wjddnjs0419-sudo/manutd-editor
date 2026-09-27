@@ -1,5 +1,6 @@
 import type { ManutdEditorCarouselDraft, EditorialSlide } from "../editorial-style/types.ts";
 import { isManchesterUnitedRelevant } from "../m8/manchester_united_relevance.ts";
+import { displayStoryTitle } from "../m8/story_display.ts";
 
 export interface EditorialEvidence {
   evidence_id: string;
@@ -139,7 +140,7 @@ export function buildCanonicalStories(
       return {
         id: first.story_cluster_id,
         candidate_id: first.candidate_id,
-        title: first.canonical_title,
+        title: displayStoryTitle(first.canonical_title),
         summary: first.summary,
         ranking_date: first.ranking_date,
         ranking_version: first.ranking_version,

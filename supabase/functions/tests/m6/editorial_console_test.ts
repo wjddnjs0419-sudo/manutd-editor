@@ -50,6 +50,11 @@ Deno.test("canonical story builder collapses duplicate source posts into one sto
   assertEquals(stories[0]?.title, "산초, 3개월째 FA");
 });
 
+Deno.test("canonical story renderer hides internal entity-token titles", () => {
+  const stories = buildCanonicalStories([{ ...firstStory, canonical_title: "sir_alex_ferguson pep_guardiola manchester_united manchester_city" }]);
+  assertEquals(stories[0]?.title, "퍼거슨 · 과르디올라 · 맨유 · 맨시티 관련 소재");
+});
+
 Deno.test("all stories retains lower-ranked discovery-only canonical stories", () => {
   const stories = buildCanonicalStories([firstStory, secondStory]);
   assertEquals(stories.length, 2);

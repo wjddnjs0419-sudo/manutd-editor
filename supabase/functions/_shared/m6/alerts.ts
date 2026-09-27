@@ -1,4 +1,5 @@
 import type { TelegramClient, TelegramInlineKeyboardMarkup } from "./telegram_client.ts";
+import { displayStoryTitle } from "../m8/story_display.ts";
 
 export interface CandidateAlertState {
   first_mover_flag: boolean;
@@ -76,7 +77,7 @@ function intelligenceSummary(input: IntelligenceSummaryInput): RenderedAlert {
     "",
     `새롭게 확인된 소재 ${stories.length}개`,
     `추천 후보 ${recommended.length}개`,
-    top ? `\n🔥 가장 유력한 소재\n${top.title}` : "",
+    top ? `\n🔥 가장 유력한 소재\n${displayStoryTitle(top.title)}` : "",
   ].filter((line) => line !== "").join("\n");
   return {
     text,

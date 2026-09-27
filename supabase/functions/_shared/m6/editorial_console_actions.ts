@@ -94,6 +94,7 @@ export function parseConsoleIntent(value: string, activeStoryToken?: string | nu
   if (/^(\/today|오늘 뭐 있어\??|오늘 올릴 거 보여줘|추천 소재)$/u.test(normalized)) return { type: "OPEN_RECOMMENDED", page: 1 };
   if (/^(전체 수집한 거 보여줘|전체 소재|전체 수집본)$/u.test(normalized)) return { type: "OPEN_ALL", page: 1 };
   if (normalized === "다음 거 보여줘") return { type: "NEXT_PAGE" };
+  if (normalized === "카드뉴스 생성") return { type: "GENERATE_CAROUSEL", token: activeStoryToken ?? null };
   if (/^이거 카드뉴스로 (?:만들어줘|만들거야|만들어야)$/u.test(normalized)) return { type: "GENERATE_CAROUSEL", token: activeStoryToken ?? null };
   return null;
 }
@@ -143,6 +144,9 @@ export async function dispatchEditorialConsoleAction(action: ConsoleAction, stat
     if (!action.token) return safeError("먼저 소재를 열어 주세요.", state, "CREATIVE_GENERATION_FAILED");
     const story = await dependencies.getStoryByToken(action.token);
     if (!story || !story.candidate_id) return safeError("최신 canonical 소재를 찾지 못했습니다.", state, "CREATIVE_GENERATION_FAILED");
+    if (!story.news_eligible || story.evidence.length === 0 || (story.information_gap_score <= 0 && story.hook_strength <= 0)) {
+      return safeError("현재 공개용 카드뉴스 생성에 필요한 검증된 근거가 부족합니다.\n🔎 근거 보기에서 출처를 확인해 주세요.", state, "CREATIVE_GENERATION_BLOCKED");
+    }
     try {
       const draft = await dependencies.generateCarousel(story);
       return { view: renderCarouselDraft(draft), next_state: { ...state, view: "DRAFT", story_id: story.id, story_fingerprint: story.story_fingerprint, brief_id: draft.creative_brief_id, state_version: state.state_version + 1 }, event: { action: "CREATIVE_GENERATION_COMPLETED", status: "COMPLETED", metadata: { story_id: story.id, brief_id: draft.creative_brief_id } } };

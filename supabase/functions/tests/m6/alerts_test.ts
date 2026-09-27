@@ -47,10 +47,11 @@ Deno.test("intelligence summary fingerprint ignores run metadata and changes on 
 });
 
 Deno.test("intelligence summary is one compact message with two navigation buttons", () => {
-  const rendered = renderIntelligenceCompleteSummary(summary);
+  const rendered = renderIntelligenceCompleteSummary({ ...summary, stories: [{ ...summary.stories[0]!, title: "sir_alex_ferguson pep_guardiola manchester_united" }, summary.stories[1]!] });
   assert(rendered.text.includes("새롭게 확인된 소재 2개"));
   assert(rendered.text.includes("추천 후보 1개"));
-  assert(rendered.text.includes("산초, 3개월째 FA"));
+  assert(rendered.text.includes("퍼거슨 · 과르디올라 · 맨유 관련 소재"));
+  assert(!rendered.text.includes("sir_alex_ferguson"));
   assertEquals(rendered.reply_markup!.inline_keyboard[0], [
     { text: "🔥 추천 소재", callback_data: "ideas:recommended:1" },
     { text: "📚 전체 소재", callback_data: "ideas:all:1" },

@@ -73,6 +73,7 @@ Deno.test("natural-language console intents resolve to the same business actions
   assertEquals(parseConsoleIntent("전체 수집한 거 보여줘"), { type: "OPEN_ALL", page: 1 });
   assertEquals(parseConsoleIntent("이거 카드뉴스로 만들어줘", story.id), { type: "GENERATE_CAROUSEL", token: story.id });
   assertEquals(parseConsoleIntent("이거 카드뉴스로 만들거야", story.id), { type: "GENERATE_CAROUSEL", token: story.id });
+  assertEquals(parseConsoleIntent("카드뉴스 생성"), { type: "GENERATE_CAROUSEL", token: null });
   assertEquals(parseConsoleIntent("다음 거 보여줘"), { type: "NEXT_PAGE" });
   assertEquals(parseConsoleIntent("이건 그냥 의견이야"), null);
 });
@@ -102,6 +103,27 @@ Deno.test("card generation action calls the injected canonical service exactly o
   assertEquals(result.next_state.view, "DRAFT");
   assertEquals(result.next_state.brief_id, "brief-1");
   assertEquals(result.event.action, "CREATIVE_GENERATION_COMPLETED");
+});
+
+Deno.test("card generation without a selected story never invokes the canonical generator", async () => {
+  let calls = 0;
+  const result = await dispatchEditorialConsoleAction({ type: "GENERATE_CAROUSEL", token: null }, state(), dependencies({ generateCarousel: async () => { calls += 1; return draft; } }));
+  assertEquals(calls, 0);
+  assert(result.view.text.includes("먼저 소재를 열어 주세요"));
+  assertEquals(result.event.action, "CREATIVE_GENERATION_FAILED");
+});
+
+Deno.test("card generation blocks candidates without verified public evidence", async () => {
+  let calls = 0;
+  const unsupported = { ...story, news_eligible: false, information_gap_score: 0, hook_strength: 0, shareability: 0, source_confidence: 0, evidence: [] };
+  const result = await dispatchEditorialConsoleAction(
+    { type: "GENERATE_CAROUSEL", token: story.id.replaceAll("-", "").slice(0, 12) },
+    state({ view: "DETAIL", story_id: story.id }),
+    dependencies({ getStoryByToken: async () => unsupported, generateCarousel: async () => { calls += 1; return draft; } }),
+  );
+  assertEquals(calls, 0);
+  assert(result.view.text.includes("검증된 근거"));
+  assertEquals(result.event.action, "CREATIVE_GENERATION_BLOCKED");
 });
 
 Deno.test("back navigation returns from evidence and draft to the current story list safely", async () => {
