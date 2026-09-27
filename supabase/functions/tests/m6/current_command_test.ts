@@ -22,3 +22,14 @@ Deno.test("current command reports readiness blockers without pretending candida
   assertEquals(formatCurrentReply({ briefingDate: "2026-09-21", readiness: "NOT_READY", candidateCount: 0, items: [] }), "2026-09-21 현재 Intelligence가 아직 준비되지 않았습니다.");
   assertEquals(formatCurrentReply({ briefingDate: "2026-09-21", readiness: "DEGRADED", candidateCount: 0, items: [] }), "2026-09-21 현재 Intelligence 상태와 후보 수가 일치하지 않습니다.");
 });
+
+Deno.test("current command includes standalone fact source title and source name", () => {
+  const result = formatCurrentReply({
+    briefingDate: "2026-09-21",
+    readiness: "READY_WITH_CANDIDATES",
+    candidateCount: 1,
+    items: [{ position: 1, candidateId: "source:observation-1", priorityScore: null, username: null, title: "Manchester United announce an official update", sourceName: "Manchester United" }],
+  });
+  assert(result.includes("Manchester United announce an official update"));
+  assert(result.includes("· Manchester United"));
+});

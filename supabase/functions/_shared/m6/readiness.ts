@@ -10,6 +10,10 @@ export interface IntelligenceReadinessRecord {
   error_category: string | null;
 }
 
+export function countReadinessCandidates(candidates: readonly { candidate_type?: string }[]): number {
+  return candidates.filter((candidate) => candidate.candidate_type !== "FACT_SOURCE").length;
+}
+
 export function classifyReadiness(
   state: IntelligenceReadinessRecord | null,
   briefingDate: string,

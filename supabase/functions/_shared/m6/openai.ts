@@ -100,7 +100,7 @@ function phrasingPayload(snapshot: MorningBriefingSnapshot): unknown {
       briefing_date: snapshot.briefing_date,
       match_day_mode: snapshot.match_day_mode,
       overnight_counts: snapshot.overnight_counts,
-      candidates: snapshot.items.map((item) => ({ position: item.position, creative_status: item.creative_status, has_reference: Boolean(item.reference_permalink) })),
+      candidates: snapshot.items.map((item) => ({ position: item.position, creative_status: item.creative_status, has_reference: Boolean(item.reference_permalink ?? item.source_url) })),
       has_issues: snapshot.blocked_failed.length > 0,
     },
     output_schema: { intro: "string", candidate_notes: [{ position: "number", note: "string" }], issue_note: "string|null" },
@@ -126,8 +126,10 @@ function canonicalCandidateText(item: FrozenBriefingItem, note: string): string 
   const flagText = flags(item);
   const title = item.title?.trim() || "콘텐츠 후보";
   const lines = [`${item.position}️⃣ ${title}`, [score, flagText].filter(Boolean).join(" · "), `Creative Brief: ${item.creative_status}`, "", note];
+  if (item.source_name) lines.push(`Source: ${item.source_name}`);
   if (item.reference_username) lines.push(`Reference: @${item.reference_username}`);
-  if (item.reference_permalink) lines.push(`🔗 원문: ${item.reference_permalink}`);
+  const sourceUrl = item.source_url ?? item.reference_permalink;
+  if (sourceUrl) lines.push(`🔗 원문: ${sourceUrl}`);
   lines.push(`/open ${item.position}`);
   return lines.join("\n");
 }

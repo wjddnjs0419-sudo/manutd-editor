@@ -6,7 +6,7 @@ import { createM6Repository } from "../_shared/m6/repository.ts";
 import { createReferenceSignedUrl, selectRepresentativeReference } from "../_shared/m6/reference_media.ts";
 import { createTelegramClient } from "../_shared/m6/telegram_client.ts";
 import { createOpenAIGenerator, phraseMorningBrief, renderMorningBrief } from "../_shared/m6/openai.ts";
-import { classifyReadiness } from "../_shared/m6/readiness.ts";
+import { classifyReadiness, countReadinessCandidates } from "../_shared/m6/readiness.ts";
 import { createMorningBriefHandler, type MorningBriefResult } from "./handler.ts";
 
 const secret = Deno.env.get("TELEGRAM_AGENT_INVOKE_SECRET") ?? "";
@@ -56,7 +56,7 @@ async function runMorningBrief(): Promise<MorningBriefResult> {
   if (readinessState.status === "FAILED") return { status: "DEGRADED", briefing_date: briefingDate, messages_sent: 0, render_mode: "FALLBACK_TEMPLATE", readiness: "DEGRADED", warning: `오늘 Intelligence 파이프라인이 실패했습니다.${readinessState.error_category ? ` (${readinessState.error_category})` : ""}` };
 
   const rows = await repository.listBriefingCandidates(briefingDate);
-  const readiness = classifyReadiness(readinessState, briefingDate, rows.length);
+  const readiness = classifyReadiness(readinessState, briefingDate, countReadinessCandidates(rows));
   if (readiness === "NOT_READY") return { status: "NOT_READY", briefing_date: briefingDate, messages_sent: 0, render_mode: "FALLBACK_TEMPLATE", readiness, warning: "오늘 Intelligence 결과가 아직 확정되지 않았습니다." };
   if (readiness === "DEGRADED") return { status: "DEGRADED", briefing_date: briefingDate, messages_sent: 0, render_mode: "FALLBACK_TEMPLATE", readiness, warning: "오늘 Intelligence 후보 상태가 일치하지 않아 브리핑을 보내지 않았습니다." };
 
@@ -71,6 +71,9 @@ async function runMorningBrief(): Promise<MorningBriefResult> {
     editorial_rank: row.editorial_rank,
     grounding_status: row.grounding_status,
     news_eligible: row.news_eligible,
+    title: row.title ?? null,
+    source_name: row.source_name ?? null,
+    source_url: row.source_url ?? null,
     representative: selectRepresentativeReference(row.reference_posts),
   }));
   const snapshot = buildMorningBriefingSnapshot({ briefing_date: briefingDate, timezone, match_day_mode: fixtureResult.match_day_mode, match_context: {}, overnight_counts: { candidates: eligibleRows.length, discovered_candidates: rows.length }, candidates, blocked_failed: fixtureResult.status === "FAILED" ? [{ type: "FIXTURE_SYNC", error_category: fixtureResult.error_category ?? "UNKNOWN" }] : [] });

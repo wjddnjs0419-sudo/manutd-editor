@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { classifyReadiness, type IntelligenceReadinessRecord } from "../../_shared/m6/readiness.ts";
+import { classifyReadiness, countReadinessCandidates, type IntelligenceReadinessRecord } from "../../_shared/m6/readiness.ts";
 
 const ready = (status: IntelligenceReadinessRecord["status"], candidate_count: number, ranking_date = "2026-09-21"): IntelligenceReadinessRecord => ({
   ranking_date,
@@ -8,6 +8,13 @@ const ready = (status: IntelligenceReadinessRecord["status"], candidate_count: n
   started_at: "2026-09-21T00:00:00Z",
   completed_at: status === "SUCCEEDED" ? "2026-09-21T00:30:00Z" : null,
   error_category: status === "FAILED" ? "DATABASE_HTTP_ERROR" : null,
+});
+
+Deno.test("does not count standalone fact sources against intelligence readiness", () => {
+  assertEquals(countReadinessCandidates([
+    { candidate_type: "SOCIAL" },
+    { candidate_type: "FACT_SOURCE" },
+  ]), 1);
 });
 
 Deno.test("readiness distinguishes incomplete, failed, empty, and populated intelligence", () => {

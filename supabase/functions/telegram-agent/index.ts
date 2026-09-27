@@ -1,6 +1,6 @@
 import { parseCommand, type ParsedCommand } from "../_shared/m6/commands.ts";
 import { businessDate } from "../_shared/m6/business_date.ts";
-import { classifyReadiness } from "../_shared/m6/readiness.ts";
+import { classifyReadiness, countReadinessCandidates } from "../_shared/m6/readiness.ts";
 import { formatCurrentReply, snapshotCurrentCandidates } from "./current.ts";
 import { MEMORY_SYSTEM_RULES, maybeRollSummary, type MemoryMessage, type MemoryThread } from "../_shared/m6/memory.ts";
 import { createOpenAIGenerator } from "../_shared/m6/openai.ts";
@@ -268,10 +268,10 @@ async function commandReply(command: ParsedCommand, thread: ThreadRow): Promise<
     const briefingDate = businessDate(new Date(), "Asia/Seoul");
     const state = await repository.getIntelligenceReadiness(briefingDate);
     const rows = await repository.listBriefingCandidates(briefingDate);
-    const readiness = classifyReadiness(state, briefingDate, rows.length);
+    const readiness = classifyReadiness(state, briefingDate, countReadinessCandidates(rows));
     const snapshot = snapshotCurrentCandidates(briefingDate, rows);
     await saveCurrentSnapshot(thread, snapshot);
-    return formatCurrentReply({ briefingDate, readiness, candidateCount: rows.length, items: snapshot.items.map((item) => ({ position: item.position, candidateId: item.candidate_id, priorityScore: item.priority_score, username: item.reference_username })) });
+    return formatCurrentReply({ briefingDate, readiness, candidateCount: rows.length, items: snapshot.items.map((item) => ({ position: item.position, candidateId: item.candidate_id, priorityScore: item.priority_score, username: item.reference_username, title: item.title, sourceName: item.source_name })) });
   }
   if (command.type === "STATUS") return thread.active_candidate_id ? `현재 후보 ${thread.active_candidate_id}의 최신 상태를 확인하세요.` : "활성 후보가 없습니다. /today 또는 /open으로 시작하세요.";
   if (command.type === "BACK") return "이전 작업 맥락으로 돌아갔습니다.";
@@ -300,7 +300,7 @@ async function commandReply(command: ParsedCommand, thread: ThreadRow): Promise<
     const item = snapshot.items?.find((candidate) => command.target === String(candidate.position) || command.target === String(candidate.candidate_id));
     if (!item || typeof item.candidate_id !== "string") return "현재 브리핑에서 해당 후보를 찾지 못했습니다.";
     await rest(`/rest/v1/telegram_threads?id=eq.${encodeURIComponent(thread.id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ active_candidate_id: item.candidate_id, active_brief_id: null, pending_action: null, pending_action_expires_at: null }) }, "app_private");
-    const link = typeof item.reference_permalink === "string" ? `\n🔗 원문: ${item.reference_permalink}` : "";
+    const link = typeof item.source_url === "string" ? `\n🔗 원문: ${item.source_url}` : typeof item.reference_permalink === "string" ? `\n🔗 원문: ${item.reference_permalink}` : "";
     return `브리핑의 ${item.position}번 후보를 열었습니다.${link}`;
   }
   if (command.type === "BRIEF") return thread.active_brief_id ? `현재 Creative Brief: ${thread.active_brief_id}` : "활성 Creative Brief가 없습니다.";

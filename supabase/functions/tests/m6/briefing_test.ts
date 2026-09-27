@@ -60,3 +60,37 @@ Deno.test("preserves the legacy candidate fallback when no grounding decision ex
   ]);
   assertEquals(selected.map((candidate) => candidate.candidate_id), ["legacy-a", "legacy-b"]);
 });
+
+Deno.test("keeps a verified standalone fact source when social candidates are unverified", () => {
+  const selected = selectBriefingCandidates([
+    { candidate_id: "social", candidate_type: "SOCIAL", grounding_status: "INSUFFICIENT", news_eligible: false },
+    { candidate_id: "fact-source", candidate_type: "FACT_SOURCE", grounding_status: "VERIFIED", news_eligible: true },
+  ]);
+  assertEquals(selected.map((candidate) => candidate.candidate_id), ["fact-source"]);
+});
+
+Deno.test("freezes standalone fact source metadata for Telegram rendering", () => {
+  const saved = buildMorningBriefingSnapshot({
+    briefing_date: "2026-09-20",
+    timezone: "Asia/Seoul",
+    match_day_mode: "NORMAL_DAY",
+    match_context: {},
+    overnight_counts: { candidates: 1 },
+    candidates: [{
+      candidate_id: "source:observation-1",
+      priority_score: null,
+      first_mover_flag: false,
+      must_cover_flag: false,
+      creative_status: "NOT_REQUESTED",
+      representative: null,
+      title: "Manchester United announce an official update",
+      source_name: "Manchester United",
+      source_url: "https://www.manutd.com/en/news/example",
+    }],
+    blocked_failed: [],
+  });
+
+  assertEquals(saved.items[0]?.title, "Manchester United announce an official update");
+  assertEquals(saved.items[0]?.source_name, "Manchester United");
+  assertEquals(saved.items[0]?.source_url, "https://www.manutd.com/en/news/example");
+});

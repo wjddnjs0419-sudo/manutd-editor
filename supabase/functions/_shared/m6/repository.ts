@@ -11,15 +11,19 @@ export interface M6RepositoryOptions {
 
 export interface BriefingCandidateRow {
   candidate_id: string;
+  candidate_type: "SOCIAL" | "FACT_SOURCE";
   rank: number | null;
   priority_score: number | null;
   first_mover_flag: boolean;
   must_cover_flag: boolean;
   creative_status: string;
   reference_posts: readonly CandidateReferencePost[];
-  editorial_rank?: number | null;
-  grounding_status?: string | null;
-  news_eligible?: boolean;
+  editorial_rank: number | null;
+  grounding_status: string | null;
+  news_eligible: boolean;
+  title?: string | null;
+  source_name?: string | null;
+  source_url?: string | null;
 }
 
 export interface M6Repository extends FixtureSyncRepository {
@@ -51,6 +55,12 @@ function nullableString(value: unknown): string | null {
 
 function nullableNumber(value: unknown): number | null {
   return typeof value === "number" ? value : null;
+}
+
+function nextUtcDate(value: string): string {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
 }
 
 function parseMatch(value: unknown): StoredMatch {
@@ -156,9 +166,11 @@ export function createM6Repository(options: M6RepositoryOptions): M6Repository {
     async listBriefingCandidates(rankingDate) {
       const rawCandidates = await request(`/rest/v1/content_candidates?select=id,rank,priority_score,first_mover_flag,must_cover_flag,story_cluster_id,creative_briefs(version,status)&ranking_date=eq.${encodeURIComponent(rankingDate)}&order=rank.asc.nullslast,priority_score.desc`);
       if (!Array.isArray(rawCandidates)) throw new M6RepositoryError("RESPONSE");
-      const [rawPosts, editorialRankings] = await Promise.all([
+      const [rawPosts, editorialRankings, factObservations, sources] = await Promise.all([
         request(`/rest/v1/story_cluster_posts?select=story_cluster_id,raw_post_id,match_confidence,raw_posts(permalink,published_at,media_type,media_product_type,source_accounts(username),media_assets(id,asset_type,carousel_index,storage_path))`),
         request(`/rest/v1/editorial_rankings?select=story_cluster_id,rank,grounding_status,news_eligible&ranking_date=eq.${encodeURIComponent(rankingDate)}&order=rank.asc.nullslast`, {}, "app_private").catch(() => []),
+        request(`/rest/v1/source_observations?select=id,information_source_id,editorial_role,title,canonical_url,observed_at&editorial_role=in.(FACT_PRIMARY,FACT_INDEPENDENT)&observed_at=gte.${encodeURIComponent(`${rankingDate}T00:00:00.000Z`)}&observed_at=lt.${encodeURIComponent(`${nextUtcDate(rankingDate)}T00:00:00.000Z`)}&order=observed_at.desc&limit=50`, {}, "app_private").catch(() => []),
+        request("/rest/v1/information_sources?select=id,canonical_name&limit=500").catch(() => []),
       ]);
       if (!Array.isArray(rawPosts)) throw new M6RepositoryError("RESPONSE");
       const rankingByCluster = new Map<string, { rank: number | null; groundingStatus: string | null; newsEligible: boolean }>();
@@ -174,12 +186,19 @@ export function createM6Repository(options: M6RepositoryOptions): M6Repository {
         existing.push({ raw_post_id: value.raw_post_id, username: account.username, permalink: nullableString(rawPost.permalink), published_at: typeof rawPost.published_at === "string" ? rawPost.published_at : "1970-01-01T00:00:00Z", media_type: typeof rawPost.media_type === "string" ? rawPost.media_type : "UNKNOWN", media_product_type: nullableString(rawPost.media_product_type), match_confidence: nullableNumber(value.match_confidence), cited_source_reliability: null, media_assets: assets });
         postsByCluster.set(value.story_cluster_id, existing);
       }
-      const candidates = rawCandidates.filter(object).map((candidate) => {
+      const candidates: BriefingCandidateRow[] = rawCandidates.filter(object).map((candidate) => {
         const briefs = Array.isArray(candidate.creative_briefs) ? candidate.creative_briefs.filter(object) : [];
         const latest = briefs.sort((left, right) => (typeof right.version === "number" ? right.version : 0) - (typeof left.version === "number" ? left.version : 0))[0];
         const editorial = typeof candidate.story_cluster_id === "string" ? rankingByCluster.get(candidate.story_cluster_id) : undefined;
-        return { candidate_id: typeof candidate.id === "string" ? candidate.id : "", rank: nullableNumber(candidate.rank), priority_score: nullableNumber(candidate.priority_score), first_mover_flag: candidate.first_mover_flag === true, must_cover_flag: candidate.must_cover_flag === true, creative_status: typeof latest?.status === "string" ? latest.status : "NOT_REQUESTED", reference_posts: postsByCluster.get(typeof candidate.story_cluster_id === "string" ? candidate.story_cluster_id : "") ?? [], editorial_rank: editorial?.rank ?? null, grounding_status: editorial?.groundingStatus ?? null, news_eligible: editorial?.newsEligible ?? false };
+        return { candidate_id: typeof candidate.id === "string" ? candidate.id : "", candidate_type: "SOCIAL" as const, rank: nullableNumber(candidate.rank), priority_score: nullableNumber(candidate.priority_score), first_mover_flag: candidate.first_mover_flag === true, must_cover_flag: candidate.must_cover_flag === true, creative_status: typeof latest?.status === "string" ? latest.status : "NOT_REQUESTED", reference_posts: postsByCluster.get(typeof candidate.story_cluster_id === "string" ? candidate.story_cluster_id : "") ?? [], editorial_rank: editorial?.rank ?? null, grounding_status: editorial?.groundingStatus ?? null, news_eligible: editorial?.newsEligible ?? false };
       }).filter((candidate) => candidate.candidate_id !== "");
+      const sourceNames = new Map<string, string>();
+      if (Array.isArray(sources)) for (const source of sources) if (object(source) && typeof source.id === "string" && typeof source.canonical_name === "string") sourceNames.set(source.id, source.canonical_name);
+      const sourceCandidates = Array.isArray(factObservations) ? factObservations.filter(object).flatMap((observation) => {
+        if (typeof observation.id !== "string" || typeof observation.information_source_id !== "string" || typeof observation.editorial_role !== "string" || !["FACT_PRIMARY", "FACT_INDEPENDENT"].includes(observation.editorial_role) || typeof observation.title !== "string" || typeof observation.canonical_url !== "string") return [];
+        return [{ candidate_id: `source:${observation.id}`, candidate_type: "FACT_SOURCE" as const, rank: null, priority_score: null, first_mover_flag: false, must_cover_flag: false, creative_status: "NOT_REQUESTED", reference_posts: [], editorial_rank: null, grounding_status: "VERIFIED", news_eligible: true, title: observation.title, source_name: sourceNames.get(observation.information_source_id) ?? "Fact source", source_url: observation.canonical_url }];
+      }) : [];
+      candidates.push(...sourceCandidates);
       if (candidates.some((candidate) => candidate.editorial_rank !== null)) {
         candidates.sort((left, right) => (left.editorial_rank === null ? 1 : right.editorial_rank === null ? -1 : left.editorial_rank - right.editorial_rank)
           || (left.rank === null ? 1 : right.rank === null ? -1 : left.rank - right.rank)

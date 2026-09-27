@@ -70,6 +70,28 @@ Deno.test("renderer owns canonical score, flags, status, source link, and open p
   assert(plans[1].text.includes("/open 1"));
 });
 
+Deno.test("renderer includes standalone fact source identity and link", () => {
+  const plans = renderMorningBrief({
+    ...snapshot,
+    items: [{
+      ...snapshot.items[0],
+      candidate_id: "source:observation-1",
+      title: "Manchester United announce an official update",
+      reference_username: null,
+      reference_permalink: null,
+      source_name: "Manchester United",
+      source_url: "https://www.manutd.com/en/news/example",
+    }],
+  }, {
+    intro: "좋은 아침입니다.",
+    candidate_notes: [{ position: 1, note: "공식 발표 원문을 확인해 주세요." }],
+    issue_note: null,
+  });
+  assert(plans[1].text.includes("Manchester United announce an official update"));
+  assert(plans[1].text.includes("Source: Manchester United"));
+  assert(plans[1].text.includes("https://www.manutd.com/en/news/example"));
+});
+
 Deno.test("morning brief handler authenticates and returns safe delivery summary", async () => {
   const handler = createMorningBriefHandler({
     invokeSecret: "secret",

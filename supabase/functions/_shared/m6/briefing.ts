@@ -16,6 +16,8 @@ export interface FrozenBriefingItem {
   grounding_status?: string | null;
   news_eligible?: boolean;
   title?: string | null;
+  source_name?: string | null;
+  source_url?: string | null;
   /** Ephemeral signed URL; never persist this field in the briefing snapshot. */
   reference_media_url?: string | null;
 }
@@ -46,6 +48,9 @@ export interface MorningBriefingInput {
     editorial_rank?: number | null;
     grounding_status?: string | null;
     news_eligible?: boolean;
+    title?: string | null;
+    source_name?: string | null;
+    source_url?: string | null;
   }[];
   blocked_failed: readonly Record<string, unknown>[];
 }
@@ -78,6 +83,9 @@ export function buildMorningBriefingSnapshot(input: MorningBriefingInput): Morni
       ...(candidate.editorial_rank !== undefined ? { editorial_rank: candidate.editorial_rank } : {}),
       ...(candidate.grounding_status !== undefined ? { grounding_status: candidate.grounding_status } : {}),
       ...(candidate.news_eligible !== undefined ? { news_eligible: candidate.news_eligible } : {}),
+      ...(candidate.title !== undefined ? { title: candidate.title } : {}),
+      ...(candidate.source_name !== undefined ? { source_name: candidate.source_name } : {}),
+      ...(candidate.source_url !== undefined ? { source_url: candidate.source_url } : {}),
     })),
     blocked_failed: input.blocked_failed.map((item) => structuredClone(item)),
   };

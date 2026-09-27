@@ -46,3 +46,46 @@ Deno.test("M6 repository consumes same-date editorial ranking and preserves safe
   assertEquals(rows[0]?.news_eligible, true);
   assertEquals(requests.some((url) => url.includes("ranking_date=eq.2026-09-20")), true);
 });
+
+Deno.test("M6 repository exposes same-day fact observations as standalone briefing candidates", async () => {
+  const repository = createM6Repository({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "test-service-role-key",
+    fetch: async (input) => {
+      const url = String(input);
+      if (url.includes("content_candidates")) return new Response(JSON.stringify([]));
+      if (url.includes("story_cluster_posts")) return new Response(JSON.stringify([]));
+      if (url.includes("editorial_rankings")) return new Response(JSON.stringify([]));
+      if (url.includes("source_observations")) return new Response(JSON.stringify([{
+        id: "observation-1",
+        information_source_id: "source-1",
+        editorial_role: "FACT_INDEPENDENT",
+        title: "The teething troubles with Man Utd's tactics under Olid",
+        excerpt: "Independent Manchester United reporting.",
+        canonical_url: "https://www.bbc.co.uk/sport/football/articles/example",
+        observed_at: "2026-09-20T08:00:00.000Z",
+      }]));
+      if (url.includes("information_sources")) return new Response(JSON.stringify([{ id: "source-1", canonical_name: "BBC Sport" }]));
+      return new Response(JSON.stringify([]));
+    },
+  });
+
+  const rows = await repository.listBriefingCandidates("2026-09-20");
+
+  assertEquals(rows, [{
+    candidate_id: "source:observation-1",
+    candidate_type: "FACT_SOURCE",
+    rank: null,
+    priority_score: null,
+    first_mover_flag: false,
+    must_cover_flag: false,
+    creative_status: "NOT_REQUESTED",
+    reference_posts: [],
+    editorial_rank: null,
+    grounding_status: "VERIFIED",
+    news_eligible: true,
+    title: "The teething troubles with Man Utd's tactics under Olid",
+    source_name: "BBC Sport",
+    source_url: "https://www.bbc.co.uk/sport/football/articles/example",
+  }]);
+});
