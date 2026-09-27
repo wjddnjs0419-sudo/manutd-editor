@@ -28,3 +28,18 @@ Deno.test("freezes exact candidate and representative identity for /open", () =>
   });
   assertEquals(resolveBriefingPosition(saved, 2)?.candidate_id, "candidate-b");
 });
+
+Deno.test("freezes editorial grounding state when the same-date ranking is available", () => {
+  const saved = buildMorningBriefingSnapshot({
+    briefing_date: "2026-09-20",
+    timezone: "Asia/Seoul",
+    match_day_mode: "NORMAL_DAY",
+    match_context: {},
+    overnight_counts: { candidates: 1 },
+    candidates: [{ candidate_id: "candidate-a", priority_score: 88, first_mover_flag: false, must_cover_flag: false, creative_status: "DRAFT", editorial_rank: 1, grounding_status: "DISCOVERY_ONLY", news_eligible: false, representative: null }],
+    blocked_failed: [],
+  });
+  assertEquals(saved.items[0]?.editorial_rank, 1);
+  assertEquals(saved.items[0]?.grounding_status, "DISCOVERY_ONLY");
+  assertEquals(saved.items[0]?.news_eligible, false);
+});

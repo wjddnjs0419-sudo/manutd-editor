@@ -17,6 +17,9 @@ export interface BriefingCandidateRow {
   must_cover_flag: boolean;
   creative_status: string;
   reference_posts: readonly CandidateReferencePost[];
+  editorial_rank?: number | null;
+  grounding_status?: string | null;
+  news_eligible?: boolean;
 }
 
 export interface M6Repository extends FixtureSyncRepository {
@@ -153,8 +156,13 @@ export function createM6Repository(options: M6RepositoryOptions): M6Repository {
     async listBriefingCandidates(rankingDate) {
       const rawCandidates = await request(`/rest/v1/content_candidates?select=id,rank,priority_score,first_mover_flag,must_cover_flag,story_cluster_id,creative_briefs(version,status)&ranking_date=eq.${encodeURIComponent(rankingDate)}&order=rank.asc.nullslast,priority_score.desc`);
       if (!Array.isArray(rawCandidates)) throw new M6RepositoryError("RESPONSE");
-      const rawPosts = await request(`/rest/v1/story_cluster_posts?select=story_cluster_id,raw_post_id,match_confidence,raw_posts(permalink,published_at,media_type,media_product_type,source_accounts(username),media_assets(id,asset_type,carousel_index,storage_path))`);
+      const [rawPosts, editorialRankings] = await Promise.all([
+        request(`/rest/v1/story_cluster_posts?select=story_cluster_id,raw_post_id,match_confidence,raw_posts(permalink,published_at,media_type,media_product_type,source_accounts(username),media_assets(id,asset_type,carousel_index,storage_path))`),
+        request(`/rest/v1/editorial_rankings?select=story_cluster_id,rank,grounding_status,news_eligible&ranking_date=eq.${encodeURIComponent(rankingDate)}&order=rank.asc.nullslast`, {}, "app_private").catch(() => []),
+      ]);
       if (!Array.isArray(rawPosts)) throw new M6RepositoryError("RESPONSE");
+      const rankingByCluster = new Map<string, { rank: number | null; groundingStatus: string | null; newsEligible: boolean }>();
+      if (Array.isArray(editorialRankings)) for (const value of editorialRankings) if (object(value) && typeof value.story_cluster_id === "string") rankingByCluster.set(value.story_cluster_id, { rank: nullableNumber(value.rank), groundingStatus: nullableString(value.grounding_status), newsEligible: value.news_eligible === true });
       const postsByCluster = new Map<string, CandidateReferencePost[]>();
       for (const value of rawPosts) {
         if (!object(value) || typeof value.story_cluster_id !== "string" || typeof value.raw_post_id !== "string") continue;
@@ -166,11 +174,18 @@ export function createM6Repository(options: M6RepositoryOptions): M6Repository {
         existing.push({ raw_post_id: value.raw_post_id, username: account.username, permalink: nullableString(rawPost.permalink), published_at: typeof rawPost.published_at === "string" ? rawPost.published_at : "1970-01-01T00:00:00Z", media_type: typeof rawPost.media_type === "string" ? rawPost.media_type : "UNKNOWN", media_product_type: nullableString(rawPost.media_product_type), match_confidence: nullableNumber(value.match_confidence), cited_source_reliability: null, media_assets: assets });
         postsByCluster.set(value.story_cluster_id, existing);
       }
-      return rawCandidates.filter(object).map((candidate) => {
+      const candidates = rawCandidates.filter(object).map((candidate) => {
         const briefs = Array.isArray(candidate.creative_briefs) ? candidate.creative_briefs.filter(object) : [];
         const latest = briefs.sort((left, right) => (typeof right.version === "number" ? right.version : 0) - (typeof left.version === "number" ? left.version : 0))[0];
-        return { candidate_id: typeof candidate.id === "string" ? candidate.id : "", rank: nullableNumber(candidate.rank), priority_score: nullableNumber(candidate.priority_score), first_mover_flag: candidate.first_mover_flag === true, must_cover_flag: candidate.must_cover_flag === true, creative_status: typeof latest?.status === "string" ? latest.status : "NOT_REQUESTED", reference_posts: postsByCluster.get(typeof candidate.story_cluster_id === "string" ? candidate.story_cluster_id : "") ?? [] };
+        const editorial = typeof candidate.story_cluster_id === "string" ? rankingByCluster.get(candidate.story_cluster_id) : undefined;
+        return { candidate_id: typeof candidate.id === "string" ? candidate.id : "", rank: nullableNumber(candidate.rank), priority_score: nullableNumber(candidate.priority_score), first_mover_flag: candidate.first_mover_flag === true, must_cover_flag: candidate.must_cover_flag === true, creative_status: typeof latest?.status === "string" ? latest.status : "NOT_REQUESTED", reference_posts: postsByCluster.get(typeof candidate.story_cluster_id === "string" ? candidate.story_cluster_id : "") ?? [], editorial_rank: editorial?.rank ?? null, grounding_status: editorial?.groundingStatus ?? null, news_eligible: editorial?.newsEligible ?? false };
       }).filter((candidate) => candidate.candidate_id !== "");
+      if (candidates.some((candidate) => candidate.editorial_rank !== null)) {
+        candidates.sort((left, right) => (left.editorial_rank === null ? 1 : right.editorial_rank === null ? -1 : left.editorial_rank - right.editorial_rank)
+          || (left.rank === null ? 1 : right.rank === null ? -1 : left.rank - right.rank)
+          || ((right.priority_score ?? -1) - (left.priority_score ?? -1)));
+      }
+      return candidates;
     },
     async getIntelligenceReadiness(rankingDate): Promise<IntelligenceReadinessRecord | null> {
       const result = await request(`/rest/v1/intelligence_readiness?select=ranking_date,status,candidate_count,started_at,completed_at,error_category&ranking_date=eq.${encodeURIComponent(rankingDate)}&limit=1`, {}, "app_private");

@@ -12,6 +12,9 @@ export interface FrozenBriefingItem {
   reference_media_asset_id: string | null;
   reference_username: string | null;
   reference_permalink: string | null;
+  editorial_rank?: number | null;
+  grounding_status?: string | null;
+  news_eligible?: boolean;
   title?: string | null;
   /** Ephemeral signed URL; never persist this field in the briefing snapshot. */
   reference_media_url?: string | null;
@@ -40,6 +43,9 @@ export interface MorningBriefingInput {
     must_cover_flag: boolean;
     creative_status: string;
     representative: RepresentativeReference | null;
+    editorial_rank?: number | null;
+    grounding_status?: string | null;
+    news_eligible?: boolean;
   }[];
   blocked_failed: readonly Record<string, unknown>[];
 }
@@ -62,6 +68,9 @@ export function buildMorningBriefingSnapshot(input: MorningBriefingInput): Morni
       reference_media_asset_id: candidate.representative?.media_asset_id ?? null,
       reference_username: candidate.representative?.username ?? null,
       reference_permalink: candidate.representative?.permalink ?? null,
+      ...(candidate.editorial_rank !== undefined ? { editorial_rank: candidate.editorial_rank } : {}),
+      ...(candidate.grounding_status !== undefined ? { grounding_status: candidate.grounding_status } : {}),
+      ...(candidate.news_eligible !== undefined ? { news_eligible: candidate.news_eligible } : {}),
     })),
     blocked_failed: input.blocked_failed.map((item) => structuredClone(item)),
   };
