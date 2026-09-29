@@ -3,11 +3,11 @@ import { runClaimGrounding } from "../../ground-claims/orchestrator.ts";
 import type { GroundingClaim, GroundingRepository } from "../../ground-claims/types.ts";
 
 Deno.test("claim grounding persists one role-aware result per claim", async () => {
-  const claims: GroundingClaim[] = [{ storyClusterId: "cluster-1", rawPostId: "post-1", claimFingerprint: "claim-1", subject: "United", predicate: "signed", object: "Player", claimText: "United signed Player", origin: "caption", extractionConfidence: 0.9 }];
+  const claims: GroundingClaim[] = [{ storyClusterId: "cluster-1", rawPostId: "post-1", claimFingerprint: "claim-1", subject: "Manchester United", predicate: "signed", object: "Bruno Fernandes", claimText: "Manchester United signed Bruno Fernandes", origin: "caption", extractionConfidence: 0.9 }];
   const saved: string[] = [];
   const repository: GroundingRepository = {
     listClaims: async () => ({ claims, hasMore: false, nextCursor: null }) as never,
-    listObservations: async () => [{ id: "fact-1", editorialRole: "FACT_INDEPENDENT", canonicalName: "BBC Sport", title: "United signed Player", excerpt: "United signed Player", relation: "SUPPORTS" }],
+    listObservations: async () => [{ id: "fact-1", editorialRole: "FACT_INDEPENDENT", canonicalName: "BBC Sport", title: "Manchester United signed Bruno Fernandes", excerpt: "Manchester United signed Bruno Fernandes", relation: "SUPPORTS" }],
     upsertClaim: async (claim) => { saved.push(`${claim.claimFingerprint}:${claim.status}`); return "stored-claim"; },
     upsertEvidence: async () => undefined,
     replaceEvidenceBatch: async () => undefined,
@@ -18,7 +18,7 @@ Deno.test("claim grounding persists one role-aware result per claim", async () =
 });
 
 function claim(index: number): GroundingClaim {
-  return { storyClusterId: "cluster-1", rawPostId: `post-${index}`, claimFingerprint: `claim-${index}`, subject: "United", predicate: "signed", object: "Player", claimText: "United signed Player", origin: "caption", extractionConfidence: 0.9 };
+  return { storyClusterId: "cluster-1", rawPostId: `post-${index}`, claimFingerprint: `claim-${index}`, subject: "Manchester United", predicate: "signed", object: "Bruno Fernandes", claimText: "Manchester United signed Bruno Fernandes", origin: "caption", extractionConfidence: 0.9 };
 }
 
 Deno.test("claim grounding honors the configured page limit and continuation status", async () => {
@@ -64,7 +64,7 @@ Deno.test("claim grounding logs ordered phases with timings and replaces evidenc
   let evidenceBatchCalls = 0;
   const repository: GroundingRepository = {
     listClaims: async () => ({ claims: [claim(1)], hasMore: true, nextCursor: "a:post-1:claim-1" }) as never,
-    listObservations: async () => [{ id: "observation-1", editorialRole: "FACT_PRIMARY", canonicalName: "Official", title: "United signed Player", excerpt: "United signed Player", relation: "SUPPORTS" }],
+    listObservations: async () => [{ id: "observation-1", editorialRole: "FACT_PRIMARY", canonicalName: "Official", title: "Manchester United signed Bruno Fernandes", excerpt: "Manchester United signed Bruno Fernandes", relation: "SUPPORTS" }],
     upsertClaim: async (value, version) => { claimWrites++; const key = `${value.storyClusterId}:${value.claimFingerprint}:${version}`; claims.set(key, "stored-1"); return "stored-1"; },
     upsertEvidence: async () => undefined,
     replaceEvidenceBatch: async (id, items) => { evidenceBatchCalls++; evidenceWrites += items.length; evidence.clear(); for (const item of items) evidence.add(`${id}:${item.sourceObservationId}:${item.relation}`); },
@@ -99,7 +99,7 @@ Deno.test("claim grounding logs ordered phases with timings and replaces evidenc
     assert.ok((value as number) >= 0);
   }
   assert.equal(firstRun[0]?.request_id, "request-1");
-  assert.equal(JSON.stringify(logs).includes("United signed Player"), false);
+  assert.equal(JSON.stringify(logs).includes("Manchester United signed Bruno Fernandes"), false);
 });
 
 Deno.test("claim grounding failure logs identify the phase without exposing error details", async () => {
