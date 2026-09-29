@@ -123,7 +123,10 @@ select is(
   'normal reconciliation does not claim DEAD jobs'
 );
 select throws_ok(
-  $$select * from public.fail_editorial_job(:'dead_job_id'::uuid, 'dead-loop-worker', 'AGAIN', 'must not transition again', '2026-09-29T13:03:00Z'::timestamptz)$$,
+  format(
+    $$select * from public.fail_editorial_job(%L::uuid, 'dead-loop-worker', 'AGAIN', 'must not transition again', '2026-09-29T13:03:00Z'::timestamptz)$$,
+    :'dead_job_id'
+  ),
   '42501',
   null,
   'DEAD jobs cannot transition to DEAD again'
