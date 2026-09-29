@@ -29,5 +29,6 @@ export async function invokeCanonicalCarousel(
   const result = value as unknown as CanonicalGenerationResult;
   const brief = await dependencies.loadBrief(result.creative_brief_id);
   if (!brief) throw new Error("CREATIVE_BRIEF_NOT_FOUND");
+  if (brief.candidate_id !== candidateId) throw new Error("CREATIVE_BRIEF_CANDIDATE_MISMATCH");
   return brief;
 }

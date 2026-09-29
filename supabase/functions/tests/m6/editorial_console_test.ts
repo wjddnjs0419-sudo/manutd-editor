@@ -52,6 +52,12 @@ Deno.test("canonical story builder collapses duplicate source posts into one sto
   assertEquals(stories[0]?.title, "산초, 3개월째 FA");
 });
 
+Deno.test("canonical stories show linked evidence sources when the legacy source relation is empty", () => {
+  const stories = buildCanonicalStories([{ ...firstStory, source_names: [] }]);
+  assertEquals(stories[0]?.sources, ["BBC Sport"]);
+  assertEquals(stories[0]?.source_count, 1);
+});
+
 Deno.test("canonical story renderer hides internal entity-token titles", () => {
   const stories = buildCanonicalStories([{ ...firstStory, canonical_title: "sir_alex_ferguson pep_guardiola manchester_united manchester_city" }]);
   assertEquals(stories[0]?.title, "퍼거슨 · 과르디올라 · 맨유 · 맨시티 관련 소재");
