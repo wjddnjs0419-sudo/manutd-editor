@@ -156,6 +156,7 @@ Deno.test("card generation action calls the injected canonical service exactly o
   assertEquals(result.next_state.view, "DRAFT");
   assertEquals(result.next_state.brief_id, "brief-1");
   assertEquals(result.event.action, "CREATIVE_GENERATION_COMPLETED");
+  assert(result.view.text.includes(story.title));
 });
 
 Deno.test("card generation without a selected story never invokes the canonical generator", async () => {
@@ -196,8 +197,21 @@ Deno.test("card generation blocks candidates without verified public evidence", 
     dependencies({ getStoryByToken: async () => unsupported, generateCarousel: async () => { calls += 1; return draft; } }),
   );
   assertEquals(calls, 0);
-  assert(result.view.text.includes("검증된 근거"));
+  assert(result.view.text.includes("검증된 팩트 근거"));
   assertEquals(result.event.action, "CREATIVE_GENERATION_BLOCKED");
+});
+
+Deno.test("card generation explains when a linked URL has not passed the news grounding gate", async () => {
+  let calls = 0;
+  const linkedButIneligible = { ...story, news_eligible: false, evidence: [{ ...story.evidence[0]!, editorial_role: "DISCOVERY_COMMUNITY", canonical_url: "https://example.test/source" }] };
+  const result = await dispatchEditorialConsoleAction(
+    { type: "GENERATE_CAROUSEL", token: story.id },
+    state({ view: "DETAIL", story_id: story.id }),
+    dependencies({ getStoryByToken: async () => linkedButIneligible, generateCarousel: async () => { calls += 1; return draft; } }),
+  );
+  assertEquals(calls, 0);
+  assert(result.view.text.includes("링크는 연결돼 있지만"));
+  assert(result.view.text.includes("팩트 검증 기준"));
 });
 
 Deno.test("back navigation returns from evidence and draft to the current story list safely", async () => {

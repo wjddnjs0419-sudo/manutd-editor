@@ -33,25 +33,36 @@ Deno.test("grounding repository joins private observations to public source regi
   assert.equal(urls.some((url) => url.includes("information_sources(canonical_name)")), false);
 });
 
-Deno.test("grounding repository upserts evidence rows as one bounded request", async () => {
-  const requests: { url: string; body: unknown; prefer: string | null }[] = [];
+Deno.test("grounding repository idempotently upserts current evidence and clears stale matches", async () => {
+  const requests: { url: string; method: string; body: unknown; prefer: string | null }[] = [];
   const repository = createGroundingRepository({
     supabaseUrl: "https://example.supabase.co", serviceRoleKey: "service-role-secret",
     request: async (input, init) => {
-      requests.push({ url: String(input), body: JSON.parse(String(init?.body ?? "null")), prefer: new Headers(init?.headers).get("prefer") });
-      return new Response(null, { status: 201 });
+      requests.push({ url: String(input), method: init?.method ?? "GET", body: JSON.parse(String(init?.body ?? "null")), prefer: new Headers(init?.headers).get("prefer") });
+      return new Response(null, { status: init?.method === "DELETE" ? 204 : 201 });
     },
   });
   const evidence = Array.from({ length: 3 }, (_, index) => ({ sourceObservationId: `observation-${index + 1}`, editorialRole: "FACT_INDEPENDENT" as const, relation: "SUPPORTS" as const, evidenceText: `evidence ${index + 1}`, evidenceConfidence: 0.8, isGrounding: true }));
-  const batch = (repository as unknown as { upsertEvidenceBatch: (claimId: string, rows: typeof evidence) => Promise<void> }).upsertEvidenceBatch;
+  const batch = (repository as unknown as { replaceEvidenceBatch: (claimId: string, rows: typeof evidence) => Promise<void> }).replaceEvidenceBatch;
 
   await batch.call(repository, "claim-1", evidence);
 
-  assert.equal(requests.length, 1);
+  assert.equal(requests.length, 2);
   assert.equal(new URL(requests[0]!.url).pathname, "/rest/v1/claim_evidence");
-  assert.match(requests[0]!.url, /on_conflict=claim_id/);
-  assert.equal(requests[0]!.prefer, "resolution=merge-duplicates,return=minimal");
+  assert.match(new URL(requests[0]!.url).search, /on_conflict=claim_id/);
+  assert.equal(requests[0]?.method, "POST");
+  assert.equal(requests[0]?.prefer, "resolution=merge-duplicates,return=minimal");
   assert.deepEqual(requests[0]!.body, evidence.map((item) => ({ claim_id: "claim-1", source_observation_id: item.sourceObservationId, relation: item.relation, editorial_role: item.editorialRole, evidence_text: item.evidenceText, evidence_confidence: item.evidenceConfidence, is_grounding: item.isGrounding })));
+  assert.equal(requests[1]?.method, "DELETE");
+  const pruneQuery = new URL(requests[1]!.url).searchParams;
+  assert.equal(pruneQuery.get("claim_id"), "eq.claim-1");
+  assert.equal(pruneQuery.get("not.or"), "(and(source_observation_id.eq.observation-1,relation.eq.SUPPORTS),and(source_observation_id.eq.observation-2,relation.eq.SUPPORTS),and(source_observation_id.eq.observation-3,relation.eq.SUPPORTS))");
+
+  await batch.call(repository, "claim-1", []);
+  assert.equal(requests.length, 3);
+  assert.equal(requests[2]?.method, "DELETE");
+  assert.equal(new URL(requests[2]!.url).searchParams.get("claim_id"), "eq.claim-1");
+  assert.equal(new URL(requests[2]!.url).searchParams.has("source_observation_id"), false);
 });
 
 Deno.test("grounding repository pushes story, raw-post, and as-of scope into bounded queries", async () => {

@@ -59,10 +59,8 @@ export async function runClaimGrounding(options: RunGroundingOptions): Promise<G
     for (const claim of grounded) {
       const claimId = await options.repository.upsertClaim(claim, version);
       claimWrites += 1;
-      if (claim.evidence.length > 0) {
-        await options.repository.upsertEvidenceBatch(claimId, claim.evidence);
-        evidenceWrites += claim.evidence.length;
-      }
+      await options.repository.replaceEvidenceBatch(claimId, claim.evidence);
+      evidenceWrites += claim.evidence.length;
       if (claim.status === "VERIFIED") verified += 1;
       else if (claim.status === "DISCOVERY_ONLY") discoveryOnly += 1;
       else if (claim.status === "CONTRADICTED") contradicted += 1;

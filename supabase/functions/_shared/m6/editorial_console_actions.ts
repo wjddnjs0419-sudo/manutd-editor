@@ -211,12 +211,22 @@ export async function dispatchEditorialConsoleAction(action: ConsoleAction, stat
     let story = await dependencies.getStoryByToken(token);
     if (!story && state.story_id && state.story_id !== token) story = await dependencies.getStoryByToken(state.story_id);
     if (!story || !story.candidate_id) return safeError("최신 canonical 소재를 찾지 못했습니다.", state, "CREATIVE_GENERATION_FAILED");
-    if (!story.news_eligible || story.evidence.length === 0 || (story.information_gap_score <= 0 && story.hook_strength <= 0)) {
-      return safeError("현재 공개용 카드뉴스 생성에 필요한 검증된 근거가 부족합니다.\n🔎 근거 보기에서 출처를 확인해 주세요.", state, "CREATIVE_GENERATION_BLOCKED");
+    if (!story.news_eligible) {
+      const hasLinkedUrl = story.evidence.some((item) => Boolean(item.canonical_url));
+      const message = hasLinkedUrl
+        ? "출처 링크는 연결돼 있지만, 아직 카드뉴스용 팩트 검증 기준을 통과하지 못했습니다. URL이 있다는 것만으로는 사실 근거로 사용할 수 없습니다."
+        : "아직 카드뉴스용으로 검증된 팩트 근거가 없습니다. 소재에 출처 이름이 보여도 원문 연결과 팩트 검증이 끝나지 않았을 수 있습니다.";
+      return safeError(`${message}\n🔎 근거 보기에서 연결 상태를 확인해 주세요.`, state, "CREATIVE_GENERATION_BLOCKED");
+    }
+    if (story.evidence.length === 0) {
+      return safeError("카드뉴스에 연결할 검증 근거를 찾지 못했습니다.\n🔎 근거 보기에서 출처 연결을 확인해 주세요.", state, "CREATIVE_GENERATION_BLOCKED");
+    }
+    if (story.information_gap_score <= 0 && story.hook_strength <= 0) {
+      return safeError("이 소재는 카드뉴스로 구성할 편집 포인트가 부족합니다.\n다른 소재를 선택해 주세요.", state, "CREATIVE_GENERATION_BLOCKED");
     }
     try {
       const draft = await dependencies.generateCarousel(story);
-      return { view: renderCarouselDraft(draft), next_state: { ...state, view: "DRAFT", story_id: story.id, story_fingerprint: story.story_fingerprint, brief_id: draft.creative_brief_id, state_version: state.state_version + 1 }, event: { action: "CREATIVE_GENERATION_COMPLETED", status: "COMPLETED", metadata: { story_id: story.id, brief_id: draft.creative_brief_id } } };
+      return { view: renderCarouselDraft(draft, story.title), next_state: { ...state, view: "DRAFT", story_id: story.id, story_fingerprint: story.story_fingerprint, brief_id: draft.creative_brief_id, state_version: state.state_version + 1 }, event: { action: "CREATIVE_GENERATION_COMPLETED", status: "COMPLETED", metadata: { story_id: story.id, candidate_id: story.candidate_id, brief_id: draft.creative_brief_id } } };
     } catch {
       return safeError("canonical 카드뉴스 생성을 완료하지 못했습니다.", state, "CREATIVE_GENERATION_FAILED");
     }

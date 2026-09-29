@@ -159,7 +159,10 @@ export function buildCanonicalStories(
   return [...grouped.values()]
     .map((group) => {
       const first = group[0]!;
-      const sources = unique(group.flatMap((input) => input.source_names));
+      const sources = unique([
+        ...group.flatMap((input) => input.source_names),
+        ...group.flatMap((input) => input.evidence.map((item) => item.source_name)),
+      ]);
       const evidenceById = new Map<string, EditorialEvidence>();
       for (const input of group) for (const evidence of input.evidence) evidenceById.set(evidence.evidence_id, evidence);
       return {
@@ -253,7 +256,9 @@ export function renderTrendingList(page: StoryPage): ConsoleView {
 }
 
 export function renderStoryDetail(story: CanonicalStory): ConsoleView {
-  const sourceLine = story.sources.length > 0 ? story.sources.join(" / ") : "확인 중";
+  const evidenceSources = unique(story.evidence.map((item) => item.source_name));
+  const sourceNames = story.sources.length > 0 ? story.sources : evidenceSources;
+  const sourceLine = sourceNames.length > 0 ? sourceNames.join(" / ") : "확인 중";
   const format = story.news_eligible ? "카드뉴스 + 텍스트 릴스" : "텍스트 릴스 검토";
   return {
     text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${story.trend_state ?? "STABLE"} · ${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼\n\n정보격차 ${score10(story.information_gap_score)}\n훅 ${score10(story.hook_strength)}\n공유성 ${score10(story.shareability)}\n출처신뢰 ${score10(story.source_confidence)}\n\n추천 포맷:\n${format}\n\n주요 출처: ${sourceLine}`,
@@ -298,12 +303,13 @@ function slideText(slide: EditorialSlide): string {
   ].filter((value): value is string => typeof value === "string" && value.trim() !== "").join("\n");
 }
 
-export function renderCarouselDraft(draft: ManutdEditorCarouselDraft): ConsoleView {
+export function renderCarouselDraft(draft: ManutdEditorCarouselDraft, storyTitle?: string): ConsoleView {
   const body = draft.slides.map(slideText).join("\n\n");
   const warning = draft.editor_warning ? `\n\n편집자 메모\n${draft.editor_warning}` : "";
+  const subject = storyTitle?.trim() ? `\n소재: ${storyTitle.trim()}` : "";
   const token = draft.creative_brief_id ?? draft.story_id;
   return {
-    text: `📱 카드뉴스 초안\n\n${body}\n\n캡션\n${draft.caption.body}${draft.caption.cta ? `\n${draft.caption.cta}` : ""}${warning}`,
+    text: `📱 카드뉴스 초안${subject}\n\n${body}\n\n캡션\n${draft.caption.body}${draft.caption.cta ? `\n${draft.caption.cta}` : ""}${warning}`,
     inline_keyboard: [
       [
         { text: "🔄 다른 훅", callback_data: callbackData("draft:rehook", token) },

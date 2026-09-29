@@ -249,9 +249,23 @@ export function createGroundingRepository(options: RepositoryOptions): Grounding
       return value[0].id;
     },
     async upsertEvidence(claimId, evidence: GroundingEvidence) {
-      await this.upsertEvidenceBatch(claimId, [evidence]);
+      const row = {
+        claim_id: claimId,
+        source_observation_id: evidence.sourceObservationId,
+        relation: evidence.relation,
+        editorial_role: evidence.editorialRole,
+        evidence_text: evidence.evidenceText,
+        evidence_confidence: evidence.evidenceConfidence,
+        is_grounding: evidence.isGrounding,
+      };
+      await request("/rest/v1/claim_evidence?on_conflict=claim_id%2Csource_observation_id%2Crelation", { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(row) }, "app_private");
     },
-    async upsertEvidenceBatch(claimId, evidence: readonly GroundingEvidence[]) {
+    async replaceEvidenceBatch(claimId, evidence: readonly GroundingEvidence[]) {
+      const claimFilter = new URLSearchParams({ claim_id: `eq.${claimId}` });
+      if (evidence.length === 0) {
+        await request(`/rest/v1/claim_evidence?${claimFilter}`, { method: "DELETE", headers: { prefer: "return=minimal" } }, "app_private");
+        return;
+      }
       const batchSize = 100;
       for (let offset = 0; offset < evidence.length; offset += batchSize) {
         const rows = evidence.slice(offset, offset + batchSize).map((item) => ({
@@ -265,6 +279,9 @@ export function createGroundingRepository(options: RepositoryOptions): Grounding
         }));
         await request("/rest/v1/claim_evidence?on_conflict=claim_id%2Csource_observation_id%2Crelation", { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(rows) }, "app_private");
       }
+      const identities = [...new Set(evidence.map((item) => `and(source_observation_id.eq.${item.sourceObservationId},relation.eq.${item.relation})`))];
+      const staleFilter = new URLSearchParams({ claim_id: `eq.${claimId}`, "not.or": `(${identities.join(",")})` });
+      await request(`/rest/v1/claim_evidence?${staleFilter}`, { method: "DELETE", headers: { prefer: "return=minimal" } }, "app_private");
     },
   };
 }

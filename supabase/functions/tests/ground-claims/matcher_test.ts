@@ -88,6 +88,58 @@ Deno.test("does not verify a Manchester City claim against a Manchester United a
   assert.equal(result.evidence.length, 0);
 });
 
+Deno.test("does not verify a striker story using a different Manchester United transfer article", () => {
+  const strikerClaim: GroundingClaim = {
+    storyClusterId: "cluster-striker-rumor",
+    rawPostId: null,
+    claimFingerprint: "claim-striker-rumor",
+    subject: "Manchester United",
+    predicate: "reported",
+    object: "Man Utd in talks with €30m striker as priority signing confirmed - LiveScore",
+    claimText: "Man Utd in talks with €30m striker as priority signing confirmed - LiveScore",
+    origin: "discovery_observation",
+    extractionConfidence: 0.9,
+  };
+  const unrelatedCostaArticle: GroundingObservation = {
+    id: "bbc-costa-gossip",
+    editorialRole: "FACT_INDEPENDENT",
+    canonicalName: "BBC Sport",
+    title: "Man Utd & Arsenal eye Porto's Costa - Tuesday's gossip",
+    excerpt: "Arsenal and Manchester United eye Porto defender Alberto Costa, Manchester City will not let Erling Haaland leave on the cheap if they are relegated, Liverpool retain an interest in Real Madrid midfielder Aurelien Tchouameni, plus more.",
+    relation: "SUPPORTS",
+  };
+
+  const result = classifyClaimEvidence(strikerClaim, [unrelatedCostaArticle]);
+
+  assert.equal(result.status, "INSUFFICIENT");
+  assert.equal(result.evidence.length, 0);
+});
+
+Deno.test("does not ground a generic player-interest claim from an unrelated sentence in a club article", () => {
+  const vagueClaim: GroundingClaim = {
+    ...claim,
+    rawPostId: null,
+    subject: "Manchester United",
+    predicate: "interest",
+    object: "player",
+    claimText: "Manchester United interest in player",
+    origin: "discovery_observation",
+  };
+  const crossSentenceArticle: GroundingObservation = {
+    id: "bbc-costa-cross-sentence",
+    editorialRole: "FACT_INDEPENDENT",
+    canonicalName: "BBC Sport",
+    title: "Man Utd & Arsenal eye Porto's Costa - Tuesday's gossip",
+    excerpt: "Arsenal and Manchester United eye Porto defender Alberto Costa. Liverpool retain an interest in Real Madrid midfielder Aurelien Tchouameni, plus more.",
+    relation: "SUPPORTS",
+  };
+
+  const result = classifyClaimEvidence(vagueClaim, [crossSentenceArticle]);
+
+  assert.equal(result.status, "INSUFFICIENT");
+  assert.equal(result.evidence.length, 0);
+});
+
 Deno.test("requires an entity anchor instead of generic shared football tokens", () => {
   const claimWithEntityCollision: GroundingClaim = {
     ...claim,

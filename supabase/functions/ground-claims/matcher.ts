@@ -14,6 +14,17 @@ const GENERIC_ANCHORS = new Set([
   "선수",
   "팀",
 ]);
+// Club names and reporting boilerplate identify the broad topic, not the
+// particular event/person in a claim. They must not create a fact match on
+// their own (e.g. any Manchester United article matching any other one).
+const NON_DISTINCTIVE_TERMS = new Set([
+  "a", "according", "an", "and", "are", "as", "at", "be", "been", "before", "between", "but", "by",
+  "club", "coach", "confirmed", "confirms", "could", "defender", "defenders", "did", "do", "does", "eye", "eyes", "for", "forward", "forwards", "from", "gossip", "had", "has", "have", "he", "her", "his",
+  "in", "interest", "interested", "interests", "into", "is", "it", "its", "latest", "link", "linked", "links", "look", "looking", "man", "manchester", "manager", "midfielder", "midfielders", "monitor", "monitoring", "more",
+  "mufc", "news", "of", "on", "or", "player", "players", "plus", "report", "reported", "reporting", "reports", "rumor", "rumors", "rumour", "rumours", "said", "says", "sign", "signed", "signing", "signs", "soccer", "striker", "strikers",
+  "team", "target", "targeted", "targeting", "targets", "talk", "talks", "the", "their", "they", "this", "to", "transfer", "united", "utd", "was", "were", "what", "when", "will", "with", "would", "want", "wants", "football", "goalkeeper", "goalkeepers", "winger", "wingers",
+  "맨유", "맨체스터", "유나이티드", "구단", "팀", "선수", "공격수", "수비수", "미드필더", "골키퍼", "윙어", "축구", "보도", "소식", "뉴스", "확인", "최신", "이적", "영입", "관심",
+]);
 const ANCHOR_ALIASES: Readonly<Record<string, readonly string[]>> = {
   "manchester united": ["manchester united", "manchester utd", "man utd", "man united", "맨체스터 유나이티드", "맨유"],
   "manchester city": ["manchester city", "man city", "맨체스터 시티", "맨시티"],
@@ -31,6 +42,11 @@ function normalizedPhrase(value: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
+}
+
+function distinctiveTerms(value: string | Iterable<string>): string[] {
+  const tokens = typeof value === "string" ? terms(value) : value;
+  return [...tokens].filter((term) => !NON_DISTINCTIVE_TERMS.has(term));
 }
 
 function strongAnchors(claim: GroundingClaim): readonly string[] {
@@ -65,10 +81,11 @@ function hasEntityAnchor(anchors: readonly string[], haystack: string): boolean 
 }
 
 function overlap(claimTerms: ReadonlySet<string>, observationTerms: ReadonlySet<string>): number {
-  if (claimTerms.size === 0 || observationTerms.size === 0) return 0;
+  const distinctiveClaimTerms = distinctiveTerms(claimTerms);
+  if (distinctiveClaimTerms.length === 0 || observationTerms.size === 0) return 0;
   let matches = 0;
-  for (const term of claimTerms) if (observationTerms.has(term)) matches += 1;
-  return matches / claimTerms.size;
+  for (const term of distinctiveClaimTerms) if (observationTerms.has(term)) matches += 1;
+  return matches / distinctiveClaimTerms.length;
 }
 
 export function classifyClaimEvidence(
@@ -85,9 +102,11 @@ export function classifyPreparedClaimEvidence(
   const evidence: GroundingEvidence[] = [];
   const anchors = strongAnchors(claim);
   const claimTerms = terms(`${claim.subject} ${claim.predicate} ${claim.object} ${claim.claimText}`);
+  const objectTerms = distinctiveTerms(claim.object);
   for (const prepared of observations) {
     const { observation } = prepared;
     if (IGNORED_ROLES.has(observation.editorialRole)) continue;
+    if (objectTerms.length === 0 || !objectTerms.some((term) => prepared.terms.has(term))) continue;
     if (!hasEntityAnchor(anchors, prepared.haystack)) continue;
     const score = overlap(claimTerms, prepared.terms);
     if (score < 0.25) continue;

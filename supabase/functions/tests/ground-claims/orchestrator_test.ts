@@ -3,14 +3,14 @@ import { runClaimGrounding } from "../../ground-claims/orchestrator.ts";
 import type { GroundingClaim, GroundingRepository } from "../../ground-claims/types.ts";
 
 Deno.test("claim grounding persists one role-aware result per claim", async () => {
-  const claims: GroundingClaim[] = [{ storyClusterId: "cluster-1", rawPostId: "post-1", claimFingerprint: "claim-1", subject: "United", predicate: "signed", object: "Player", claimText: "United signed Player", origin: "caption", extractionConfidence: 0.9 }];
+  const claims: GroundingClaim[] = [{ storyClusterId: "cluster-1", rawPostId: "post-1", claimFingerprint: "claim-1", subject: "Manchester United", predicate: "signed", object: "Bruno Fernandes", claimText: "Manchester United signed Bruno Fernandes", origin: "caption", extractionConfidence: 0.9 }];
   const saved: string[] = [];
   const repository: GroundingRepository = {
     listClaims: async () => ({ claims, hasMore: false, nextCursor: null }) as never,
-    listObservations: async () => [{ id: "fact-1", editorialRole: "FACT_INDEPENDENT", canonicalName: "BBC Sport", title: "United signed Player", excerpt: "United signed Player", relation: "SUPPORTS" }],
+    listObservations: async () => [{ id: "fact-1", editorialRole: "FACT_INDEPENDENT", canonicalName: "BBC Sport", title: "Manchester United signed Bruno Fernandes", excerpt: "Manchester United signed Bruno Fernandes", relation: "SUPPORTS" }],
     upsertClaim: async (claim) => { saved.push(`${claim.claimFingerprint}:${claim.status}`); return "stored-claim"; },
     upsertEvidence: async () => undefined,
-    upsertEvidenceBatch: async () => undefined,
+    replaceEvidenceBatch: async () => undefined,
   };
   const result = await runClaimGrounding({ repository, version: "m8-b-v1" });
   assert.deepEqual(result, { status: "COMPLETED", claimsProcessed: 1, verified: 1, discoveryOnly: 0, contradicted: 0, insufficient: 0, hasMore: false, nextCursor: null });
@@ -18,7 +18,7 @@ Deno.test("claim grounding persists one role-aware result per claim", async () =
 });
 
 function claim(index: number): GroundingClaim {
-  return { storyClusterId: "cluster-1", rawPostId: `post-${index}`, claimFingerprint: `claim-${index}`, subject: "United", predicate: "signed", object: "Player", claimText: "United signed Player", origin: "caption", extractionConfidence: 0.9 };
+  return { storyClusterId: "cluster-1", rawPostId: `post-${index}`, claimFingerprint: `claim-${index}`, subject: "Manchester United", predicate: "signed", object: "Bruno Fernandes", claimText: "Manchester United signed Bruno Fernandes", origin: "caption", extractionConfidence: 0.9 };
 }
 
 Deno.test("claim grounding honors the configured page limit and continuation status", async () => {
@@ -32,7 +32,7 @@ Deno.test("claim grounding honors the configured page limit and continuation sta
     listObservations: async () => [],
     upsertClaim: async (value) => { saved.push(value.claimFingerprint); return value.claimFingerprint; },
     upsertEvidence: async () => undefined,
-    upsertEvidenceBatch: async () => undefined,
+    replaceEvidenceBatch: async () => undefined,
   };
   const result = await runClaimGrounding({ repository, limit: 25, storyClusterIds: ["cluster-1"] } as Parameters<typeof runClaimGrounding>[0]) as unknown as { claimsProcessed: number; status: string; hasMore: boolean; nextCursor: string | null };
   assert.equal((optionsSeen[0] as { limit: number }).limit, 25);
@@ -49,13 +49,13 @@ Deno.test("claim grounding completes a final page with null cursor", async () =>
     listObservations: async () => [],
     upsertClaim: async () => "stored-1",
     upsertEvidence: async () => undefined,
-    upsertEvidenceBatch: async () => undefined,
+    replaceEvidenceBatch: async () => undefined,
   };
   const result = await runClaimGrounding({ repository, limit: 25 } as Parameters<typeof runClaimGrounding>[0]) as unknown as { status: string; hasMore: boolean; nextCursor: string | null };
   assert.deepEqual({ status: result.status, hasMore: result.hasMore, nextCursor: result.nextCursor }, { status: "COMPLETED", hasMore: false, nextCursor: null });
 });
 
-Deno.test("claim grounding logs ordered phases with timings and retries through upserts", async () => {
+Deno.test("claim grounding logs ordered phases with timings and replaces evidence on reruns", async () => {
   const logs: Record<string, unknown>[] = [];
   const claims = new Map<string, string>();
   const evidence = new Set<string>();
@@ -64,10 +64,10 @@ Deno.test("claim grounding logs ordered phases with timings and retries through 
   let evidenceBatchCalls = 0;
   const repository: GroundingRepository = {
     listClaims: async () => ({ claims: [claim(1)], hasMore: true, nextCursor: "a:post-1:claim-1" }) as never,
-    listObservations: async () => [{ id: "observation-1", editorialRole: "FACT_PRIMARY", canonicalName: "Official", title: "United signed Player", excerpt: "United signed Player", relation: "SUPPORTS" }],
+    listObservations: async () => [{ id: "observation-1", editorialRole: "FACT_PRIMARY", canonicalName: "Official", title: "Manchester United signed Bruno Fernandes", excerpt: "Manchester United signed Bruno Fernandes", relation: "SUPPORTS" }],
     upsertClaim: async (value, version) => { claimWrites++; const key = `${value.storyClusterId}:${value.claimFingerprint}:${version}`; claims.set(key, "stored-1"); return "stored-1"; },
     upsertEvidence: async () => undefined,
-    upsertEvidenceBatch: async (id, items) => { evidenceBatchCalls++; evidenceWrites += items.length; for (const item of items) evidence.add(`${id}:${item.sourceObservationId}:${item.relation}`); },
+    replaceEvidenceBatch: async (id, items) => { evidenceBatchCalls++; evidenceWrites += items.length; evidence.clear(); for (const item of items) evidence.add(`${id}:${item.sourceObservationId}:${item.relation}`); },
   };
   const options = { repository, limit: 1, cursor: null, storyClusterIds: ["cluster-1"], requestId: "request-1", log: (entry: Record<string, unknown>) => logs.push(entry) } as Parameters<typeof runClaimGrounding>[0];
   await runClaimGrounding(options);
@@ -99,7 +99,7 @@ Deno.test("claim grounding logs ordered phases with timings and retries through 
     assert.ok((value as number) >= 0);
   }
   assert.equal(firstRun[0]?.request_id, "request-1");
-  assert.equal(JSON.stringify(logs).includes("United signed Player"), false);
+  assert.equal(JSON.stringify(logs).includes("Manchester United signed Bruno Fernandes"), false);
 });
 
 Deno.test("claim grounding failure logs identify the phase without exposing error details", async () => {
@@ -109,7 +109,7 @@ Deno.test("claim grounding failure logs identify the phase without exposing erro
     listObservations: async () => [],
     upsertClaim: async () => "unused",
     upsertEvidence: async () => undefined,
-    upsertEvidenceBatch: async () => undefined,
+    replaceEvidenceBatch: async () => undefined,
   };
   await assert.rejects(() => runClaimGrounding({ repository, requestId: "request-1", log: (entry) => logs.push(entry) }));
   const failure = logs.at(-1);
@@ -136,7 +136,7 @@ Deno.test("large mixed fixture grounds only affected stories within one bounded 
     listObservations: async () => Array.from({ length: 120 }, (_, index) => ({ id: `observation-${index}`, editorialRole: "MATCH_CONTEXT", canonicalName: "context", title: "context", excerpt: null, relation: "SUPPORTS" as const })),
     upsertClaim: async (value) => { saved.push(value); return `stored-${saved.length}`; },
     upsertEvidence: async () => undefined,
-    upsertEvidenceBatch: async () => undefined,
+    replaceEvidenceBatch: async () => undefined,
   };
   const result = await runClaimGrounding({ repository, storyClusterIds: ["story-1", "story-2"], limit: 25 });
   assert.equal(result.status, "PARTIAL");
