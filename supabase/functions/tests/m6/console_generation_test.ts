@@ -38,3 +38,18 @@ Deno.test("console card generation refuses a brief belonging to a different cand
     "CREATIVE_BRIEF_CANDIDATE_MISMATCH",
   );
 });
+
+Deno.test("console card generation refuses a brief grounded on a different story cluster", async () => {
+  await assertRejects(
+    () => invokeCanonicalCarousel("candidate-selected", {
+      invoke: async () => ({ status: "NOOP", creative_brief_id: "brief-old" }),
+      loadBrief: async () => ({
+        id: "brief-old",
+        candidate_id: "candidate-selected",
+        evidence_snapshot: { candidate: { story_cluster_id: "story-costa" }, story: { id: "story-costa" } },
+      }),
+    }, "story-selected"),
+    Error,
+    "CREATIVE_BRIEF_STORY_MISMATCH",
+  );
+});

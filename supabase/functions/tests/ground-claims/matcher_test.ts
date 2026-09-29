@@ -115,6 +115,31 @@ Deno.test("does not verify a striker story using a different Manchester United t
   assert.equal(result.evidence.length, 0);
 });
 
+Deno.test("does not ground a generic player-interest claim from an unrelated sentence in a club article", () => {
+  const vagueClaim: GroundingClaim = {
+    ...claim,
+    rawPostId: null,
+    subject: "Manchester United",
+    predicate: "interest",
+    object: "player",
+    claimText: "Manchester United interest in player",
+    origin: "discovery_observation",
+  };
+  const crossSentenceArticle: GroundingObservation = {
+    id: "bbc-costa-cross-sentence",
+    editorialRole: "FACT_INDEPENDENT",
+    canonicalName: "BBC Sport",
+    title: "Man Utd & Arsenal eye Porto's Costa - Tuesday's gossip",
+    excerpt: "Arsenal and Manchester United eye Porto defender Alberto Costa. Liverpool retain an interest in Real Madrid midfielder Aurelien Tchouameni, plus more.",
+    relation: "SUPPORTS",
+  };
+
+  const result = classifyClaimEvidence(vagueClaim, [crossSentenceArticle]);
+
+  assert.equal(result.status, "INSUFFICIENT");
+  assert.equal(result.evidence.length, 0);
+});
+
 Deno.test("requires an entity anchor instead of generic shared football tokens", () => {
   const claimWithEntityCollision: GroundingClaim = {
     ...claim,

@@ -20,6 +20,7 @@ function object(value: unknown): value is Record<string, unknown> {
 export async function invokeCanonicalCarousel(
   candidateId: string,
   dependencies: CanonicalGenerationDependencies,
+  expectedStoryClusterId?: string,
 ): Promise<Record<string, unknown>> {
   if (!candidateId.trim()) throw new Error("CANDIDATE_NOT_FOUND");
   const value = await dependencies.invoke({ candidate_id: candidateId, trigger_type: "MANUAL" });
@@ -30,5 +31,14 @@ export async function invokeCanonicalCarousel(
   const brief = await dependencies.loadBrief(result.creative_brief_id);
   if (!brief) throw new Error("CREATIVE_BRIEF_NOT_FOUND");
   if (brief.candidate_id !== candidateId) throw new Error("CREATIVE_BRIEF_CANDIDATE_MISMATCH");
+  if (expectedStoryClusterId) {
+    const snapshot = object(brief.evidence_snapshot) ? brief.evidence_snapshot : null;
+    const snapshotCandidate = snapshot && object(snapshot.candidate) ? snapshot.candidate : null;
+    const snapshotStory = snapshot && object(snapshot.story) ? snapshot.story : null;
+    const clusterIds = [snapshotCandidate?.story_cluster_id, snapshotStory?.id].filter((value): value is string => typeof value === "string");
+    if (clusterIds.length === 0 || clusterIds.some((storyClusterId) => storyClusterId !== expectedStoryClusterId)) {
+      throw new Error("CREATIVE_BRIEF_STORY_MISMATCH");
+    }
+  }
   return brief;
 }

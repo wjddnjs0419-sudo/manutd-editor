@@ -390,7 +390,7 @@ async function generateCanonicalCarousel(story: CanonicalStory): Promise<ManutdE
       return response.ok ? result : { status: "FAILED_PROVIDER" };
     },
     loadBrief: async (id) => await rowById(`/rest/v1/creative_briefs?select=*&id=eq.${encodeURIComponent(id)}&limit=1`),
-  });
+  }, story.id);
   return storedBriefToManutdDraft(brief, story);
 }
 
