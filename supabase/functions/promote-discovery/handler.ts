@@ -4,7 +4,7 @@ export interface PromoteDiscoveryHandlerDependencies {
   readonly invokeSecret: string;
   readonly defaultLimit?: number;
   readonly now?: () => Date;
-  readonly run: (input: { asOf?: Date; limit?: number; rankingDate?: string }) => Promise<PromotionSummary>;
+  readonly run: (input: { asOf?: Date; limit?: number; rankingDate?: string; promotionJobId?: string }) => Promise<PromotionSummary>;
 }
 
 function bearer(value: string | null): string { return value?.match(/^Bearer ([^\s]+)$/u)?.[1] ?? ""; }
@@ -20,6 +20,7 @@ async function equal(left: string, right: string): Promise<boolean> {
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/u;
 const DATE = /^\d{4}-\d{2}-\d{2}$/u;
+const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu;
 
 export function createPromoteDiscoveryHandler(dependencies: PromoteDiscoveryHandlerDependencies): (request: Request) => Promise<Response> {
   if (!dependencies.invokeSecret.trim()) throw new Error("Promotion invoke secret is required");
@@ -32,12 +33,13 @@ export function createPromoteDiscoveryHandler(dependencies: PromoteDiscoveryHand
     try { body = await request.json(); } catch { body = {}; }
     if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 });
     const value = body as Record<string, unknown>;
-    if (Object.keys(value).some((key) => !["as_of", "limit", "ranking_date"].includes(key))) return Response.json({ error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 });
+    if (Object.keys(value).some((key) => !["as_of", "limit", "ranking_date", "promotion_job_id"].includes(key))) return Response.json({ error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 });
     const asOf = value.as_of === undefined ? now() : typeof value.as_of === "string" && ISO.test(value.as_of) ? new Date(value.as_of) : null;
     const limit = value.limit === undefined ? defaultLimit : value.limit;
     const rankingDate = value.ranking_date === undefined ? undefined : typeof value.ranking_date === "string" && DATE.test(value.ranking_date) ? value.ranking_date : null;
-    if (!asOf || !Number.isFinite(asOf.getTime()) || typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 || rankingDate === null) return Response.json({ error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 });
-    const result = await dependencies.run({ asOf, limit, ...(rankingDate ? { rankingDate } : {}) });
+    const promotionJobId = value.promotion_job_id === undefined ? undefined : typeof value.promotion_job_id === "string" && UUID.test(value.promotion_job_id) ? value.promotion_job_id : null;
+    if (!asOf || !Number.isFinite(asOf.getTime()) || typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 || rankingDate === null || promotionJobId === null) return Response.json({ error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 });
+    const result = await dependencies.run({ asOf, limit, ...(rankingDate ? { rankingDate } : {}), ...(promotionJobId ? { promotionJobId } : {}) });
     return Response.json(result);
   };
 }

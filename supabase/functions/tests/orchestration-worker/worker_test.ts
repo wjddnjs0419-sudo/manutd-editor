@@ -510,3 +510,19 @@ Deno.test("morning brief remains a terminal worker stage", async () => {
   assert.equal(queue.enqueued.size, 0);
   assert.deepEqual(queue.completed, ["brief-1"]);
 });
+
+Deno.test("promotion invocation carries its durable queue job ID for retry recovery", async () => {
+  const promotionJobId = "99999999-9999-4999-8999-999999999999";
+  const queue = queueWith([job(promotionJobId, "PROMOTE_DISCOVERY")]);
+  const invocationPayloads: Record<string, unknown>[] = [];
+  const worker = createOrchestrationWorker({
+    queue,
+    invoker: { invoke: async (_jobType, payload) => { invocationPayloads.push(payload); return { status: 200, body: { status: "COMPLETED", affected_story_ids: [] } }; } },
+    workerId: "worker-1",
+    now: () => now,
+  });
+
+  await worker.processBatch();
+
+  assert.equal(invocationPayloads[0]?.promotion_job_id, promotionJobId);
+});

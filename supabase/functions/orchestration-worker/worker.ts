@@ -205,7 +205,10 @@ export function createOrchestrationWorker(options: OrchestrationWorkerOptions): 
       // assign new observations to a scope whose downstream job already exists.
       const result = job.job_type === "PROMOTE_DISCOVERY" && storyIds(job.payload.grounding_story_cluster_ids, "grounding_story_cluster_ids").length > 0
         ? { status: 200, body: { affectedStoryIds: [] } }
-        : await options.invoker.invoke(job.job_type, job.payload);
+        : await options.invoker.invoke(
+          job.job_type,
+          job.job_type === "PROMOTE_DISCOVERY" ? { ...job.payload, promotion_job_id: job.id } : job.payload,
+        );
       if (result.status < 200 || result.status >= 300) throw httpFailure(job.job_type, result.status);
 
       const transition = job.job_type === "PROMOTE_DISCOVERY"

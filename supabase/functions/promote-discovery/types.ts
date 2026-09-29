@@ -29,10 +29,10 @@ export interface PromotionStoryInput {
 }
 
 export interface DiscoveryPromotionRepository {
-  listFreshUnassigned(asOf: Date, limit: number): Promise<readonly PromotionObservation[]>;
+  listFreshUnassigned(asOf: Date, limit: number, promotionJobId?: string): Promise<readonly PromotionObservation[]>;
   listStories(asOf: Date): Promise<readonly PromotionStory[]>;
   upsertStory(input: PromotionStoryInput): Promise<{ id: string; created: boolean }>;
-  assignObservation(observationId: string, storyClusterId: string): Promise<void>;
+  assignObservation(observationId: string, storyClusterId: string, promotionJobId?: string): Promise<void>;
   ensureSourceObservation(observation: PromotionObservation): Promise<string>;
   ensureDiscoveryClaim(input: { observationId: string; storyClusterId: string; sourceObservationId: string; status: "DISCOVERY_ONLY" }): Promise<void>;
   ensureEditorialCandidate(input: { storyClusterId: string; rankingDate: string; observation: PromotionObservation }): Promise<void>;

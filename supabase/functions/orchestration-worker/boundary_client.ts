@@ -70,10 +70,13 @@ function requestBody(jobType: EditorialJobType, payload: Record<string, unknown>
     return Object.keys(value).length === 0 ? undefined : value;
   }
   if (jobType === "PROMOTE_DISCOVERY") {
+    const promotionJobId = payload.promotion_job_id;
+    if (promotionJobId !== undefined && (typeof promotionJobId !== "string" || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu.test(promotionJobId))) throw new Error("PROMOTION_JOB_ID_INVALID");
     const value = {
       ...(typeof payload.as_of === "string" ? { as_of: payload.as_of } : {}),
       ...(typeof payload.limit === "number" && Number.isSafeInteger(payload.limit) ? { limit: payload.limit } : {}),
       ...(typeof payload.ranking_date === "string" ? { ranking_date: payload.ranking_date } : {}),
+      ...(typeof promotionJobId === "string" ? { promotion_job_id: promotionJobId } : {}),
     };
     return Object.keys(value).length === 0 ? undefined : value;
   }

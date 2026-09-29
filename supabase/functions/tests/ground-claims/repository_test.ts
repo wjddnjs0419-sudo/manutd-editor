@@ -33,6 +33,27 @@ Deno.test("grounding repository joins private observations to public source regi
   assert.equal(urls.some((url) => url.includes("information_sources(canonical_name)")), false);
 });
 
+Deno.test("grounding repository upserts evidence rows as one bounded request", async () => {
+  const requests: { url: string; body: unknown; prefer: string | null }[] = [];
+  const repository = createGroundingRepository({
+    supabaseUrl: "https://example.supabase.co", serviceRoleKey: "service-role-secret",
+    request: async (input, init) => {
+      requests.push({ url: String(input), body: JSON.parse(String(init?.body ?? "null")), prefer: new Headers(init?.headers).get("prefer") });
+      return new Response(null, { status: 201 });
+    },
+  });
+  const evidence = Array.from({ length: 3 }, (_, index) => ({ sourceObservationId: `observation-${index + 1}`, editorialRole: "FACT_INDEPENDENT" as const, relation: "SUPPORTS" as const, evidenceText: `evidence ${index + 1}`, evidenceConfidence: 0.8, isGrounding: true }));
+  const batch = (repository as unknown as { upsertEvidenceBatch: (claimId: string, rows: typeof evidence) => Promise<void> }).upsertEvidenceBatch;
+
+  await batch.call(repository, "claim-1", evidence);
+
+  assert.equal(requests.length, 1);
+  assert.equal(new URL(requests[0]!.url).pathname, "/rest/v1/claim_evidence");
+  assert.match(requests[0]!.url, /on_conflict=claim_id/);
+  assert.equal(requests[0]!.prefer, "resolution=merge-duplicates,return=minimal");
+  assert.deepEqual(requests[0]!.body, evidence.map((item) => ({ claim_id: "claim-1", source_observation_id: item.sourceObservationId, relation: item.relation, editorial_role: item.editorialRole, evidence_text: item.evidenceText, evidence_confidence: item.evidenceConfidence, is_grounding: item.isGrounding })));
+});
+
 Deno.test("grounding repository pushes story, raw-post, and as-of scope into bounded queries", async () => {
   const urls: string[] = [];
   const repository = repositoryWithRows(urls);
@@ -128,4 +149,40 @@ Deno.test("grounding repository bounds analysis-row scans and resumes after the 
   assert.equal(second.claims[0]?.claimText, "Manchester United signed Player 101");
   assert.equal(second.hasMore, false);
   assert.equal(analysisCalls, 2);
+});
+
+Deno.test("grounding repository does not skip a later analysis row when fingerprints sort out of cursor order", async () => {
+  const analysisRows = [
+    { id: "analysis-1", created_at: "2026-09-27T00:00:00.000Z", raw_post_id: "post-1", claims: [{ subject: "United", predicate: "reported", object: "Alpha claim", text: "Alpha claim", confidence: 0.9 }] },
+    { id: "analysis-2", created_at: "2026-09-27T00:01:00.000Z", raw_post_id: "post-1", claims: [{ subject: "United", predicate: "reported", object: "Zulu claim", text: "Zulu claim", confidence: 0.9 }] },
+  ];
+  const repository = createGroundingRepository({
+    supabaseUrl: "https://example.supabase.co", serviceRoleKey: "service-role-secret",
+    request: async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("story_cluster_posts")) return Response.json([{ story_cluster_id: "cluster-1", raw_post_id: "post-1" }]);
+      if (url.pathname.endsWith("content_understandings")) {
+        const resume = url.searchParams.get("or");
+        if (!resume) return Response.json(analysisRows);
+        return Response.json(resume.includes("analysis-2") ? [analysisRows[1]] : analysisRows);
+      }
+      if (url.pathname.endsWith("story_claims")) return Response.json([]);
+      return Response.json([]);
+    },
+  });
+
+  const claimTexts: string[] = [];
+  let cursor: string | null = null;
+  let hasMore = true;
+  for (let pageCount = 0; hasMore && pageCount < 4; pageCount += 1) {
+    const value = await repository.listClaims({ storyClusterIds: ["cluster-1"], limit: 1, cursor });
+    if (!("claims" in value)) throw new Error("Expected a paged result");
+    claimTexts.push(...value.claims.map((claim) => claim.claimText));
+    cursor = value.nextCursor;
+    hasMore = value.hasMore;
+  }
+
+  assert.deepEqual(new Set(claimTexts), new Set(["Alpha claim", "Zulu claim"]));
+  assert.equal(claimTexts.length, 2);
+  assert.equal(hasMore, false);
 });

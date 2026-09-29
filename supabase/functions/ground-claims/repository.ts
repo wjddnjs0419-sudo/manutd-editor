@@ -148,7 +148,7 @@ export function createGroundingRepository(options: RepositoryOptions): Grounding
                   rowFingerprints.push(claimFingerprint);
                   const origin = item.origin === "image" || item.origin === "carousel_slide" || item.origin === "thumbnail" ? item.origin : "caption";
                   const itemCursor = analysisCursor({ postId, createdAt, id: analysisId, claimFingerprint });
-                  byKey.set(key, { cursor: itemCursor, claim: { storyClusterId: clusterId, rawPostId: postId, claimFingerprint, subject, predicate, object, claimText, origin, extractionConfidence: number(item.confidence) } });
+                  if (!byKey.has(key)) byKey.set(key, { cursor: itemCursor, claim: { storyClusterId: clusterId, rawPostId: postId, claimFingerprint, subject, predicate, object, claimText, origin, extractionConfidence: number(item.confidence) } });
                 }
                 const lastFingerprint = [...rowFingerprints].sort().at(-1);
                 if (lastFingerprint) resumeCursor = analysisCursor({ postId, createdAt, id: analysisId, claimFingerprint: lastFingerprint });
@@ -160,7 +160,7 @@ export function createGroundingRepository(options: RepositoryOptions): Grounding
               }
               if (analyses.length < analysisLimit) break;
             }
-            for (const [key, value] of [...byKey].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+            for (const [key, value] of [...byKey].sort(([, a], [, b]) => a.cursor < b.cursor ? -1 : a.cursor > b.cursor ? 1 : 0)) {
               if (!seenKeys.has(key)) { seenKeys.add(key); collected.push({ key, cursor: value.cursor, claim: value.claim }); }
               if (collected.length > limit) break;
             }
@@ -249,7 +249,22 @@ export function createGroundingRepository(options: RepositoryOptions): Grounding
       return value[0].id;
     },
     async upsertEvidence(claimId, evidence: GroundingEvidence) {
-      await request("/rest/v1/claim_evidence?on_conflict=claim_id%2Csource_observation_id%2Crelation", { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify({ claim_id: claimId, source_observation_id: evidence.sourceObservationId, relation: evidence.relation, editorial_role: evidence.editorialRole, evidence_text: evidence.evidenceText, evidence_confidence: evidence.evidenceConfidence, is_grounding: evidence.isGrounding }) }, "app_private");
+      await this.upsertEvidenceBatch(claimId, [evidence]);
+    },
+    async upsertEvidenceBatch(claimId, evidence: readonly GroundingEvidence[]) {
+      const batchSize = 100;
+      for (let offset = 0; offset < evidence.length; offset += batchSize) {
+        const rows = evidence.slice(offset, offset + batchSize).map((item) => ({
+          claim_id: claimId,
+          source_observation_id: item.sourceObservationId,
+          relation: item.relation,
+          editorial_role: item.editorialRole,
+          evidence_text: item.evidenceText,
+          evidence_confidence: item.evidenceConfidence,
+          is_grounding: item.isGrounding,
+        }));
+        await request("/rest/v1/claim_evidence?on_conflict=claim_id%2Csource_observation_id%2Crelation", { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(rows) }, "app_private");
+      }
     },
   };
 }
