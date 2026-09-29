@@ -7,6 +7,7 @@ interface PromoteDiscoveryOptions {
   readonly repository: DiscoveryPromotionRepository;
   readonly limit?: number;
   readonly rankingDate?: string;
+  readonly promotionJobId?: string;
 }
 
 function asOfDate(value: Date | string | undefined): Date {
@@ -107,7 +108,7 @@ export async function promoteDiscovery(options: PromoteDiscoveryOptions): Promis
   const asOf = asOfDate(options.asOf);
   const limit = options.limit ?? 100;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("INVALID_PROMOTION_LIMIT");
-  const observations = [...await options.repository.listFreshUnassigned(asOf, limit)];
+  const observations = [...await options.repository.listFreshUnassigned(asOf, limit, options.promotionJobId)];
   if (observations.length > limit) throw new Error("PROMOTION_LIMIT_EXCEEDED");
   if (observations.length === 0) return { status: "COMPLETED", observationsProcessed: 0, storiesCreated: 0, storiesUpdated: 0, claimsCreated: 0, editorialCandidatesEnsured: 0, affectedStoryIds: [] };
   const stories = [...await options.repository.listStories(asOf)];
@@ -139,7 +140,7 @@ export async function promoteDiscovery(options: PromoteDiscoveryOptions): Promis
     else storiesUpdated += 1;
     affectedStoryIds.add(story.id);
     for (const item of items) {
-      await options.repository.assignObservation(item.id, story.id);
+      await options.repository.assignObservation(item.id, story.id, options.promotionJobId);
       const sourceObservationId = await options.repository.ensureSourceObservation(item);
       await options.repository.ensureDiscoveryClaim({ observationId: item.id, storyClusterId: story.id, sourceObservationId, status: "DISCOVERY_ONLY" });
       await options.repository.ensureEditorialCandidate({ storyClusterId: story.id, rankingDate, observation: item });

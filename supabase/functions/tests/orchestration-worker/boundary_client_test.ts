@@ -61,7 +61,9 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
   for (const jobType of types) {
     await invoker.invoke(
       jobType,
-      jobType === "RUN_INTELLIGENCE" || jobType === "ANALYZE_CONTENT" || jobType === "DISCOVER_SOURCES" || jobType === "DISCOVER_TRENDS" || jobType === "PROMOTE_DISCOVERY" || jobType === "GROUND_CLAIMS" || jobType === "RANK_EDITORIAL"
+      jobType === "PROMOTE_DISCOVERY"
+        ? { as_of: "2026-09-26T00:00:00Z", promotion_job_id: "99999999-9999-4999-8999-999999999999" }
+        : jobType === "RUN_INTELLIGENCE" || jobType === "ANALYZE_CONTENT" || jobType === "DISCOVER_SOURCES" || jobType === "DISCOVER_TRENDS" || jobType === "GROUND_CLAIMS" || jobType === "RANK_EDITORIAL"
         ? { as_of: "2026-09-26T00:00:00Z" }
         : jobType === "FIXTURE_SYNC"
         ? { mode: "FORCE" }
@@ -97,7 +99,7 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
   assert.deepEqual(calls[2]?.body, { as_of: "2026-09-26T00:00:00Z" });
   assert.deepEqual(calls[3]?.body, { as_of: "2026-09-26T00:00:00Z" });
   assert.deepEqual(calls[4]?.body, { as_of: "2026-09-26T00:00:00Z" });
-  assert.deepEqual(calls[5]?.body, { as_of: "2026-09-26T00:00:00Z" });
+  assert.deepEqual(calls[5]?.body, { as_of: "2026-09-26T00:00:00Z", promotion_job_id: "99999999-9999-4999-8999-999999999999" });
   assert.deepEqual(calls[6]?.body, { as_of: "2026-09-26T00:00:00Z" });
   assert.deepEqual(calls[10]?.body, { creative_brief_id: "brief-1" });
   assert.deepEqual(calls[13]?.body, { mode: "FORCE" });

@@ -105,15 +105,16 @@ export function createDiscoveryPromotionRepository(options: RepositoryOptions): 
   }
 
   return {
-    async listFreshUnassigned(asOf, limit) {
+    async listFreshUnassigned(asOf, limit, promotionJobId) {
       const since = new Date(asOf.getTime() - 72 * 60 * 60 * 1000).toISOString();
       const query = new URLSearchParams({
         select: "id,provider_id,source_canonical_name,editorial_role,external_id,canonical_url,title,excerpt,published_at,first_observed_at,last_observed_at,platform,engagement,engagement_available,discovery_query_id,content_fingerprint,metadata,story_cluster_id",
-        story_cluster_id: "is.null",
         last_observed_at: `gte.${since}`,
         order: "last_observed_at.asc,id.asc",
         limit: String(Math.max(1, Math.min(500, limit))),
       });
+      if (promotionJobId) query.set("or", `(story_cluster_id.is.null,promotion_job_id.eq.${promotionJobId})`);
+      else query.set("story_cluster_id", "is.null");
       query.append("last_observed_at", `lte.${asOf.toISOString()}`);
       const rows = await request(`/rest/v1/discovery_observations?${query}`, {}, "app_private");
       return Array.isArray(rows) ? rows.flatMap((value) => { const item = observation(value); return item?.id ? [item] : []; }) : [];
@@ -145,8 +146,8 @@ export function createDiscoveryPromotionRepository(options: RepositoryOptions): 
       if (!inserted || typeof inserted.id !== "string") throw new Error("STORY_PROMOTION_PERSISTENCE_ERROR");
       return { id: inserted.id, created: true };
     },
-    async assignObservation(observationId, storyClusterId) {
-      await request(`/rest/v1/discovery_observations?id=eq.${encodeURIComponent(observationId)}&story_cluster_id=is.null`, { method: "PATCH", headers: { prefer: "return=minimal" }, body: JSON.stringify({ story_cluster_id: storyClusterId }) }, "app_private");
+    async assignObservation(observationId, storyClusterId, promotionJobId) {
+      await request(`/rest/v1/discovery_observations?id=eq.${encodeURIComponent(observationId)}&story_cluster_id=is.null`, { method: "PATCH", headers: { prefer: "return=minimal" }, body: JSON.stringify({ story_cluster_id: storyClusterId, ...(promotionJobId ? { promotion_job_id: promotionJobId } : {}) }) }, "app_private");
     },
     async ensureSourceObservation(item) {
       const sourceQuery = new URLSearchParams({ select: "id", canonical_name: `eq.${item.sourceCanonicalName}`, limit: "1" });

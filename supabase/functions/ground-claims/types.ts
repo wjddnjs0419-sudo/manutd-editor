@@ -46,6 +46,7 @@ export interface GroundingRepository {
   listObservations(asOf?: Date): Promise<readonly GroundingObservation[]>;
   upsertClaim(claim: GroundedClaim, version: string): Promise<string>;
   upsertEvidence(claimId: string, evidence: GroundingEvidence): Promise<void>;
+  upsertEvidenceBatch(claimId: string, evidence: readonly GroundingEvidence[]): Promise<void>;
 }
 
 export interface GroundingRunInput {
