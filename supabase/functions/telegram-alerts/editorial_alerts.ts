@@ -1,4 +1,5 @@
 import type { TelegramInlineKeyboardMarkup } from "../_shared/m6/telegram_client.ts";
+import { callbackData } from "../_shared/m6/editorial_console.ts";
 
 export type StoryAlertState = "RISING" | "BREAKING";
 export type EditorialStoryAlertType = "BREAKING_STORY" | "RISING_STORY" | "VERIFIED_STORY";
@@ -16,6 +17,22 @@ export interface EditorialStoryAlertRow {
   readonly groundingStatus: string;
   readonly newsEligible: boolean;
   readonly rankingVersion: string | null;
+  readonly candidateId?: string | null;
+  readonly primarySourceName?: string | null;
+  readonly primarySourceUrl?: string | null;
+  readonly primarySourceObservationId?: string | null;
+  readonly primaryClaimId?: string | null;
+  readonly groundingEvidenceAvailable?: boolean;
+}
+
+export interface CanonicalEditorialEvidence {
+  readonly claim_id?: string | null;
+  readonly source_observation_id?: string | null;
+  readonly source_name?: string | null;
+  readonly canonical_url?: string | null;
+  readonly editorial_role?: string | null;
+  readonly is_grounding?: boolean;
+  readonly claim_text?: string | null;
 }
 
 export interface StoryAlertStateRecord {
@@ -30,7 +47,30 @@ export interface EditorialStoryAlertEvent {
   readonly eventType: EditorialStoryAlertType;
   readonly eventFingerprint: string;
   readonly storyId: string;
+  readonly candidateId?: string | null;
   readonly payload: Record<string, unknown>;
+}
+
+const FACT_ROLES = new Set(["FACT_PRIMARY", "FACT_INDEPENDENT"]);
+
+function evidencePriority(evidence: CanonicalEditorialEvidence): number {
+  if (evidence.is_grounding === true && FACT_ROLES.has(evidence.editorial_role ?? "")) return 0;
+  if (evidence.editorial_role === "FACT_PRIMARY") return 1;
+  if (evidence.editorial_role === "FACT_INDEPENDENT") return 2;
+  return 3;
+}
+
+export function selectPrimaryEditorialEvidence(
+  evidence: readonly CanonicalEditorialEvidence[],
+): CanonicalEditorialEvidence | null {
+  return evidence
+    .filter((item) => typeof item.source_observation_id === "string" && item.source_observation_id.trim() !== "")
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => evidencePriority(left.item) - evidencePriority(right.item) || left.index - right.index)[0]?.item ?? null;
+}
+
+export function hasCanonicalGrounding(evidence: readonly CanonicalEditorialEvidence[]): boolean {
+  return evidence.some((item) => item.is_grounding === true && FACT_ROLES.has(item.editorial_role ?? ""));
 }
 
 export interface EditorialStoryAlertRepository {
@@ -41,6 +81,7 @@ export interface EditorialStoryAlertRepository {
   insertEvent(event: {
     threadId: string;
     storyId: string;
+    candidateId?: string | null;
     eventType: EditorialStoryAlertType;
     eventFingerprint: string;
     payload: Record<string, unknown>;
@@ -49,12 +90,13 @@ export interface EditorialStoryAlertRepository {
 
 export interface RenderedEditorialStoryAlert {
   readonly text: string;
-  readonly replyMarkup: TelegramInlineKeyboardMarkup;
+  readonly reply_markup: TelegramInlineKeyboardMarkup;
 }
 
 export interface EditorialStoryAlertDecision {
   readonly nextState: StoryAlertStateRecord;
   readonly event: EditorialStoryAlertEvent | null;
+  readonly additionalEvent: EditorialStoryAlertEvent | null;
 }
 
 const COOLDOWN_MS = 60 * 60 * 1000;
@@ -95,8 +137,11 @@ function eventFor(type: EditorialStoryAlertType, story: EditorialStoryAlertRow):
     eventType: type,
     eventFingerprint: fingerprint(type, story),
     storyId: story.storyId,
+    candidateId: story.candidateId ?? null,
     payload: {
       story_id: story.storyId,
+      story_cluster_id: story.storyId,
+      candidate_id: story.candidateId ?? null,
       title: story.title,
       summary: story.summary,
       source_count: story.sourceCount,
@@ -106,8 +151,13 @@ function eventFor(type: EditorialStoryAlertType, story: EditorialStoryAlertRow):
       first_seen_at: story.firstSeenAt,
       last_seen_at: story.lastSeenAt,
       grounding_status: story.groundingStatus,
-      news_eligible: story.newsEligible,
+      news_eligible: story.newsEligible && story.groundingEvidenceAvailable !== false,
       ranking_version: story.rankingVersion,
+      primary_source_name: story.primarySourceName ?? null,
+      primary_source_url: story.primarySourceUrl ?? null,
+      primary_source_observation_id: story.primarySourceObservationId ?? null,
+      primary_claim_id: story.primaryClaimId ?? null,
+      grounding_evidence_available: story.groundingEvidenceAvailable ?? null,
     },
   };
 }
@@ -120,6 +170,7 @@ export function evaluateEditorialStoryAlert(
   const prior = previous ?? defaultState(story.storyId);
   const nextObservedState = alertState(story, now);
   let event: EditorialStoryAlertEvent | null = null;
+  let additionalEvent: EditorialStoryAlertEvent | null = null;
   let lastAlertedState = prior.lastAlertedState;
   let lastAlertedAt = prior.lastAlertedAt;
 
@@ -131,6 +182,7 @@ export function evaluateEditorialStoryAlert(
   }
 
   if (story.groundingStatus === "VERIFIED" && !prior.verifiedNotified) {
+    additionalEvent = event;
     event = eventFor("VERIFIED_STORY", story);
   }
 
@@ -143,11 +195,8 @@ export function evaluateEditorialStoryAlert(
       verifiedNotified: prior.verifiedNotified || story.groundingStatus === "VERIFIED",
     },
     event,
+    additionalEvent,
   };
-}
-
-function storyToken(storyId: string): string {
-  return storyId.length <= 32 ? storyId : storyId.replaceAll("-", "").slice(0, 12);
 }
 
 export function renderEditorialStoryAlert(payload: {
@@ -158,23 +207,32 @@ export function renderEditorialStoryAlert(payload: {
   trendState: string | null;
   groundingStatus: string;
   newsEligible: boolean;
+  groundingEvidenceAvailable?: boolean;
+  primarySourceName?: string | null;
+  primarySourceUrl?: string | null;
 }): RenderedEditorialStoryAlert {
-  const token = storyToken(payload.storyId);
-  const verified = payload.groundingStatus === "VERIFIED";
+  const verified = payload.groundingStatus === "VERIFIED" && payload.groundingEvidenceAvailable === true;
+  const canGenerate = verified && payload.newsEligible;
   const evidenceLine = verified ? "팩트 확인: VERIFIED" : "팩트 확인: 추가 확인 필요";
-  const actionLine = payload.newsEligible
+  const actionLine = canGenerate
     ? "카드뉴스 생성 조건을 충족했습니다."
     : "검증된 근거가 부족해 카드뉴스를 아직 생성하지 않습니다.";
   const prefix = payload.eventType === "VERIFIED_STORY" ? "✅ 확인된 맨유 이슈" : "🚨 새 맨유 이슈";
+  const sourceName = payload.primarySourceName?.trim() || (payload.sourceCount > 0 ? `${payload.sourceCount}곳` : "확인 중");
+  const sourceUrl = payload.primarySourceUrl?.trim() || null;
   return {
-    text: [prefix, "", payload.title, `출처: ${payload.sourceCount}곳`, `상태: ${payload.trendState ?? "DISCOVERY"}`, evidenceLine, actionLine].join("\n"),
-    replyMarkup: {
-      inline_keyboard: [[
-        { text: payload.newsEligible ? "📝 카드뉴스" : "📝 카드뉴스 (검증 필요)", callback_data: `idea:carousel:${token}` },
-        { text: "🎬 릴스 초안", callback_data: `idea:reel:${token}` },
-        { text: "🔎 근거 확인", callback_data: `idea:evidence:${token}` },
-        { text: "❌ 무시", callback_data: `idea:skip:${token}` },
-      ]],
+    text: [prefix, "", payload.title, `출처: ${sourceName}`, ...(sourceUrl ? [`🔗 원문: ${sourceUrl}`] : []), `상태: ${payload.trendState ?? "DISCOVERY"}`, evidenceLine, actionLine].join("\n"),
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: canGenerate ? "📝 카드뉴스 생성" : "📝 카드뉴스 (검증 필요)", callback_data: callbackData("idea:carousel", payload.storyId) },
+          { text: "🎬 릴스 초안", callback_data: callbackData("idea:reel", payload.storyId) },
+        ],
+        [
+          { text: "🔎 근거 확인", callback_data: callbackData("idea:evidence", payload.storyId) },
+          { text: "❌ 무시", callback_data: callbackData("idea:skip", payload.storyId) },
+        ],
+      ],
     },
   };
 }
@@ -183,8 +241,9 @@ export async function materializeEditorialStoryAlerts(now: Date, repository: Edi
   let created = 0;
   for (const story of await repository.listStories(now)) {
     const decision = evaluateEditorialStoryAlert(await repository.getState(story.storyId), story, now);
-    if (decision.event) {
-      const inserted = await repository.insertEvent({ threadId: repository.threadId, storyId: decision.event.storyId, eventType: decision.event.eventType, eventFingerprint: decision.event.eventFingerprint, payload: decision.event.payload });
+    for (const event of [decision.event, decision.additionalEvent]) {
+      if (!event) continue;
+      const inserted = await repository.insertEvent({ threadId: repository.threadId, storyId: event.storyId, candidateId: event.candidateId ?? null, eventType: event.eventType, eventFingerprint: event.eventFingerprint, payload: event.payload });
       if (inserted) created += 1;
     }
     await repository.saveState(decision.nextState);

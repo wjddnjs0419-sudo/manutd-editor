@@ -11,6 +11,7 @@ interface TelegramUpdate {
   message?: {
     from?: { id: number | string };
     chat: { id: number | string };
+    reply_to_message?: { message_id?: number; chat?: { id: number | string }; [key: string]: unknown };
     [key: string]: unknown;
   };
   callback_query?: {

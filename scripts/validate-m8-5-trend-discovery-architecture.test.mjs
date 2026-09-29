@@ -26,7 +26,7 @@ test("M8.5 keeps deterministic scoring, provider isolation, and safe normalizati
   assert.match(scoring, /editorialScore/u);
   assert.match(normalization, /token|secret|authorization|payload/u);
   assert.match(orchestrator, /PARTIAL/u);
-  assert.match(orchestrator, /isTrendRelevant/u);
+  assert.match(orchestrator, /(?:isTrendRelevant|relevanceScore)/u);
 });
 
 test("M8.5 provider and Telegram boundaries are wired without publishing or footage download", async () => {

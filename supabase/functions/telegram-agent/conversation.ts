@@ -10,12 +10,22 @@ import {
   shouldRetrieveHistory,
   type HistoricalContext,
 } from "../_shared/m6/retrieval.ts";
+import { parseConsoleIntent, type ConsoleAction } from "../_shared/m6/editorial_console_actions.ts";
 
 export interface CanonicalConversationContext {
   candidate: Record<string, unknown> | null;
   source_observation?: Record<string, unknown> | null;
   brief: Record<string, unknown> | null;
   match: Record<string, unknown> | null;
+  story_cluster?: Record<string, unknown> | null;
+  editorial_ranking?: Record<string, unknown> | null;
+  evidence?: readonly Record<string, unknown>[];
+}
+
+export interface ReplyReference {
+  story_cluster_id: string | null;
+  candidate_id: string | null;
+  evidence_ids: readonly string[];
 }
 
 export interface ConversationReplyDependencies {
@@ -31,10 +41,38 @@ export interface NaturalLanguageReplyDependencies {
   generate: (payload: unknown) => Promise<unknown>;
   retrieveHistory?: (message: string, thread: MemoryThread) => Promise<readonly HistoricalContext[]>;
   recentMessageLimit?: number;
+  replyContext?: { story_cluster: Record<string, unknown> | null; candidate: Record<string, unknown> | null; editorial_ranking?: Record<string, unknown> | null; source_observation?: Record<string, unknown> | null; evidence: readonly Record<string, unknown>[] };
 }
 
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function parseReplyMessageId(update: unknown): number | null {
+  if (!object(update) || !object(update.message) || !object(update.message.reply_to_message)) return null;
+  const id = update.message.reply_to_message.message_id;
+  return typeof id === "number" && Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+export async function resolveReplyReference(
+  threadId: string,
+  messageId: number,
+  lookup: (threadId: string, messageId: number) => Promise<unknown>,
+): Promise<ReplyReference | null> {
+  const row = await lookup(threadId, messageId);
+  if (!object(row) || row.role !== "ASSISTANT" || !object(row.metadata)) return null;
+  const metadata = row.metadata;
+  const id = (value: unknown): string | null => typeof value === "string" && value.trim() ? value.trim() : null;
+  const storyId = id(metadata.story_cluster_id);
+  const candidateId = id(metadata.candidate_id);
+  if (!storyId && !candidateId) return null;
+  const evidenceIds = Array.isArray(metadata.evidence_ids) ? [...new Set(metadata.evidence_ids.flatMap((value) => id(value) ? [id(value)!] : []))] : [];
+  return { story_cluster_id: storyId, candidate_id: candidateId, evidence_ids: evidenceIds };
+}
+
+export function replyConsoleIntent(text: string, activeCandidateId: string | null, repliedStoryId: string | null): ConsoleAction | null {
+  const intent = parseConsoleIntent(text, activeCandidateId);
+  return intent?.type === "GENERATE_CAROUSEL" && repliedStoryId ? { ...intent, token: repliedStoryId } : intent;
 }
 
 const LEAKED_RULES = [
@@ -100,7 +138,9 @@ export async function answerNaturalLanguage(
     listMessages: dependencies.listMessages,
   }, dependencies.recentMessageLimit ?? 12);
   return createConversationReply(message, context, {
-    canonical_context: await dependencies.loadCanonicalContext(thread),
+    canonical_context: dependencies.replyContext
+      ? { ...await dependencies.loadCanonicalContext(thread), brief: null, match: null, source_observation: null, ...dependencies.replyContext }
+      : await dependencies.loadCanonicalContext(thread),
     generate: dependencies.generate,
     retrieveHistory: dependencies.retrieveHistory ? () => dependencies.retrieveHistory?.(message, thread) ?? Promise.resolve([]) : undefined,
   });

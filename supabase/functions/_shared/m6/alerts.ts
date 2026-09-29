@@ -32,6 +32,7 @@ export interface PendingAlert {
   id: string;
   event_type: string;
   payload: Record<string, unknown>;
+  thread_id?: string | null;
 }
 
 export interface IntelligenceSummaryStory {
@@ -108,6 +109,7 @@ export interface AlertDispatchDependencies {
   markSent: (id: string, sentAt: string) => Promise<void>;
   markFailed: (id: string, message: string) => Promise<void>;
   render?: (alert: PendingAlert) => string | RenderedAlert;
+  persistSentMessage?: (alert: PendingAlert, telegramMessageId: number | null, rendered: RenderedAlert) => Promise<void>;
 }
 
 function defaultAlert(alert: PendingAlert): RenderedAlert {
@@ -129,6 +131,9 @@ function defaultAlert(alert: PendingAlert): RenderedAlert {
       trendState: typeof payload.trend_state === "string" ? payload.trend_state : null,
       groundingStatus: typeof payload.grounding_status === "string" ? payload.grounding_status : "DISCOVERY_ONLY",
       newsEligible: payload.news_eligible === true,
+      groundingEvidenceAvailable: payload.grounding_evidence_available === true,
+      primarySourceName: typeof payload.primary_source_name === "string" ? payload.primary_source_name : null,
+      primarySourceUrl: typeof payload.primary_source_url === "string" ? payload.primary_source_url : null,
     });
   }
   const payload = alert.payload;
@@ -159,7 +164,14 @@ export async function dispatchPendingAlerts(dependencies: AlertDispatchDependenc
       const chatId = await dependencies.resolveChatId(alert);
       const custom = dependencies.render?.(alert);
       const rendered = typeof custom === "string" ? { text: custom } : custom ?? defaultAlert(alert);
-      await dependencies.client.sendText(chatId, rendered.text, rendered.reply_markup);
+      const sentMessage = await dependencies.client.sendText(chatId, rendered.text, rendered.reply_markup);
+      if (dependencies.persistSentMessage) {
+        try {
+          await dependencies.persistSentMessage(alert, sentMessage.message_id, rendered);
+        } catch (error) {
+          console.error(JSON.stringify({ event: "telegram_alert_message_persistence_failed", alert_id: alert.id, error: error instanceof Error ? error.name : "PERSISTENCE_FAILED" }));
+        }
+      }
       await dependencies.markSent(alert.id, new Date().toISOString());
       sent += 1;
     } catch (error) {

@@ -10,11 +10,11 @@ import { reviseCaption, reviseSlide, selectHook } from "../_shared/m6/revisions.
 import { createTelegramClient } from "../_shared/m6/telegram_client.ts";
 import { createM6Repository } from "../_shared/m6/repository.ts";
 import { createEditorialConsoleRepository, findCanonicalStoryByToken, paginateStories, shortCallbackToken, type CanonicalStory, type ConsoleView } from "../_shared/m6/editorial_console.ts";
-import { canHandleStaleConsoleCallback, dispatchEditorialConsoleAction, parseConsoleCallback, parseConsoleIntent, type ConsoleAction, type ConsoleState } from "../_shared/m6/editorial_console_actions.ts";
+import { canHandleStaleConsoleCallback, dispatchEditorialConsoleAction, parseConsoleCallback, type ConsoleAction, type ConsoleState } from "../_shared/m6/editorial_console_actions.ts";
 import { invokeCanonicalCarousel } from "../_shared/m6/console_generation.ts";
 import { createEditorialJobQueue } from "../orchestration-worker/queue_client.ts";
 import { createTelegramAgentHandler } from "./handler.ts";
-import { answerNaturalLanguage, type CanonicalConversationContext } from "./conversation.ts";
+import { answerNaturalLanguage, parseReplyMessageId, replyConsoleIntent, resolveReplyReference, type CanonicalConversationContext } from "./conversation.ts";
 import { enqueueManualDiscovery, type ManualDiscoveryPayload } from "./manual_discovery.ts";
 import type { StoredCreativeBrief } from "../creative-generation/repository.ts";
 import type { CreativeBriefSlide } from "../creative-generation/types.ts";
@@ -77,6 +77,65 @@ async function loadCanonicalContext(state: RetrievalThreadState): Promise<Canoni
   const brief = state.active_brief_id ? await rowById(`/rest/v1/creative_briefs?select=*&id=eq.${encodeURIComponent(state.active_brief_id)}&limit=1`) : null;
   const match = state.active_match_id ? await rowById(`/rest/v1/matches?select=*&id=eq.${encodeURIComponent(state.active_match_id)}&limit=1`) : null;
   return { candidate, source_observation: sourceObservation, brief, match };
+}
+
+async function loadReplyContext(threadId: string, messageId: number): Promise<{ storyId: string | null; context: NonNullable<Parameters<typeof answerNaturalLanguage>[2]["replyContext"]> } | null> {
+  const reference = await resolveReplyReference(threadId, messageId, async (id, telegramMessageId) =>
+    await rowById(`/rest/v1/telegram_messages?select=role,metadata&thread_id=eq.${encodeURIComponent(id)}&telegram_message_id=eq.${telegramMessageId}&role=eq.ASSISTANT&order=created_at.desc&limit=1`, "app_private")
+  );
+  if (!reference) return null;
+  const candidate = reference.candidate_id ? await rowById(`/rest/v1/content_candidates?select=*&id=eq.${encodeURIComponent(reference.candidate_id)}&limit=1`) : null;
+  const storyId = reference.story_cluster_id ?? (typeof candidate?.story_cluster_id === "string" ? candidate.story_cluster_id : null);
+  const story = storyId ? await rowById(`/rest/v1/story_clusters?select=*&id=eq.${encodeURIComponent(storyId)}&limit=1`) : null;
+  if (!story || !storyId) return null;
+  const canonical = (await consoleRepository.listCanonicalStories(businessDate(new Date(), "Asia/Seoul"))).find((value) => value.id === storyId);
+  if (!canonical) return null;
+  const resolvedCandidate = candidate ?? (canonical.candidate_id ? { id: canonical.candidate_id, story_cluster_id: storyId } : null);
+  const [claimsValue, claimEvidenceValue, observationsValue, sourcesValue] = await Promise.all([
+    rest(`/rest/v1/story_claims?select=id,story_cluster_id,claim_text,grounding_status&story_cluster_id=eq.${encodeURIComponent(storyId)}&limit=100`, {}, "app_private").catch(() => []),
+    rest("/rest/v1/claim_evidence?select=claim_id,source_observation_id,editorial_role,evidence_text,is_grounding&limit=5000", {}, "app_private").catch(() => []),
+    rest("/rest/v1/source_observations?select=id,information_source_id,canonical_url,title,editorial_role&limit=5000", {}, "app_private").catch(() => []),
+    rest("/rest/v1/information_sources?select=id,canonical_name&limit=500", {}).catch(() => []),
+  ]);
+  const claims = Array.isArray(claimsValue) ? claimsValue.filter(isObject) : [];
+  const claimIds = new Set(claims.flatMap((value) => typeof value.id === "string" ? [value.id] : []));
+  const claimEvidence = Array.isArray(claimEvidenceValue) ? claimEvidenceValue.filter((value) => isObject(value) && typeof value.claim_id === "string" && claimIds.has(value.claim_id)) : [];
+  const observations = new Map<string, Record<string, unknown>>();
+  for (const value of Array.isArray(observationsValue) ? observationsValue : []) if (isObject(value) && typeof value.id === "string") observations.set(value.id, value);
+  const sourceNames = new Map<string, string>();
+  for (const value of Array.isArray(sourcesValue) ? sourcesValue : []) if (isObject(value) && typeof value.id === "string" && typeof value.canonical_name === "string") sourceNames.set(value.id, value.canonical_name);
+  const evidence = claimEvidence.flatMap((relation) => {
+    const claim = claims.find((value) => value.id === relation.claim_id);
+    const observation = typeof relation.source_observation_id === "string" ? observations.get(relation.source_observation_id) : null;
+    if (!claim || !observation) return [];
+    const sourceName = typeof observation.information_source_id === "string" ? sourceNames.get(observation.information_source_id) : null;
+    return [{
+      id: `claim:${claim.id}`,
+      claim_id: claim.id,
+      claim_text: claim.claim_text,
+      grounding_status: claim.grounding_status,
+      evidence_text: relation.evidence_text,
+      is_grounding: relation.is_grounding === true,
+      editorial_role: relation.editorial_role ?? observation.editorial_role ?? null,
+      source_observation_id: observation.id,
+      source_name: sourceName ?? observation.title ?? "M8 근거",
+      canonical_url: observation.canonical_url ?? null,
+    } satisfies Record<string, unknown>];
+  }).filter((value) => reference.evidence_ids.length === 0 || reference.evidence_ids.includes(String(value.claim_id)) || reference.evidence_ids.includes(String(value.id)));
+  const representative = evidence.find((value) => value.is_grounding === true && (value.editorial_role === "FACT_PRIMARY" || value.editorial_role === "FACT_INDEPENDENT")) ?? evidence.find((value) => value.editorial_role === "FACT_PRIMARY" || value.editorial_role === "FACT_INDEPENDENT") ?? evidence[0] ?? null;
+  const representativeObservation = representative && typeof representative.source_observation_id === "string" ? observations.get(representative.source_observation_id) ?? null : null;
+  const sourceObservation = representativeObservation ? { ...representativeObservation, source_name: representative?.source_name ?? null, canonical_url: representative?.canonical_url ?? null } : representative ? { id: representative.source_observation_id, source_name: representative.source_name, canonical_url: representative.canonical_url } : null;
+  const editorialRanking = {
+    story_cluster_id: canonical.id,
+    ranking_date: canonical.ranking_date,
+    ranking_version: canonical.ranking_version,
+    rank: canonical.rank,
+    editorial_score: canonical.editorial_score,
+    information_gap_score: canonical.information_gap_score,
+    grounding_status: canonical.grounding_status,
+    news_eligible: canonical.news_eligible,
+  };
+  return { storyId, context: { story_cluster: story, candidate: resolvedCandidate, editorial_ranking: editorialRanking, source_observation: sourceObservation, evidence } };
 }
 
 function historicalRecord(kind: HistoricalContext["kind"], value: Record<string, unknown>): HistoricalContext | null {
@@ -157,7 +216,7 @@ async function rollSummary(threadId: string, config: AgentConfig, provider?: (pa
 
 interface TelegramUpdate {
   update_id?: number;
-  message?: { message_id?: number; text?: string; from?: { id?: number; first_name?: string }; chat?: { id?: number } };
+  message?: { message_id?: number; text?: string; from?: { id?: number; first_name?: string }; chat?: { id?: number }; reply_to_message?: { message_id?: number; chat?: { id?: number } } };
   callback_query?: { id?: string; data?: string; from?: { id?: number; first_name?: string }; message?: { message_id?: number; chat?: { id?: number } } };
 }
 interface ThreadRow { id: string; telegram_user_id: string; active_candidate_id: string | null; active_source_observation_id: string | null; active_brief_id: string | null; active_match_id: string | null; context_history: unknown[]; conversation_summary: string | null; summary_message_count: number; pending_action: Record<string, unknown> | null; pending_action_expires_at: string | null; }
@@ -202,7 +261,7 @@ async function claimUpdate(value: unknown): Promise<boolean> {
   const incoming = update(value);
   if (typeof incoming.update_id !== "number") return true;
   const thread = await ensureThread(incoming);
-  const claimed = await rest("/rest/v1/telegram_messages?on_conflict=telegram_update_id", { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=ignore-duplicates,return=representation" }, body: JSON.stringify({ thread_id: thread.id, telegram_update_id: incoming.update_id, role: "USER", message_type: isCallbackUpdate(incoming) ? "CONSOLE" : parseCommand(content(incoming)) ? "COMMAND" : "TEXT", content: content(incoming), metadata: isCallbackUpdate(incoming) ? { callback_query_id: callbackId(incoming) } : {} }) }, "app_private");
+  const claimed = await rest("/rest/v1/telegram_messages?on_conflict=telegram_update_id", { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=ignore-duplicates,return=representation" }, body: JSON.stringify({ thread_id: thread.id, telegram_message_id: incoming.message?.message_id ?? null, telegram_update_id: incoming.update_id, role: "USER", message_type: isCallbackUpdate(incoming) ? "CONSOLE" : parseCommand(content(incoming)) ? "COMMAND" : "TEXT", content: content(incoming), metadata: isCallbackUpdate(incoming) ? { callback_query_id: callbackId(incoming) } : { reply_to_message_id: parseReplyMessageId(incoming) } }) }, "app_private");
   return Array.isArray(claimed) && claimed.length > 0;
 }
 
@@ -361,7 +420,7 @@ async function sendConsoleView(thread: ThreadRow, incoming: TelegramUpdate, stat
   return next;
 }
 
-async function runConsoleAction(thread: ThreadRow, incoming: TelegramUpdate, action: ConsoleAction): Promise<{ status: string; reply: string }> {
+async function runConsoleAction(thread: ThreadRow, incoming: TelegramUpdate, action: ConsoleAction, repliedStoryId: string | null = null): Promise<{ status: string; reply: string }> {
   const client = createTelegramClient({ token: botToken });
   const queryId = callbackId(incoming);
   if (queryId) await client.answerCallbackQuery(queryId).catch(() => undefined);
@@ -373,7 +432,9 @@ async function runConsoleAction(thread: ThreadRow, incoming: TelegramUpdate, act
     await recordConsoleEvent(thread.id, incoming, { action: "STALE_CALLBACK", status: "STALE" });
     return { status: "STALE", reply: "이전 화면입니다. 최신 목록을 열어 주세요." };
   }
-  const result = await dispatchEditorialConsoleAction(action, { ...state, telegram_message_id: incomingMessageId ?? state.telegram_message_id }, consoleDependencies(thread));
+  const targetState = action.type === "GENERATE_CAROUSEL" && repliedStoryId ? { ...state, story_id: repliedStoryId } : state;
+  const result = await dispatchEditorialConsoleAction(action, { ...targetState, telegram_message_id: incomingMessageId ?? state.telegram_message_id }, consoleDependencies(thread));
+  if (action.type === "GENERATE_CAROUSEL" && repliedStoryId && result.event.status !== "COMPLETED") result.next_state = state;
   await recordConsoleEvent(thread.id, incoming, result.event);
   await sendConsoleView(thread, incoming, result.next_state, result.view);
   return { status: result.event.status, reply: result.view.text };
@@ -511,8 +572,15 @@ async function runAgent(value: unknown): Promise<{ status: string; reply: string
     return await runConsoleAction(thread, incoming, action);
   }
   const text = content(incoming);
-  const consoleIntent = parseConsoleIntent(text, thread.active_candidate_id);
-  if (consoleIntent) return await runConsoleAction(thread, incoming, consoleIntent);
+  const repliedMessageId = parseReplyMessageId(incoming);
+  const replied = repliedMessageId === null ? null : await loadReplyContext(thread.id, repliedMessageId);
+  const consoleIntent = replyConsoleIntent(text, thread.active_candidate_id, replied?.storyId ?? null);
+  if (repliedMessageId !== null && consoleIntent?.type === "GENERATE_CAROUSEL" && !replied?.storyId) {
+    const reply = "답장한 메시지의 canonical 소재를 찾지 못했습니다. 소재 알림에 답장해 다시 요청해 주세요.";
+    await sendAndPersist(thread, incoming, reply);
+    return { status: "REPLY_STORY_NOT_FOUND", reply };
+  }
+  if (consoleIntent) return await runConsoleAction(thread, incoming, consoleIntent, replied?.storyId ?? null);
   const command = parseCommand(text);
   const config = await loadAgentConfig();
   const provider = Deno.env.get("OPENAI_API_KEY") ? createOpenAIGenerator({ apiKey: Deno.env.get("OPENAI_API_KEY") ?? "", model: typeof config.model_config.conversation_model === "string" ? config.model_config.conversation_model : undefined }) : undefined;
@@ -523,6 +591,7 @@ async function runAgent(value: unknown): Promise<{ status: string; reply: string
     generate: provider ?? (async () => { throw new Error("OPENAI_NOT_CONFIGURED"); }),
     retrieveHistory: async (messageText, currentThread) => retrieveHistoricalContext(messageText, currentThread, await retrievalDependencies(currentThread)),
     recentMessageLimit: config.recent_message_limit,
+    replyContext: replied?.context,
   });
   await sendAndPersist(thread, incoming, reply);
   if (!command) await rollSummary(thread.id, config, provider).catch(() => undefined);
