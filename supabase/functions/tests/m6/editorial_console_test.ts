@@ -159,12 +159,13 @@ Deno.test("repository joins canonical ranking, story, candidate, source, and evi
     fetch: async (input) => {
       const url = String(input);
       if (url.includes("editorial_rankings")) return new Response(JSON.stringify([{ story_cluster_id: firstStory.story_cluster_id, ranking_date: firstStory.ranking_date, ranking_version: firstStory.ranking_version, rank: 1, editorial_score: 91.2, information_gap_score: 94, fact_grounding_score: 87, discovery_audience_signal_score: 88, grounding_status: "VERIFIED", news_eligible: true }]));
-      if (url.includes("story_clusters")) return new Response(JSON.stringify([{ id: firstStory.story_cluster_id, canonical_title: firstStory.canonical_title, summary: firstStory.summary }]));
+      if (url.includes("story_clusters")) return new Response(JSON.stringify([{ id: firstStory.story_cluster_id, canonical_title: firstStory.canonical_title, summary: firstStory.summary, signature_json: { content_fingerprints: ["fingerprint-1"] } }]));
       if (url.includes("content_candidates")) return new Response(JSON.stringify([{ id: firstStory.candidate_id, story_cluster_id: firstStory.story_cluster_id }]));
       if (url.includes("story_cluster_sources")) return new Response(JSON.stringify([{ story_cluster_id: firstStory.story_cluster_id, information_source_id: "source-1", information_sources: { canonical_name: "BBC Sport" } }]));
       if (url.includes("story_claims")) return new Response(JSON.stringify([{ id: "claim-1", story_cluster_id: firstStory.story_cluster_id, claim_text: "산초가 새 팀을 찾고 있다.", grounding_status: "VERIFIED" }]));
       if (url.includes("claim_evidence")) return new Response(JSON.stringify([{ claim_id: "claim-1", source_observation_id: "observation-1", evidence_text: "BBC confirms the status.", is_grounding: true }]));
       if (url.includes("source_observations")) return new Response(JSON.stringify([{ id: "observation-1", information_source_id: "source-1", canonical_url: "https://example.test/bbc", title: "BBC Sport", editorial_role: "FACT_PRIMARY" }]));
+      if (url.includes("trend_snapshots")) return new Response(JSON.stringify([{ story_cluster_id: null, cluster_key: "trend:fingerprint-1", snapshot_at: "2026-09-27T11:00:00.000Z", trend_score: 94, trend_state: "RISING", source_count: 2, platform_count: 3, opportunity_labels: ["🔥 빠르게 뜨는 중"], input_snapshot: { content_fingerprints: ["fingerprint-1"] } }]));
       return new Response(JSON.stringify([]));
     },
   });
@@ -173,4 +174,6 @@ Deno.test("repository joins canonical ranking, story, candidate, source, and evi
   assertEquals(stories[0]?.title, firstStory.canonical_title);
   assertEquals(stories[0]?.source_count, 1);
   assertEquals(stories[0]?.evidence[0]?.status, "SUPPORTED");
+  assertEquals(stories[0]?.trend_score, 94);
+  assertEquals(stories[0]?.trend_platform_count, 3);
 });
