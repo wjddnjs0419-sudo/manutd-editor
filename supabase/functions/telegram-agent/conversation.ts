@@ -11,6 +11,7 @@ import {
   type HistoricalContext,
 } from "../_shared/m6/retrieval.ts";
 import { parseConsoleIntent, type ConsoleAction } from "../_shared/m6/editorial_console_actions.ts";
+import type { CanonicalStory, EditorialEvidence } from "../_shared/m6/editorial_console.ts";
 
 export interface CanonicalConversationContext {
   candidate: Record<string, unknown> | null;
@@ -22,9 +23,20 @@ export interface CanonicalConversationContext {
   evidence?: readonly Record<string, unknown>[];
 }
 
+export interface ReplyContext {
+  story_cluster: Record<string, unknown> | null;
+  candidate: Record<string, unknown> | null;
+  editorial_ranking: Record<string, unknown> | null;
+  source_observation: Record<string, unknown> | null;
+  evidence: readonly Record<string, unknown>[];
+}
+
 export interface ReplyReference {
   story_cluster_id: string | null;
   candidate_id: string | null;
+  primary_source_observation_id: string | null;
+  ranking_date: string | null;
+  ranking_version: string | null;
   evidence_ids: readonly string[];
 }
 
@@ -41,7 +53,7 @@ export interface NaturalLanguageReplyDependencies {
   generate: (payload: unknown) => Promise<unknown>;
   retrieveHistory?: (message: string, thread: MemoryThread) => Promise<readonly HistoricalContext[]>;
   recentMessageLimit?: number;
-  replyContext?: { story_cluster: Record<string, unknown> | null; candidate: Record<string, unknown> | null; editorial_ranking?: Record<string, unknown> | null; source_observation?: Record<string, unknown> | null; evidence: readonly Record<string, unknown>[] };
+  replyContext?: ReplyContext;
 }
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -66,8 +78,112 @@ export async function resolveReplyReference(
   const storyId = id(metadata.story_cluster_id);
   const candidateId = id(metadata.candidate_id);
   if (!storyId && !candidateId) return null;
+  const primarySourceObservationId = id(metadata.primary_source_observation_id);
+  const rankingDate = id(metadata.ranking_date);
+  const rankingVersion = id(metadata.ranking_version);
   const evidenceIds = Array.isArray(metadata.evidence_ids) ? [...new Set(metadata.evidence_ids.flatMap((value) => id(value) ? [id(value)!] : []))] : [];
-  return { story_cluster_id: storyId, candidate_id: candidateId, evidence_ids: evidenceIds };
+  return {
+    story_cluster_id: storyId,
+    candidate_id: candidateId,
+    primary_source_observation_id: primarySourceObservationId,
+    ranking_date: rankingDate,
+    ranking_version: rankingVersion,
+    evidence_ids: evidenceIds,
+  };
+}
+
+export interface ReplyEvidenceContext {
+  evidence: readonly Record<string, unknown>[];
+  source_observation: Record<string, unknown> | null;
+}
+
+export interface ReplyContextDependencies {
+  loadStory: (storyId: string) => Promise<Record<string, unknown> | null>;
+  loadCandidate: (candidateId: string) => Promise<Record<string, unknown> | null>;
+  loadEditorialRanking: (storyId: string, rankingDate: string | null, rankingVersion: string | null) => Promise<Record<string, unknown> | null>;
+  loadSourceObservation: (observationId: string) => Promise<Record<string, unknown> | null>;
+  loadEvidence: (storyId: string, evidenceIds: readonly string[]) => Promise<ReplyEvidenceContext>;
+}
+
+export async function resolveReplyContext(reference: ReplyReference, dependencies: ReplyContextDependencies): Promise<{ storyId: string; context: ReplyContext } | null> {
+  const candidate = reference.candidate_id ? await dependencies.loadCandidate(reference.candidate_id) : null;
+  const storyId = reference.story_cluster_id ?? (typeof candidate?.story_cluster_id === "string" ? candidate.story_cluster_id : null);
+  if (!storyId) return null;
+  const [story, editorialRanking, sourceObservation, evidenceContext] = await Promise.all([
+    dependencies.loadStory(storyId),
+    dependencies.loadEditorialRanking(storyId, reference.ranking_date, reference.ranking_version),
+    reference.primary_source_observation_id ? dependencies.loadSourceObservation(reference.primary_source_observation_id) : Promise.resolve(null),
+    dependencies.loadEvidence(storyId, reference.evidence_ids),
+  ]);
+  if (!story) return null;
+  return {
+    storyId,
+    context: {
+      story_cluster: story,
+      candidate: candidate ?? (reference.candidate_id ? { id: reference.candidate_id, story_cluster_id: storyId } : null),
+      editorial_ranking: editorialRanking,
+      source_observation: sourceObservation ?? evidenceContext.source_observation,
+      evidence: evidenceContext.evidence,
+    },
+  };
+}
+
+export function canonicalStoryFromReplyContext(context: ReplyContext): CanonicalStory | null {
+  const cluster = context.story_cluster;
+  const storyId = typeof cluster?.id === "string" ? cluster.id : null;
+  const candidateId = typeof context.candidate?.id === "string" ? context.candidate.id : null;
+  if (!cluster || !storyId || !candidateId) return null;
+  const ranking = context.editorial_ranking ?? {};
+  const stringValue = (value: unknown): string | null => typeof value === "string" && value.trim() !== "" ? value : null;
+  const numberValue = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;
+  const evidence: EditorialEvidence[] = context.evidence.flatMap((item) => {
+    const evidenceId = stringValue(item.evidence_id) ?? stringValue(item.id);
+    const claimText = stringValue(item.claim_text);
+    if (!evidenceId || !claimText) return [];
+    const status = item.grounding_status === "CONTRADICTED" ? "CONTRADICTED" : item.grounding_status === "VERIFIED" ? "SUPPORTED" : "REPORTED";
+    return [{
+      evidence_id: evidenceId,
+      source_name: stringValue(item.source_name) ?? "M8 근거",
+      claim_text: claimText,
+      status,
+      canonical_url: stringValue(item.canonical_url),
+      editorial_role: stringValue(item.editorial_role),
+    }];
+  });
+  const rankingDate = stringValue(ranking.ranking_date) ?? "";
+  const rankingVersion = stringValue(ranking.ranking_version) ?? "";
+  const rank = numberValue(ranking.rank);
+  const informationGapScore = numberValue(ranking.information_gap_score) ?? 0;
+  const sources = [...new Set(evidence.map((item) => item.source_name))];
+  const title = stringValue(cluster.canonical_title) ?? stringValue(cluster.title) ?? storyId;
+  const summary = stringValue(cluster.summary);
+  return {
+    id: storyId,
+    candidate_id: candidateId,
+    title,
+    summary,
+    ranking_date: rankingDate,
+    ranking_version: rankingVersion,
+    rank,
+    editorial_score: numberValue(ranking.editorial_score) ?? 0,
+    information_gap_score: informationGapScore,
+    hook_strength: informationGapScore,
+    shareability: numberValue(ranking.discovery_audience_signal_score) ?? 0,
+    source_confidence: numberValue(ranking.fact_grounding_score) ?? 0,
+    grounding_status: stringValue(ranking.grounding_status) ?? "INSUFFICIENT",
+    news_eligible: ranking.news_eligible === true,
+    sources,
+    source_count: sources.length,
+    evidence,
+    story_fingerprint: `story:${storyId}:${rankingDate || "unknown"}:${rankingVersion || "unknown"}`,
+    latest_brief_id: null,
+    recommended: rank !== null && rank <= 5,
+    trend_score: numberValue(cluster.trend_score),
+    trend_state: stringValue(cluster.trend_state),
+    trend_source_count: numberValue(cluster.trend_source_count) ?? sources.length,
+    trend_platform_count: numberValue(cluster.trend_platform_count) ?? 0,
+    opportunity_labels: Array.isArray(cluster.opportunity_labels) ? cluster.opportunity_labels.filter((value): value is string => typeof value === "string") : [],
+  };
 }
 
 export function replyConsoleIntent(text: string, activeCandidateId: string | null, repliedStoryId: string | null): ConsoleAction | null {
@@ -139,7 +255,7 @@ export async function answerNaturalLanguage(
   }, dependencies.recentMessageLimit ?? 12);
   return createConversationReply(message, context, {
     canonical_context: dependencies.replyContext
-      ? { ...await dependencies.loadCanonicalContext(thread), brief: null, match: null, source_observation: null, ...dependencies.replyContext }
+      ? { ...await dependencies.loadCanonicalContext(thread), brief: null, match: null, ...dependencies.replyContext }
       : await dependencies.loadCanonicalContext(thread),
     generate: dependencies.generate,
     retrieveHistory: dependencies.retrieveHistory ? () => dependencies.retrieveHistory?.(message, thread) ?? Promise.resolve([]) : undefined,

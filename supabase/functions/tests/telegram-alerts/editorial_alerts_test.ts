@@ -4,6 +4,7 @@ import type { TelegramClient } from "../../_shared/m6/telegram_client.ts";
 
 import {
   evaluateEditorialStoryAlert,
+  editorialAlertMessageMetadata,
   hasCanonicalGrounding,
   materializeEditorialStoryAlerts,
   renderEditorialStoryAlert,
@@ -47,6 +48,13 @@ Deno.test("RISING story crosses threshold once and stays quiet on repeat polling
   const repeat = evaluateEditorialStoryAlert(first.nextState, baseStory(), new Date("2026-09-29T10:10:00.000Z"));
   assert.equal(repeat.event, null);
   assert.equal(repeat.nextState.lastAlertedState, "RISING");
+});
+
+Deno.test("single trend and VERIFIED transitions each materialize one matching event", () => {
+  const now = new Date("2026-09-29T10:00:00.000Z");
+  assert.equal(evaluateEditorialStoryAlert(null, baseStory(), now).event?.eventType, "RISING_STORY");
+  assert.equal(evaluateEditorialStoryAlert(null, baseStory({ trendState: "BREAKING", trendScore: 96 }), now).event?.eventType, "BREAKING_STORY");
+  assert.equal(evaluateEditorialStoryAlert(null, baseStory({ trendState: null, trendScore: 0, groundingStatus: "VERIFIED", newsEligible: true }), now).event?.eventType, "VERIFIED_STORY");
 });
 
 Deno.test("state transition is cooldown-protected and VERIFIED is a separate one-time event", () => {
@@ -151,9 +159,9 @@ Deno.test("sent alert stays delivered when canonical message persistence fails",
   assert.equal(failed, 0);
 });
 
-Deno.test("simultaneous BREAKING and VERIFIED transitions persist both distinct events", async () => {
+Deno.test("simultaneous BREAKING and VERIFIED transitions emit one VERIFIED event and preserve trend state", async () => {
   const inserted: string[] = [];
-  let state: StoryAlertStateRecord | null = null;
+  let state: StoryAlertStateRecord = emptyState();
   const repository: EditorialStoryAlertRepository = {
     threadId: "thread-1",
     async listStories() { return [baseStory({ trendState: "BREAKING", trendScore: 96, groundingStatus: "VERIFIED", newsEligible: true })]; },
@@ -161,9 +169,30 @@ Deno.test("simultaneous BREAKING and VERIFIED transitions persist both distinct 
     async saveState(next) { state = next; },
     async insertEvent(event) { inserted.push(event.eventType); return true; },
   };
-  assert.equal(await materializeEditorialStoryAlerts(new Date("2026-09-29T10:00:00.000Z"), repository), 2);
-  assert.deepEqual(inserted.sort(), ["BREAKING_STORY", "VERIFIED_STORY"]);
+  assert.equal(await materializeEditorialStoryAlerts(new Date("2026-09-29T10:00:00.000Z"), repository), 1);
+  assert.deepEqual(inserted, ["VERIFIED_STORY"]);
+  assert.equal(state.observedState, "BREAKING");
+  assert.equal(state.lastAlertedState, "BREAKING");
+  assert.equal(state.verifiedNotified, true);
   assert.equal(await materializeEditorialStoryAlerts(new Date("2026-09-29T10:10:00.000Z"), repository), 0);
+});
+
+Deno.test("simultaneous RISING and VERIFIED transitions emit one VERIFIED event and do not resend trend", async () => {
+  const inserted: string[] = [];
+  let state: StoryAlertStateRecord = emptyState();
+  const repository: EditorialStoryAlertRepository = {
+    threadId: "thread-1",
+    async listStories() { return [baseStory({ trendState: "RISING", trendScore: 82, groundingStatus: "VERIFIED", newsEligible: true })]; },
+    async getState() { return state; },
+    async saveState(next) { state = next; },
+    async insertEvent(event) { inserted.push(event.eventType); return true; },
+  };
+  assert.equal(await materializeEditorialStoryAlerts(new Date("2026-09-29T10:00:00.000Z"), repository), 1);
+  assert.deepEqual(inserted, ["VERIFIED_STORY"]);
+  assert.equal(state.observedState, "RISING");
+  assert.equal(state.lastAlertedState, "RISING");
+  assert.equal(await materializeEditorialStoryAlerts(new Date("2026-09-29T10:10:00.000Z"), repository), 0);
+  assert.deepEqual(inserted, ["VERIFIED_STORY"]);
 });
 
 Deno.test("news eligibility alone never invites carousel generation without VERIFIED grounding", () => {
@@ -201,18 +230,39 @@ Deno.test("materialized alert payload carries canonical story, candidate, and so
   const repository: EditorialStoryAlertRepository = {
     threadId: "thread-1",
     async listStories() {
-      return [baseStory({ candidateId: "candidate-1", primarySourceName: "Yahoo Sports", primarySourceUrl: "https://sports.yahoo.com/story", primarySourceObservationId: "observation-1", primaryClaimId: "claim-1", groundingStatus: "VERIFIED", newsEligible: true, groundingEvidenceAvailable: true })];
+      return [baseStory({ candidateId: "candidate-1", primarySourceName: "Yahoo Sports", primarySourceUrl: "https://sports.yahoo.com/story", primarySourceObservationId: "observation-1", primaryClaimId: "claim-1", groundingStatus: "VERIFIED", newsEligible: true, groundingEvidenceAvailable: true, rankingDate: "2026-09-29" })];
     },
     async getState() { return null; },
     async saveState() { return undefined; },
     async insertEvent(event) { stored.push(event.payload); return true; },
   };
   await materializeEditorialStoryAlerts(new Date("2026-09-29T10:00:00.000Z"), repository);
-  assert.equal(stored.length, 2);
+  assert.equal(stored.length, 1);
   const payload = stored[0]!;
   assert.equal(payload.story_cluster_id, "story-1");
   assert.equal(payload.candidate_id, "candidate-1");
   assert.equal(payload.primary_source_name, "Yahoo Sports");
   assert.equal(payload.primary_source_url, "https://sports.yahoo.com/story");
   assert.equal(payload.primary_source_observation_id, "observation-1");
+  assert.equal(payload.ranking_date, "2026-09-29");
+  assert.equal(payload.ranking_version, "m8-c-v1");
+});
+
+Deno.test("editorial alert message metadata preserves ranking identity", () => {
+  assert.deepEqual(editorialAlertMessageMetadata("VERIFIED_STORY", {
+    story_cluster_id: "story-1",
+    candidate_id: "candidate-1",
+    primary_source_observation_id: "observation-1",
+    ranking_date: "2026-09-29",
+    ranking_version: "m8-v1",
+  }), {
+    message_kind: "EDITORIAL_STORY_ALERT",
+    story_cluster_id: "story-1",
+    candidate_id: "candidate-1",
+    primary_source_observation_id: "observation-1",
+    event_type: "VERIFIED_STORY",
+    ranking_date: "2026-09-29",
+    ranking_version: "m8-v1",
+    evidence_ids: [],
+  });
 });

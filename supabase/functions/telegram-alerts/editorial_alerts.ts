@@ -16,6 +16,7 @@ export interface EditorialStoryAlertRow {
   readonly lastSeenAt: string;
   readonly groundingStatus: string;
   readonly newsEligible: boolean;
+  readonly rankingDate?: string | null;
   readonly rankingVersion: string | null;
   readonly candidateId?: string | null;
   readonly primarySourceName?: string | null;
@@ -96,7 +97,6 @@ export interface RenderedEditorialStoryAlert {
 export interface EditorialStoryAlertDecision {
   readonly nextState: StoryAlertStateRecord;
   readonly event: EditorialStoryAlertEvent | null;
-  readonly additionalEvent: EditorialStoryAlertEvent | null;
 }
 
 const COOLDOWN_MS = 60 * 60 * 1000;
@@ -152,6 +152,7 @@ function eventFor(type: EditorialStoryAlertType, story: EditorialStoryAlertRow):
       last_seen_at: story.lastSeenAt,
       grounding_status: story.groundingStatus,
       news_eligible: story.newsEligible && story.groundingEvidenceAvailable !== false,
+      ranking_date: story.rankingDate ?? null,
       ranking_version: story.rankingVersion,
       primary_source_name: story.primarySourceName ?? null,
       primary_source_url: story.primarySourceUrl ?? null,
@@ -162,6 +163,20 @@ function eventFor(type: EditorialStoryAlertType, story: EditorialStoryAlertRow):
   };
 }
 
+export function editorialAlertMessageMetadata(eventType: string, payload: Record<string, unknown>): Record<string, unknown> {
+  const text = (value: unknown): string | null => typeof value === "string" && value.trim() !== "" ? value : null;
+  return {
+    message_kind: "EDITORIAL_STORY_ALERT",
+    story_cluster_id: text(payload.story_cluster_id) ?? text(payload.story_id),
+    candidate_id: text(payload.candidate_id),
+    primary_source_observation_id: text(payload.primary_source_observation_id),
+    event_type: eventType,
+    ranking_date: text(payload.ranking_date),
+    ranking_version: text(payload.ranking_version),
+    evidence_ids: [],
+  };
+}
+
 export function evaluateEditorialStoryAlert(
   previous: StoryAlertStateRecord | null,
   story: EditorialStoryAlertRow,
@@ -169,22 +184,25 @@ export function evaluateEditorialStoryAlert(
 ): EditorialStoryAlertDecision {
   const prior = previous ?? defaultState(story.storyId);
   const nextObservedState = alertState(story, now);
-  let event: EditorialStoryAlertEvent | null = null;
-  let additionalEvent: EditorialStoryAlertEvent | null = null;
+  const trendTransition = nextObservedState !== null && nextObservedState !== prior.observedState;
+  const verifiedTransition = story.groundingStatus === "VERIFIED" && !prior.verifiedNotified;
+  let trendEvent: EditorialStoryAlertEvent | null = null;
   let lastAlertedState = prior.lastAlertedState;
   let lastAlertedAt = prior.lastAlertedAt;
 
-  if (nextObservedState && nextObservedState !== prior.observedState && !withinCooldown(prior, now)) {
+  if (trendTransition && !withinCooldown(prior, now)) {
     const type: EditorialStoryAlertType = nextObservedState === "BREAKING" ? "BREAKING_STORY" : "RISING_STORY";
-    event = eventFor(type, story);
+    trendEvent = eventFor(type, story);
     lastAlertedState = nextObservedState;
     lastAlertedAt = now.toISOString();
   }
 
-  if (story.groundingStatus === "VERIFIED" && !prior.verifiedNotified) {
-    additionalEvent = event;
-    event = eventFor("VERIFIED_STORY", story);
+  if (trendTransition && verifiedTransition) {
+    lastAlertedState = nextObservedState;
+    lastAlertedAt = now.toISOString();
   }
+
+  const event = verifiedTransition ? eventFor("VERIFIED_STORY", story) : trendEvent;
 
   return {
     nextState: {
@@ -195,7 +213,6 @@ export function evaluateEditorialStoryAlert(
       verifiedNotified: prior.verifiedNotified || story.groundingStatus === "VERIFIED",
     },
     event,
-    additionalEvent,
   };
 }
 
@@ -241,8 +258,8 @@ export async function materializeEditorialStoryAlerts(now: Date, repository: Edi
   let created = 0;
   for (const story of await repository.listStories(now)) {
     const decision = evaluateEditorialStoryAlert(await repository.getState(story.storyId), story, now);
-    for (const event of [decision.event, decision.additionalEvent]) {
-      if (!event) continue;
+    const event = decision.event;
+    if (event) {
       const inserted = await repository.insertEvent({ threadId: repository.threadId, storyId: event.storyId, candidateId: event.candidateId ?? null, eventType: event.eventType, eventFingerprint: event.eventFingerprint, payload: event.payload });
       if (inserted) created += 1;
     }

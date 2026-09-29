@@ -3,7 +3,7 @@ import { createTelegramClient } from "../_shared/m6/telegram_client.ts";
 import { createEditorialConsoleRepository } from "../_shared/m6/editorial_console.ts";
 import { createTelegramAlertsHandler } from "./handler.ts";
 import { materializeEditorialJobDeadAlerts } from "./dead_alerts.ts";
-import { hasCanonicalGrounding, materializeEditorialStoryAlerts, selectPrimaryEditorialEvidence, type CanonicalEditorialEvidence, type EditorialStoryAlertRepository, type EditorialStoryAlertRow, type StoryAlertStateRecord } from "./editorial_alerts.ts";
+import { editorialAlertMessageMetadata, hasCanonicalGrounding, materializeEditorialStoryAlerts, selectPrimaryEditorialEvidence, type CanonicalEditorialEvidence, type EditorialStoryAlertRepository, type EditorialStoryAlertRow, type StoryAlertStateRecord } from "./editorial_alerts.ts";
 
 const secret = Deno.env.get("TELEGRAM_AGENT_INVOKE_SECRET") ?? "";
 const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
@@ -132,6 +132,7 @@ async function createEditorialStoryAlertRepository(now: Date): Promise<Editorial
       lastSeenAt,
       groundingStatus: canonical.grounding_status === "VERIFIED" && grounded ? "VERIFIED" : canonical.grounding_status === "VERIFIED" ? "INSUFFICIENT" : canonical.grounding_status,
       newsEligible: canonical.news_eligible === true && grounded,
+      rankingDate,
       rankingVersion: text(ranking?.ranking_version),
       candidateId: canonical.candidate_id,
       primarySourceName: primary?.source_name ?? null,
@@ -200,14 +201,7 @@ async function runAlerts() {
           role: "ASSISTANT",
           message_type: "ALERT",
           content: rendered.text,
-          metadata: {
-            message_kind: "EDITORIAL_STORY_ALERT",
-            story_cluster_id: storyClusterId,
-            candidate_id: candidateId,
-            primary_source_observation_id: text(payload.primary_source_observation_id),
-            event_type: alert.event_type,
-            evidence_ids: [],
-          },
+          metadata: editorialAlertMessageMetadata(alert.event_type, { ...payload, story_cluster_id: storyClusterId, candidate_id: candidateId }),
         }),
       }, "app_private");
     },

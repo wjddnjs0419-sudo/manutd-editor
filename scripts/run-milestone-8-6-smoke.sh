@@ -12,6 +12,7 @@ echo "Running M8.6 deterministic function tests"
   tests/ground-claims \
   tests/orchestration-worker \
   tests/telegram-alerts \
+  tests/telegram-agent \
   tests/m6)
 
 echo "Running M8.6 architecture validators"

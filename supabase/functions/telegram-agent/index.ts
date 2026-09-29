@@ -14,7 +14,7 @@ import { canHandleStaleConsoleCallback, dispatchEditorialConsoleAction, parseCon
 import { invokeCanonicalCarousel } from "../_shared/m6/console_generation.ts";
 import { createEditorialJobQueue } from "../orchestration-worker/queue_client.ts";
 import { createTelegramAgentHandler } from "./handler.ts";
-import { answerNaturalLanguage, parseReplyMessageId, replyConsoleIntent, resolveReplyReference, type CanonicalConversationContext } from "./conversation.ts";
+import { answerNaturalLanguage, canonicalStoryFromReplyContext, parseReplyMessageId, replyConsoleIntent, resolveReplyContext, resolveReplyReference, type CanonicalConversationContext, type ReplyContext } from "./conversation.ts";
 import { enqueueManualDiscovery, type ManualDiscoveryPayload } from "./manual_discovery.ts";
 import type { StoredCreativeBrief } from "../creative-generation/repository.ts";
 import type { CreativeBriefSlide } from "../creative-generation/types.ts";
@@ -79,23 +79,34 @@ async function loadCanonicalContext(state: RetrievalThreadState): Promise<Canoni
   return { candidate, source_observation: sourceObservation, brief, match };
 }
 
-async function loadReplyContext(threadId: string, messageId: number): Promise<{ storyId: string | null; context: NonNullable<Parameters<typeof answerNaturalLanguage>[2]["replyContext"]> } | null> {
-  const reference = await resolveReplyReference(threadId, messageId, async (id, telegramMessageId) =>
-    await rowById(`/rest/v1/telegram_messages?select=role,metadata&thread_id=eq.${encodeURIComponent(id)}&telegram_message_id=eq.${telegramMessageId}&role=eq.ASSISTANT&order=created_at.desc&limit=1`, "app_private")
-  );
-  if (!reference) return null;
-  const candidate = reference.candidate_id ? await rowById(`/rest/v1/content_candidates?select=*&id=eq.${encodeURIComponent(reference.candidate_id)}&limit=1`) : null;
-  const storyId = reference.story_cluster_id ?? (typeof candidate?.story_cluster_id === "string" ? candidate.story_cluster_id : null);
-  const story = storyId ? await rowById(`/rest/v1/story_clusters?select=*&id=eq.${encodeURIComponent(storyId)}&limit=1`) : null;
-  if (!story || !storyId) return null;
-  const canonical = (await consoleRepository.listCanonicalStories(businessDate(new Date(), "Asia/Seoul"))).find((value) => value.id === storyId);
-  if (!canonical) return null;
-  const resolvedCandidate = candidate ?? (canonical.candidate_id ? { id: canonical.candidate_id, story_cluster_id: storyId } : null);
+async function loadReplyRanking(storyId: string, rankingDate: string | null, rankingVersion: string | null): Promise<Record<string, unknown> | null> {
+  const filters = [
+    `story_cluster_id=eq.${encodeURIComponent(storyId)}`,
+    ...(rankingDate ? [`ranking_date=eq.${encodeURIComponent(rankingDate)}`] : []),
+    ...(rankingVersion ? [`ranking_version=eq.${encodeURIComponent(rankingVersion)}`] : []),
+  ];
+  const order = rankingDate ? "&order=calculated_at.desc" : "&order=ranking_date.desc,calculated_at.desc";
+  return await rowById(`/rest/v1/editorial_rankings?select=story_cluster_id,ranking_date,ranking_version,rank,editorial_score,information_gap_score,fact_grounding_score,discovery_audience_signal_score,match_context_score,freshness_score,grounding_status,news_eligible&${filters.join("&")}${order}&limit=1`, "app_private");
+}
+
+async function loadReplySourceObservation(observationId: string): Promise<Record<string, unknown> | null> {
+  const observation = await rowById(`/rest/v1/source_observations?select=id,information_source_id,canonical_url,title,editorial_role&id=eq.${encodeURIComponent(observationId)}&limit=1`, "app_private");
+  if (!observation) return null;
+  const sourceId = typeof observation.information_source_id === "string" ? observation.information_source_id : null;
+  const source = sourceId ? await rowById(`/rest/v1/information_sources?select=canonical_name&id=eq.${encodeURIComponent(sourceId)}&limit=1`) : null;
+  return {
+    ...observation,
+    source_name: typeof source?.canonical_name === "string" ? source.canonical_name : typeof observation.title === "string" ? observation.title : null,
+    canonical_url: typeof observation.canonical_url === "string" ? observation.canonical_url : null,
+  };
+}
+
+async function loadReplyEvidence(storyId: string, evidenceIds: readonly string[]): Promise<{ evidence: readonly Record<string, unknown>[]; source_observation: Record<string, unknown> | null }> {
   const [claimsValue, claimEvidenceValue, observationsValue, sourcesValue] = await Promise.all([
     rest(`/rest/v1/story_claims?select=id,story_cluster_id,claim_text,grounding_status&story_cluster_id=eq.${encodeURIComponent(storyId)}&limit=100`, {}, "app_private").catch(() => []),
     rest("/rest/v1/claim_evidence?select=claim_id,source_observation_id,editorial_role,evidence_text,is_grounding&limit=5000", {}, "app_private").catch(() => []),
     rest("/rest/v1/source_observations?select=id,information_source_id,canonical_url,title,editorial_role&limit=5000", {}, "app_private").catch(() => []),
-    rest("/rest/v1/information_sources?select=id,canonical_name&limit=500", {}).catch(() => []),
+    rest("/rest/v1/information_sources?select=id,canonical_name&limit=500").catch(() => []),
   ]);
   const claims = Array.isArray(claimsValue) ? claimsValue.filter(isObject) : [];
   const claimIds = new Set(claims.flatMap((value) => typeof value.id === "string" ? [value.id] : []));
@@ -121,21 +132,25 @@ async function loadReplyContext(threadId: string, messageId: number): Promise<{ 
       source_name: sourceName ?? observation.title ?? "M8 근거",
       canonical_url: observation.canonical_url ?? null,
     } satisfies Record<string, unknown>];
-  }).filter((value) => reference.evidence_ids.length === 0 || reference.evidence_ids.includes(String(value.claim_id)) || reference.evidence_ids.includes(String(value.id)));
+  }).filter((value) => evidenceIds.length === 0 || evidenceIds.includes(String(value.claim_id)) || evidenceIds.includes(String(value.id)));
   const representative = evidence.find((value) => value.is_grounding === true && (value.editorial_role === "FACT_PRIMARY" || value.editorial_role === "FACT_INDEPENDENT")) ?? evidence.find((value) => value.editorial_role === "FACT_PRIMARY" || value.editorial_role === "FACT_INDEPENDENT") ?? evidence[0] ?? null;
   const representativeObservation = representative && typeof representative.source_observation_id === "string" ? observations.get(representative.source_observation_id) ?? null : null;
   const sourceObservation = representativeObservation ? { ...representativeObservation, source_name: representative?.source_name ?? null, canonical_url: representative?.canonical_url ?? null } : representative ? { id: representative.source_observation_id, source_name: representative.source_name, canonical_url: representative.canonical_url } : null;
-  const editorialRanking = {
-    story_cluster_id: canonical.id,
-    ranking_date: canonical.ranking_date,
-    ranking_version: canonical.ranking_version,
-    rank: canonical.rank,
-    editorial_score: canonical.editorial_score,
-    information_gap_score: canonical.information_gap_score,
-    grounding_status: canonical.grounding_status,
-    news_eligible: canonical.news_eligible,
-  };
-  return { storyId, context: { story_cluster: story, candidate: resolvedCandidate, editorial_ranking: editorialRanking, source_observation: sourceObservation, evidence } };
+  return { evidence, source_observation: sourceObservation };
+}
+
+async function loadReplyContext(threadId: string, messageId: number): Promise<{ storyId: string; context: ReplyContext } | null> {
+  const reference = await resolveReplyReference(threadId, messageId, async (id, telegramMessageId) =>
+    await rowById(`/rest/v1/telegram_messages?select=role,metadata&thread_id=eq.${encodeURIComponent(id)}&telegram_message_id=eq.${telegramMessageId}&role=eq.ASSISTANT&order=created_at.desc&limit=1`, "app_private")
+  );
+  if (!reference) return null;
+  return await resolveReplyContext(reference, {
+    loadStory: async (storyId) => await rowById(`/rest/v1/story_clusters?select=*&id=eq.${encodeURIComponent(storyId)}&limit=1`),
+    loadCandidate: async (candidateId) => await rowById(`/rest/v1/content_candidates?select=*&id=eq.${encodeURIComponent(candidateId)}&limit=1`),
+    loadEditorialRanking: loadReplyRanking,
+    loadSourceObservation: loadReplySourceObservation,
+    loadEvidence: loadReplyEvidence,
+  });
 }
 
 function historicalRecord(kind: HistoricalContext["kind"], value: Record<string, unknown>): HistoricalContext | null {
@@ -389,13 +404,16 @@ async function selectCanonicalDraft(thread: ThreadRow, token: string): Promise<v
   await rest(`/rest/v1/creative_briefs?id=eq.${encodeURIComponent(briefId)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ status: "SELECTED", selected_at: new Date().toISOString() }) });
 }
 
-function consoleDependencies(thread: ThreadRow) {
+function consoleDependencies(thread: ThreadRow, replyContext: ReplyContext | null = null) {
   return {
     listStories: async (mode: "recommended" | "all", page: number) => paginateStories(await currentConsoleStories(thread, mode), page),
     listTrendingStories: async (page: number) => paginateStories(await currentTrendingStories(), page),
     discoverMore: async () => await invokeDiscovery(thread.id),
     refreshDiscovery: async () => await invokeDiscovery(thread.id),
-    getStoryByToken: async (token: string) => await resolveConsoleStory(thread, token),
+    getStoryByToken: async (token: string) => {
+      if (replyContext && replyContext.story_cluster?.id === token) return canonicalStoryFromReplyContext(replyContext);
+      return await resolveConsoleStory(thread, token);
+    },
     skipStory: async (story: CanonicalStory) => await skipCanonicalStory(thread, story),
     generateCarousel: async (story: CanonicalStory) => await generateCanonicalCarousel(story),
     selectDraft: async (token: string) => await selectCanonicalDraft(thread, token),
@@ -420,7 +438,7 @@ async function sendConsoleView(thread: ThreadRow, incoming: TelegramUpdate, stat
   return next;
 }
 
-async function runConsoleAction(thread: ThreadRow, incoming: TelegramUpdate, action: ConsoleAction, repliedStoryId: string | null = null): Promise<{ status: string; reply: string }> {
+async function runConsoleAction(thread: ThreadRow, incoming: TelegramUpdate, action: ConsoleAction, repliedStoryId: string | null = null, replyContext: ReplyContext | null = null): Promise<{ status: string; reply: string }> {
   const client = createTelegramClient({ token: botToken });
   const queryId = callbackId(incoming);
   if (queryId) await client.answerCallbackQuery(queryId).catch(() => undefined);
@@ -433,7 +451,7 @@ async function runConsoleAction(thread: ThreadRow, incoming: TelegramUpdate, act
     return { status: "STALE", reply: "이전 화면입니다. 최신 목록을 열어 주세요." };
   }
   const targetState = action.type === "GENERATE_CAROUSEL" && repliedStoryId ? { ...state, story_id: repliedStoryId } : state;
-  const result = await dispatchEditorialConsoleAction(action, { ...targetState, telegram_message_id: incomingMessageId ?? state.telegram_message_id }, consoleDependencies(thread));
+  const result = await dispatchEditorialConsoleAction(action, { ...targetState, telegram_message_id: incomingMessageId ?? state.telegram_message_id }, consoleDependencies(thread, replyContext));
   if (action.type === "GENERATE_CAROUSEL" && repliedStoryId && result.event.status !== "COMPLETED") result.next_state = state;
   await recordConsoleEvent(thread.id, incoming, result.event);
   await sendConsoleView(thread, incoming, result.next_state, result.view);
@@ -580,7 +598,7 @@ async function runAgent(value: unknown): Promise<{ status: string; reply: string
     await sendAndPersist(thread, incoming, reply);
     return { status: "REPLY_STORY_NOT_FOUND", reply };
   }
-  if (consoleIntent) return await runConsoleAction(thread, incoming, consoleIntent, replied?.storyId ?? null);
+  if (consoleIntent) return await runConsoleAction(thread, incoming, consoleIntent, replied?.storyId ?? null, replied?.context ?? null);
   const command = parseCommand(text);
   const config = await loadAgentConfig();
   const provider = Deno.env.get("OPENAI_API_KEY") ? createOpenAIGenerator({ apiKey: Deno.env.get("OPENAI_API_KEY") ?? "", model: typeof config.model_config.conversation_model === "string" ? config.model_config.conversation_model : undefined }) : undefined;
