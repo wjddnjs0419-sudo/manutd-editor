@@ -30,7 +30,7 @@ const base = supabaseUrl.replace(/\/$/u, "");
 const repository = createM6Repository({ supabaseUrl, serviceRoleKey: serviceKey });
 const consoleRepository = createEditorialConsoleRepository({ supabaseUrl, serviceRoleKey: serviceKey });
 const editorialJobQueue = createEditorialJobQueue({ supabaseUrl, serviceKey });
-const manualDiscoveryPayload: ManualDiscoveryPayload = { mode: "GENERAL", search_profile: "MANUAL", max_queries: 24 };
+const manualDiscoveryPayload: ManualDiscoveryPayload = { mode: "GENERAL", search_profile: "MANUAL", max_queries: 8 };
 
 function profileHeaders(profile: string): Record<string, string> { return { apikey: serviceKey, authorization: `Bearer ${serviceKey}`, accept: "application/json", "accept-profile": profile, "content-profile": profile }; }
 async function rest(path: string, init: RequestInit = {}, profile?: string): Promise<unknown> {

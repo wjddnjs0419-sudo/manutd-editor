@@ -389,9 +389,13 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
       const latestBriefByCandidate = new Map<string, string>();
       for (const value of array(briefs)) if (typeof value.candidate_id === "string" && typeof value.id === "string" && !latestBriefByCandidate.has(value.candidate_id)) latestBriefByCandidate.set(value.candidate_id, value.id);
       const trendByCluster = new Map<string, JsonObject>();
+      const trendByFingerprint = new Map<string, JsonObject>();
       for (const value of array(trendSnapshots)) {
         const key = typeof value.story_cluster_id === "string" ? value.story_cluster_id : typeof value.cluster_key === "string" ? value.cluster_key : null;
         if (key && !trendByCluster.has(key)) trendByCluster.set(key, value);
+        const inputSnapshot = object(value.input_snapshot) ? value.input_snapshot : {};
+        const fingerprints = Array.isArray(inputSnapshot.content_fingerprints) ? inputSnapshot.content_fingerprints.filter((item): item is string => typeof item === "string" && item.trim() !== "") : [];
+        for (const fingerprint of fingerprints) if (!trendByFingerprint.has(fingerprint)) trendByFingerprint.set(fingerprint, value);
       }
 
       const inputs: EditorialStoryInput[] = [];
@@ -404,7 +408,9 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
         const informationGap = number(ranking.information_gap_score) ?? 0;
         const audienceSignal = number(ranking.discovery_audience_signal_score) ?? 0;
         const candidateId = candidateByCluster.get(ranking.story_cluster_id) ?? null;
-        const trend = trendByCluster.get(ranking.story_cluster_id);
+        const signature = object(cluster.signature_json) ? cluster.signature_json : {};
+        const fingerprints = Array.isArray(signature.content_fingerprints) ? signature.content_fingerprints.filter((item): item is string => typeof item === "string" && item.trim() !== "") : [];
+        const trend = trendByCluster.get(ranking.story_cluster_id) ?? fingerprints.map((fingerprint) => trendByFingerprint.get(fingerprint)).find((value): value is JsonObject => value !== undefined);
         const opportunityLabels = Array.isArray(trend?.opportunity_labels) ? trend.opportunity_labels.filter((value): value is string => typeof value === "string") : [];
         inputs.push({
           story_cluster_id: ranking.story_cluster_id,

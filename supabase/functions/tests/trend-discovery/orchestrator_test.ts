@@ -98,6 +98,44 @@ Deno.test("provider failures are isolated and successful observations still prod
   assertEquals(repo.snapshots[0]?.sourceCount, 1);
 });
 
+Deno.test("provider and query collection is concurrent but bounded", async () => {
+  const repo = repository();
+  let active = 0;
+  let maxActive = 0;
+  let calls = 0;
+  const providers = [0, 1].map((index): DiscoveryProvider => ({
+    providerId: `provider-${index}`,
+    sourceRole: "FACT_INDEPENDENT",
+    platform: "WEB",
+    discover: async (value) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+      calls += 1;
+      return [observation({
+        providerId: `provider-${index}`,
+        externalId: `${index}-${value.queryId}`,
+        contentFingerprint: `${index}-${value.queryId}`,
+        title: `Manchester United ${value.queryId}`,
+        discoveryQueryId: value.queryId,
+      })];
+    },
+  }));
+
+  const result = await runTrendDiscovery({
+    asOf: "2026-09-27T12:00:00.000Z",
+    maxQueries: 12,
+    providers,
+    repository: repo,
+  });
+
+  assertEquals(calls, 24);
+  assert(maxActive > 1);
+  assert(maxActive <= 8);
+  assertEquals(result.observationCount, 24);
+});
+
 Deno.test("repeating a discovery run does not inflate observations or stories", async () => {
   const repo = repository();
   const providers = [provider()];

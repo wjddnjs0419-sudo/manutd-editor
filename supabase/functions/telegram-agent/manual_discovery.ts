@@ -8,7 +8,7 @@ export interface ManualDiscoveryResult {
 export interface ManualDiscoveryPayload {
   readonly mode: "GENERAL";
   readonly search_profile: "MANUAL";
-  readonly max_queries: 24;
+  readonly max_queries: 8;
 }
 
 export async function enqueueManualDiscovery(

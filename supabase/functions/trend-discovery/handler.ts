@@ -25,7 +25,7 @@ async function equal(left: string, right: string): Promise<boolean> {
 
 export function createTrendDiscoveryHandler(dependencies: TrendDiscoveryHandlerDependencies): (request: Request) => Promise<Response> {
   if (!dependencies.collectorSecret.trim()) throw new Error("Collector secret is required");
-  const defaultMaxQueries = dependencies.defaultMaxQueries ?? 24;
+  const defaultMaxQueries = dependencies.defaultMaxQueries ?? 8;
   const now = dependencies.now ?? (() => new Date());
   return async (request) => {
     if (request.method !== "POST") return Response.json({ error: { code: "METHOD_NOT_ALLOWED", message: "POST required" } }, { status: 405 });

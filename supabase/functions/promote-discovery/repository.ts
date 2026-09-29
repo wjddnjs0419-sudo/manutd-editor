@@ -149,7 +149,7 @@ export function createDiscoveryPromotionRepository(options: RepositoryOptions): 
       await request(`/rest/v1/discovery_observations?id=eq.${encodeURIComponent(observationId)}&story_cluster_id=is.null`, { method: "PATCH", headers: { prefer: "return=minimal" }, body: JSON.stringify({ story_cluster_id: storyClusterId }) }, "app_private");
     },
     async ensureSourceObservation(item) {
-      const sourceQuery = new URLSearchParams({ select: "id", canonical_name: `eq.${encodeURIComponent(item.sourceCanonicalName)}`, limit: "1" });
+      const sourceQuery = new URLSearchParams({ select: "id", canonical_name: `eq.${item.sourceCanonicalName}`, limit: "1" });
       let source = await first(`/rest/v1/information_sources?${sourceQuery}`);
       if (!source || typeof source.id !== "string") {
         source = await first("/rest/v1/information_sources", { method: "POST", headers: { prefer: "return=representation" }, body: JSON.stringify({ canonical_name: item.sourceCanonicalName, entity_type: "MEDIA_OUTLET", aliases: [], website_url: new URL(item.canonicalUrl).origin, reliability_score: 0, reliability_rationale: "Discovery provider; not a verification source.", editorial_role: item.sourceRole, active: true }) });
