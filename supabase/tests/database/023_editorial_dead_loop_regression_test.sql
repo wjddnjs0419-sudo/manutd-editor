@@ -37,6 +37,9 @@ select is(
   'repeating the same schedule bucket stores one logical job'
 );
 
+-- Keep the scheduler idempotency fixture from being selected by later queue tests.
+delete from app_private.editorial_jobs;
+
 select public.enqueue_editorial_job(
   'FIXTURE_SYNC',
   '{}',
