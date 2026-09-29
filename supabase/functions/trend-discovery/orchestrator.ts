@@ -3,12 +3,14 @@ import { expandDiscoveryQueries } from "./query_expansion.ts";
 import { calculateManutdRelevanceScore, isTrendRelevant } from "./relevance.ts";
 import { calculateTrendScore, deriveOpportunityLabels, deriveTrendState, normalizedEngagementScore, trendSignalsFromObservations } from "./scoring.ts";
 import type { TrendDiscoveryRepository } from "./repository.ts";
-import type { DiscoveryEntityContext, DiscoveryMode, DiscoveryObservation, DiscoveryProvider, DiscoveryRunSummary, ProviderRunStatus, TrendSnapshot } from "./types.ts";
+import type { DiscoveryEntityContext, DiscoveryMode, DiscoveryObservation, DiscoveryProvider, DiscoveryRunSummary, DiscoverySearchProfile, ProviderRunStatus, TrendSnapshot } from "./types.ts";
 
 export interface RunTrendDiscoveryOptions {
   readonly asOf?: Date | string;
   readonly mode?: DiscoveryMode;
+  readonly searchProfile?: DiscoverySearchProfile;
   readonly entityContext?: DiscoveryEntityContext;
+  readonly resolveEntityContext?: (asOf: Date | string) => Promise<DiscoveryEntityContext>;
   readonly maxQueries?: number;
   readonly providers: readonly DiscoveryProvider[];
   readonly repository: TrendDiscoveryRepository;
@@ -47,8 +49,10 @@ export async function runTrendDiscovery(options: RunTrendDiscoveryOptions): Prom
   const startedAt = safeNow(now);
   const asOf = options.asOf ?? startedAt;
   const mode = options.mode ?? "GENERAL";
-  const runId = await options.repository.createRun({ mode, startedAt: startedAt.toISOString() });
-  const queries = expandDiscoveryQueries({ asOf, mode, entityContext: options.entityContext, maxQueries: options.maxQueries });
+  const searchProfile = options.searchProfile ?? "MANUAL";
+  const entityContext = options.entityContext ?? (options.resolveEntityContext ? await options.resolveEntityContext(asOf) : undefined);
+  const runId = await options.repository.createRun({ mode, startedAt: startedAt.toISOString(), searchProfile });
+  const queries = expandDiscoveryQueries({ asOf, mode, searchProfile, entityContext, maxQueries: options.maxQueries });
   if (queries.length === 0 || options.providers.length === 0) {
     const summary: DiscoveryRunSummary = { runId, status: "NOOP", mode, queryCount: queries.length, observationCount: 0, newObservationCount: 0, newStoryCount: 0, updatedStoryCount: 0, providerStatuses: [], durationMs: Math.max(0, safeNow(now).getTime() - startedAt.getTime()) };
     await options.repository.completeRun(runId, summary);
@@ -121,7 +125,7 @@ export async function runTrendDiscovery(options: RunTrendDiscoveryOptions): Prom
       sourceCount: cluster.sourceNames.length,
       platformCount: cluster.platforms.length,
       engagementAvailable: scores.engagementAvailable,
-      inputSnapshot: { config_version: "m8.5-v1", query_ids: clusterObservations.map((item) => item.discoveryQueryId), source_roles: cluster.sourceCategories, source_names: cluster.sourceNames, platform_names: cluster.platforms },
+      inputSnapshot: { config_version: "m8.5-v1", query_ids: clusterObservations.map((item) => item.discoveryQueryId), source_roles: cluster.sourceCategories, source_names: cluster.sourceNames, platform_names: cluster.platforms, content_fingerprints: clusterObservations.map((item) => item.contentFingerprint) },
     };
     snapshots.push(snapshot);
     await options.repository.saveSnapshot(snapshot);

@@ -37,6 +37,9 @@ verify_jwt = false
 [functions.trend-discovery]
 verify_jwt = false
 
+[functions.promote-discovery]
+verify_jwt = false
+
 [functions.ground-claims]
 verify_jwt = false
 

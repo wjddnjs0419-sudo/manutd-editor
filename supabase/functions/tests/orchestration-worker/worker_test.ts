@@ -205,8 +205,8 @@ Deno.test("intelligence already_running is safe but does not start priority gene
   assert.deepEqual(queue.completed, ["intelligence-1"]);
 });
 
-Deno.test("source grounding and ranking stages form the Phase B/C chain", async () => {
-  const stages: EditorialJobType[] = ["RUN_INTELLIGENCE", "DISCOVER_SOURCES", "DISCOVER_TRENDS", "GROUND_CLAIMS", "RANK_EDITORIAL"];
+Deno.test("source grounding, promotion, and ranking stages form the Phase B/C chain", async () => {
+  const stages: EditorialJobType[] = ["RUN_INTELLIGENCE", "DISCOVER_SOURCES", "DISCOVER_TRENDS", "PROMOTE_DISCOVERY", "GROUND_CLAIMS", "RANK_EDITORIAL"];
   for (const [index, stage] of stages.entries()) {
     const queue = queueWith([job(`stage-${index}`, stage)]);
     const worker = createOrchestrationWorker({

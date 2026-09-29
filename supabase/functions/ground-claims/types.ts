@@ -5,13 +5,14 @@ export type GroundingRelation = "SUPPORTS" | "CONTRADICTS";
 
 export interface GroundingClaim {
   readonly storyClusterId: string;
-  readonly rawPostId: string;
+  readonly rawPostId: string | null;
+  readonly discoveryObservationId?: string | null;
   readonly claimFingerprint: string;
   readonly subject: string;
   readonly predicate: string;
   readonly object: string;
   readonly claimText: string;
-  readonly origin: "caption" | "image" | "carousel_slide" | "thumbnail";
+  readonly origin: "caption" | "image" | "carousel_slide" | "thumbnail" | "discovery_observation";
   readonly extractionConfidence: number | null;
 }
 

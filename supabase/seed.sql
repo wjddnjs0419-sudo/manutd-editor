@@ -1,6 +1,7 @@
 insert into public.source_accounts (
   username,
   region,
+  monitor_role,
   priority_weight,
   api_supported,
   followers_available,
@@ -11,19 +12,19 @@ insert into public.source_accounts (
   carousel_children_available
 )
 values
-  ('utdreport', 'GLOBAL', 1, true, true, true, true, null, true, true),
-  ('utddistrict', 'GLOBAL', 1, true, true, true, true, null, true, true),
-  ('manunitedzone', 'GLOBAL', 1, true, true, true, true, true, true, true),
-  ('all.man.united', 'GLOBAL', 1, null, null, null, null, null, null, null),
-  ('manutd_daily', 'GLOBAL', 1, null, null, null, null, null, null, null),
-  ('mufc_news.20', 'GLOBAL', 1, null, null, null, null, null, null, null),
-  ('manchesterunited_central', 'GLOBAL', 1, null, null, null, null, null, null, null),
-  ('mufc_gossip_', 'KR', 1, null, null, null, null, null, null, null),
-  ('todayfootball', 'KR', 1, null, null, null, null, null, null, null),
-  ('footballoop.mag', 'KR', 1, null, null, null, null, null, null, null)
+  ('manutd', 'GLOBAL', 'OFFICIAL', 1, null, null, null, null, null, null, null),
+  ('manview_mufc', 'KR', 'COMPETITOR', 1, null, null, null, null, null, null, null),
+  ('m4nligan', 'KR', 'COMPETITOR', 1, null, null, null, null, null, null, null),
+  ('manchreds', 'KR', 'COMPETITOR', 1, null, null, null, null, null, null, null),
+  ('jrny_mnu', 'KR', 'COMPETITOR', 1, null, null, null, null, null, null, null),
+  ('otsemate', 'KR', 'COMPETITOR', 1, null, null, null, null, null, null, null),
+  ('man_sa_nam_', 'KR', 'COMPETITOR', 1, null, null, null, null, null, null, null),
+  ('mufc_gossip_', 'KR', 'COMPETITOR', 1, null, null, null, null, null, null, null),
+  ('manpogki', 'KR', 'COMPETITOR', 1, null, null, null, null, null, null, null)
 on conflict (username) do update
 set
   region = excluded.region,
+  monitor_role = excluded.monitor_role,
   priority_weight = excluded.priority_weight,
   api_supported = excluded.api_supported,
   followers_available = excluded.followers_available,
@@ -48,7 +49,7 @@ values
     'Manchester United',
     'CLUB',
     array['Man Utd', 'MUFC', '맨체스터 유나이티드', '맨유'],
-    'manchesterunited',
+    'manutd',
     'https://www.manutd.com',
     10,
     'Official club source for club announcements and first-party information.',
@@ -104,6 +105,54 @@ set
   reliability_rationale = excluded.reliability_rationale,
   editorial_role = excluded.editorial_role,
   active = true;
+
+insert into app_private.tracked_entities (
+  entity_type,
+  canonical_name,
+  aliases,
+  active,
+  tracking_tier,
+  national_team,
+  is_injured
+)
+values
+  ('PLAYER', 'Senne Lammens', array[]::text[], true, 'FIRST_TEAM', null, false),
+  ('PLAYER', 'Karl Darlow', array[]::text[], true, 'FIRST_TEAM', null, false),
+  ('PLAYER', 'Tom Heaton', array[]::text[], true, 'FIRST_TEAM', 'England', false),
+  ('PLAYER', 'Dermot Mee', array[]::text[], true, 'FIRST_TEAM', null, false),
+  ('PLAYER', 'Harry Amass', array[]::text[], true, 'FIRST_TEAM', null, false),
+  ('PLAYER', 'Patrick Dorgu', array['Patrick Chinazaekepere Dorgu'], true, 'FIRST_TEAM', null, false),
+  ('PLAYER', 'Diogo Dalot', array[]::text[], true, 'FIRST_TEAM', 'Portugal', false),
+  ('PLAYER', 'Matthijs de Ligt', array['De Ligt'], true, 'FIRST_TEAM', 'Netherlands', false),
+  ('PLAYER', 'Ayden Heaven', array[]::text[], true, 'FIRST_TEAM', null, false),
+  ('PLAYER', 'Harry Maguire', array[]::text[], true, 'FIRST_TEAM', 'England', false),
+  ('PLAYER', 'Lisandro Martinez', array['Lisandro Martínez'], true, 'FIRST_TEAM', 'Argentina', false),
+  ('PLAYER', 'Noussair Mazraoui', array[]::text[], true, 'FIRST_TEAM', 'Morocco', false),
+  ('PLAYER', 'Luke Shaw', array[]::text[], true, 'FIRST_TEAM', 'England', false),
+  ('PLAYER', 'Leny Yoro', array[]::text[], true, 'FIRST_TEAM', 'France', false),
+  ('PLAYER', 'Carlos Baleba', array[]::text[], true, 'FIRST_TEAM', 'Cameroon', false),
+  ('PLAYER', 'Bruno Fernandes', array[]::text[], true, 'FIRST_TEAM', 'Portugal', false),
+  ('PLAYER', 'Jack Fletcher', array[]::text[], true, 'FIRST_TEAM', 'England', false),
+  ('PLAYER', 'Tyler Fletcher', array[]::text[], true, 'FIRST_TEAM', 'England', false),
+  ('PLAYER', 'Kobbie Mainoo', array[]::text[], true, 'FIRST_TEAM', 'England', false),
+  ('PLAYER', 'Mason Mount', array[]::text[], true, 'FIRST_TEAM', 'England', false),
+  ('PLAYER', 'Andrey Santos', array[]::text[], true, 'FIRST_TEAM', 'Brazil', false),
+  ('PLAYER', 'Youri Tielemans', array[]::text[], true, 'FIRST_TEAM', 'Belgium', false),
+  ('PLAYER', 'Manuel Ugarte', array[]::text[], true, 'FIRST_TEAM', 'Uruguay', false),
+  ('PLAYER', 'Matheus Cunha', array[]::text[], true, 'FIRST_TEAM', 'Brazil', false),
+  ('PLAYER', 'Amad', array['Amad Diallo'], true, 'FIRST_TEAM', 'Ivory Coast', false),
+  ('PLAYER', 'Shea Lacey', array[]::text[], true, 'FIRST_TEAM', 'England', false),
+  ('PLAYER', 'Bryan Mbeumo', array[]::text[], true, 'FIRST_TEAM', 'Cameroon', false),
+  ('PLAYER', 'Marcus Rashford', array[]::text[], true, 'FIRST_TEAM', 'England', false),
+  ('PLAYER', 'Benjamin Sesko', array['Benjamin Šeško'], true, 'FIRST_TEAM', 'Slovenia', false),
+  ('PLAYER', 'Joshua Zirkzee', array[]::text[], true, 'FIRST_TEAM', 'Netherlands', false),
+  ('MANAGER', 'Michael Carrick', array[]::text[], true, 'BACKGROUND', null, false)
+on conflict (entity_type, canonical_name) do update
+set aliases = excluded.aliases,
+    active = excluded.active,
+    tracking_tier = excluded.tracking_tier,
+    national_team = excluded.national_team,
+    is_injured = excluded.is_injured;
 
 update public.scoring_configs
 set is_active = false

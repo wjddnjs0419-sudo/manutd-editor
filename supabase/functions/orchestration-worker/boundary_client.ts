@@ -13,6 +13,7 @@ const BOUNDARIES: Record<EditorialJobType, { path: string; secret: "collector" |
   RUN_INTELLIGENCE: { path: "intelligence", secret: "collector" },
   DISCOVER_SOURCES: { path: "source-discovery", secret: "collector" },
   DISCOVER_TRENDS: { path: "trend-discovery", secret: "collector" },
+  PROMOTE_DISCOVERY: { path: "promote-discovery", secret: "collector" },
   GROUND_CLAIMS: { path: "ground-claims", secret: "collector" },
   RANK_EDITORIAL: { path: "rank-editorial", secret: "collector" },
   GENERATE_PRIORITY: { path: "creative-generation-priority", secret: "collector" },
@@ -43,8 +44,25 @@ function requestBody(jobType: EditorialJobType, payload: Record<string, unknown>
     };
     return Object.keys(value).length === 0 ? undefined : value;
   }
-  if (jobType === "RUN_INTELLIGENCE" || jobType === "SYNC_NOTION" || jobType === "DISCOVER_SOURCES" || jobType === "DISCOVER_TRENDS" || jobType === "GROUND_CLAIMS" || jobType === "RANK_EDITORIAL") {
+  if (jobType === "RUN_INTELLIGENCE" || jobType === "SYNC_NOTION" || jobType === "DISCOVER_SOURCES" || jobType === "GROUND_CLAIMS" || jobType === "RANK_EDITORIAL") {
     return typeof payload.as_of === "string" ? { as_of: payload.as_of } : undefined;
+  }
+  if (jobType === "DISCOVER_TRENDS") {
+    const value = {
+      ...(typeof payload.as_of === "string" ? { as_of: payload.as_of } : {}),
+      ...(typeof payload.search_profile === "string" ? { search_profile: payload.search_profile } : {}),
+      ...(typeof payload.mode === "string" ? { mode: payload.mode } : {}),
+      ...(typeof payload.max_queries === "number" && Number.isSafeInteger(payload.max_queries) ? { max_queries: payload.max_queries } : {}),
+    };
+    return Object.keys(value).length === 0 ? undefined : value;
+  }
+  if (jobType === "PROMOTE_DISCOVERY") {
+    const value = {
+      ...(typeof payload.as_of === "string" ? { as_of: payload.as_of } : {}),
+      ...(typeof payload.limit === "number" && Number.isSafeInteger(payload.limit) ? { limit: payload.limit } : {}),
+      ...(typeof payload.ranking_date === "string" ? { ranking_date: payload.ranking_date } : {}),
+    };
+    return Object.keys(value).length === 0 ? undefined : value;
   }
   if (jobType === "PROJECT_NOTION") {
     return typeof payload.creative_brief_id === "string" ? { creative_brief_id: payload.creative_brief_id } : {};

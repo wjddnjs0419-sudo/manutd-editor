@@ -55,13 +55,13 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
     request,
   });
   const types: EditorialJobType[] = [
-    "COLLECT_INSTAGRAM", "ANALYZE_CONTENT", "RUN_INTELLIGENCE", "DISCOVER_SOURCES", "DISCOVER_TRENDS", "GROUND_CLAIMS", "RANK_EDITORIAL", "GENERATE_PRIORITY", "SYNC_NOTION", "PROJECT_NOTION",
+    "COLLECT_INSTAGRAM", "ANALYZE_CONTENT", "RUN_INTELLIGENCE", "DISCOVER_SOURCES", "DISCOVER_TRENDS", "PROMOTE_DISCOVERY", "GROUND_CLAIMS", "RANK_EDITORIAL", "GENERATE_PRIORITY", "SYNC_NOTION", "PROJECT_NOTION",
     "POLL_SELECTED", "DISPATCH_ALERTS", "FIXTURE_SYNC", "MORNING_BRIEF",
   ];
   for (const jobType of types) {
     await invoker.invoke(
       jobType,
-      jobType === "RUN_INTELLIGENCE" || jobType === "ANALYZE_CONTENT" || jobType === "DISCOVER_SOURCES" || jobType === "DISCOVER_TRENDS" || jobType === "GROUND_CLAIMS" || jobType === "RANK_EDITORIAL"
+      jobType === "RUN_INTELLIGENCE" || jobType === "ANALYZE_CONTENT" || jobType === "DISCOVER_SOURCES" || jobType === "DISCOVER_TRENDS" || jobType === "PROMOTE_DISCOVERY" || jobType === "GROUND_CLAIMS" || jobType === "RANK_EDITORIAL"
         ? { as_of: "2026-09-26T00:00:00Z" }
         : jobType === "FIXTURE_SYNC"
         ? { mode: "FORCE" }
@@ -77,6 +77,7 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
     "https://supabase.test/functions/v1/intelligence",
     "https://supabase.test/functions/v1/source-discovery",
     "https://supabase.test/functions/v1/trend-discovery",
+    "https://supabase.test/functions/v1/promote-discovery",
     "https://supabase.test/functions/v1/ground-claims",
     "https://supabase.test/functions/v1/rank-editorial",
     "https://supabase.test/functions/v1/creative-generation-priority",
@@ -88,7 +89,7 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
     "https://supabase.test/functions/v1/telegram-morning-brief",
   ]);
   assert.deepEqual(calls.map((call) => call.authorization), [
-    "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret",
+    "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret",
     "Bearer telegram-secret", "Bearer telegram-secret", "Bearer telegram-secret",
   ]);
   assert.deepEqual(calls[1]?.body, { as_of: "2026-09-26T00:00:00Z" });
@@ -96,9 +97,10 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
   assert.deepEqual(calls[2]?.body, { as_of: "2026-09-26T00:00:00Z" });
   assert.deepEqual(calls[3]?.body, { as_of: "2026-09-26T00:00:00Z" });
   assert.deepEqual(calls[4]?.body, { as_of: "2026-09-26T00:00:00Z" });
+  assert.deepEqual(calls[5]?.body, { as_of: "2026-09-26T00:00:00Z" });
   assert.deepEqual(calls[6]?.body, { as_of: "2026-09-26T00:00:00Z" });
-  assert.deepEqual(calls[9]?.body, { creative_brief_id: "brief-1" });
-  assert.deepEqual(calls[12]?.body, { mode: "FORCE" });
+  assert.deepEqual(calls[10]?.body, { creative_brief_id: "brief-1" });
+  assert.deepEqual(calls[13]?.body, { mode: "FORCE" });
   assert.equal(JSON.stringify(calls).includes("service-role"), false);
 });
 

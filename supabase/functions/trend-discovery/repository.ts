@@ -1,4 +1,4 @@
-import type { DiscoveryObservation, DiscoveryQuery, DiscoveryRunSummary, DiscoveryMode, TrendSnapshot } from "./types.ts";
+import type { DiscoveryObservation, DiscoveryQuery, DiscoveryRunSummary, DiscoveryMode, DiscoverySearchProfile, TrendSnapshot } from "./types.ts";
 
 export interface UpsertObservationResult {
   readonly inserted: boolean;
@@ -7,7 +7,7 @@ export interface UpsertObservationResult {
 }
 
 export interface TrendDiscoveryRepository {
-  createRun(input: { mode: DiscoveryMode; startedAt: string }): Promise<string>;
+  createRun(input: { mode: DiscoveryMode; startedAt: string; searchProfile?: DiscoverySearchProfile }): Promise<string>;
   saveQuery(runId: string, query: DiscoveryQuery): Promise<string>;
   upsertObservation(observation: DiscoveryObservation, runId?: string): Promise<UpsertObservationResult>;
   saveSnapshot(snapshot: TrendSnapshot): Promise<boolean>;
@@ -46,13 +46,13 @@ export function createTrendDiscoveryRepository(options: RepositoryOptions): Tren
   }
   return {
     async createRun(input) {
-      const rows = await request("/rest/v1/discovery_runs", { method: "POST", headers: { prefer: "return=representation" }, body: JSON.stringify({ mode: input.mode, started_at: input.startedAt }) });
+      const rows = await request("/rest/v1/discovery_runs", { method: "POST", headers: { prefer: "return=representation" }, body: JSON.stringify({ mode: input.mode, started_at: input.startedAt, search_profile: input.searchProfile ?? "MANUAL" }) });
       const id = Array.isArray(rows) && object(rows[0]).id;
       if (typeof id !== "string") throw new Error("DISCOVERY_RUN_PERSISTENCE_ERROR");
       return id;
     },
     async saveQuery(runId, query) {
-      const rows = await request("/rest/v1/discovery_queries", { method: "POST", headers: { prefer: "return=representation" }, body: JSON.stringify({ run_id: runId, query_id: query.queryId, query_text: query.text, family: query.family, mode: query.mode, observation_window: query.window, window_start: query.windowStart, window_end: query.windowEnd, priority: query.priority }) });
+      const rows = await request("/rest/v1/discovery_queries", { method: "POST", headers: { prefer: "return=representation" }, body: JSON.stringify({ run_id: runId, query_id: query.queryId, query_text: query.text, family: query.family, mode: query.mode, observation_window: query.window, window_start: query.windowStart, window_end: query.windowEnd, priority: query.priority, search_profile: query.searchProfile ?? "MANUAL" }) });
       const id = Array.isArray(rows) && object(rows[0]).id;
       if (typeof id !== "string") throw new Error("DISCOVERY_QUERY_PERSISTENCE_ERROR");
       return id;

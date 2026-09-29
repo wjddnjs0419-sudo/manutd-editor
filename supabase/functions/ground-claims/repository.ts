@@ -40,9 +40,9 @@ export function createGroundingRepository(options: RepositoryOptions): Grounding
       const clusterByPost = new Map<string, string>();
       if (Array.isArray(memberships)) for (const item of memberships) if (record(item) && typeof item.raw_post_id === "string" && typeof item.story_cluster_id === "string") clusterByPost.set(item.raw_post_id, item.story_cluster_id);
       const analyses = await request("/rest/v1/content_understandings?select=raw_post_id,claims&status=in.(SUCCEEDED,PARTIAL)&order=created_at.desc&limit=500", { method: "GET" }, "app_private");
+      const discoveryClaims = await request("/rest/v1/story_claims?select=id,story_cluster_id,raw_post_id,discovery_observation_id,claim_fingerprint,subject,predicate,object,claim_text,origin,extraction_confidence&discovery_observation_id=not.is.null&order=updated_at.desc&limit=2000", { method: "GET" }, "app_private");
       const claims: GroundingClaim[] = [];
-      if (!Array.isArray(analyses)) return claims;
-      for (const analysis of analyses) {
+      if (Array.isArray(analyses)) for (const analysis of analyses) {
         if (!record(analysis) || typeof analysis.raw_post_id !== "string") continue;
         const clusterId = clusterByPost.get(analysis.raw_post_id);
         if (!clusterId || !Array.isArray(analysis.claims)) continue;
@@ -53,6 +53,14 @@ export function createGroundingRepository(options: RepositoryOptions): Grounding
           const origin = item.origin === "image" || item.origin === "carousel_slide" || item.origin === "thumbnail" ? item.origin : "caption";
           claims.push({ storyClusterId: clusterId, rawPostId: analysis.raw_post_id, claimFingerprint: await fingerprint({ clusterId, rawPostId: analysis.raw_post_id, subject, predicate, object, claimText }), subject, predicate, object, claimText, origin, extractionConfidence: number(item.confidence) });
         }
+      }
+      if (Array.isArray(discoveryClaims)) for (const item of discoveryClaims) {
+        if (!record(item) || typeof item.story_cluster_id !== "string" || typeof item.claim_fingerprint !== "string" || typeof item.subject !== "string" || typeof item.predicate !== "string" || typeof item.object !== "string" || typeof item.claim_text !== "string") continue;
+        const rawPostId = typeof item.raw_post_id === "string" ? item.raw_post_id : null;
+        const discoveryObservationId = typeof item.discovery_observation_id === "string" ? item.discovery_observation_id : null;
+        if (!rawPostId && !discoveryObservationId) continue;
+        const origin = item.origin === "image" || item.origin === "carousel_slide" || item.origin === "thumbnail" ? item.origin : rawPostId ? "caption" : "discovery_observation";
+        claims.push({ storyClusterId: item.story_cluster_id, rawPostId, discoveryObservationId, claimFingerprint: item.claim_fingerprint, subject: item.subject, predicate: item.predicate, object: item.object, claimText: item.claim_text, origin, extractionConfidence: number(item.extraction_confidence) });
       }
       return claims;
     },
@@ -72,7 +80,7 @@ export function createGroundingRepository(options: RepositoryOptions): Grounding
       });
     },
     async upsertClaim(claim, version) {
-      const value = await request("/rest/v1/story_claims?on_conflict=story_cluster_id%2Cclaim_fingerprint%2Cgrounding_version", { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify({ story_cluster_id: claim.storyClusterId, raw_post_id: claim.rawPostId, claim_fingerprint: claim.claimFingerprint, subject: claim.subject, predicate: claim.predicate, object: claim.object, claim_text: claim.claimText, origin: claim.origin, extraction_confidence: claim.extractionConfidence, grounding_status: claim.status, grounding_confidence: claim.confidence, grounding_version: version, decision_reason: claim.decisionReason }) }, "app_private");
+      const value = await request("/rest/v1/story_claims?on_conflict=story_cluster_id%2Cclaim_fingerprint%2Cgrounding_version", { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify({ story_cluster_id: claim.storyClusterId, raw_post_id: claim.rawPostId, discovery_observation_id: claim.discoveryObservationId ?? null, claim_fingerprint: claim.claimFingerprint, subject: claim.subject, predicate: claim.predicate, object: claim.object, claim_text: claim.claimText, origin: claim.origin, extraction_confidence: claim.extractionConfidence, grounding_status: claim.status, grounding_confidence: claim.confidence, grounding_version: version, decision_reason: claim.decisionReason }) }, "app_private");
       if (!Array.isArray(value) || !record(value[0]) || typeof value[0].id !== "string") throw new Error("CLAIM_PERSISTENCE_ERROR");
       return value[0].id;
     },
