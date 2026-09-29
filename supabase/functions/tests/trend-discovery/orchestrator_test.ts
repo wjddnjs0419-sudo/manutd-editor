@@ -61,6 +61,26 @@ function provider(overrides: Partial<DiscoveryProvider> = {}): DiscoveryProvider
   };
 }
 
+function concurrencyProbe() {
+  let active = 0;
+  let maxActive = 0;
+  return {
+    get maxActive() {
+      return maxActive;
+    },
+    async run<T>(work: () => Promise<T>): Promise<T> {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return await work();
+      } finally {
+        active -= 1;
+      }
+    },
+  };
+}
+
 Deno.test("provider failures are isolated and successful observations still produce snapshots", async () => {
   const repo = repository();
   const result = await runTrendDiscovery({
@@ -127,7 +147,7 @@ Deno.test("repeating a discovery run does not inflate observations or stories", 
   assertEquals(repo.observations.length, 1);
 });
 
-Deno.test("irrelevant observations are rejected before persistence", async () => {
+Deno.test("uncertain observations are retained for later relevance refinement", async () => {
   const repo = repository();
   const result = await runTrendDiscovery({
     asOf: "2026-09-27T12:00:00.000Z",
@@ -135,6 +155,69 @@ Deno.test("irrelevant observations are rejected before persistence", async () =>
     providers: [provider({ discover: async (value) => [observation({ discoveryQueryId: value.queryId, title: "Liverpool transfer roundup", excerpt: "Liverpool Liverpool and a late United mention." })] })],
     repository: repo,
   });
-  assertEquals(result.observationCount, 0);
-  assertEquals(repo.observations.length, 0);
+  assertEquals(result.observationCount, 1);
+  assertEquals(result.newStoryCount, 0);
+  assertEquals(repo.observations.length, 1);
+  assertEquals(repo.snapshots.length, 0);
+});
+
+Deno.test("re-evaluates retained candidates after bounded enrichment", async () => {
+  const repo = repository();
+  const result = await runTrendDiscovery({
+    asOf: "2026-09-27T12:00:00.000Z",
+    maxQueries: 1,
+    providers: [provider({
+      discover: async (value) => [observation({
+        discoveryQueryId: value.queryId,
+        title: "Liverpool transfer roundup",
+        excerpt: "Liverpool Liverpool and a late United mention.",
+      })],
+    })],
+    enrichObservation: async (value) => ({
+      ...value,
+      excerpt: "Manchester United injury update: a first-team player returned to training.",
+    }),
+    repository: repo,
+  });
+
+  assertEquals(result.observationCount, 1);
+  assertEquals(result.newStoryCount, 1);
+  assertEquals(repo.snapshots.length, 1);
+  assertEquals(repo.observations[0]?.excerpt, "Manchester United injury update: a first-team player returned to training.");
+});
+
+Deno.test("runs providers concurrently without exceeding the discovery concurrency bound", async () => {
+  const repo = repository();
+  const probe = concurrencyProbe();
+  const providers = Array.from({ length: 8 }, (_, index) => provider({
+    providerId: `provider-${index}`,
+    discover: async () => probe.run(async () => [observation({
+      providerId: `provider-${index}`,
+      externalId: `item-${index}`,
+      contentFingerprint: `fingerprint-${index}`,
+    })]),
+  }));
+
+  await runTrendDiscovery({ asOf: "2026-09-27T12:00:00.000Z", maxQueries: 1, providers, repository: repo });
+
+  assert(probe.maxActive > 1, `expected overlapping provider work, saw peak ${probe.maxActive}`);
+  assert(probe.maxActive <= 4, `expected provider work to stay bounded at four, saw peak ${probe.maxActive}`);
+});
+
+Deno.test("runs queries concurrently without exceeding the discovery concurrency bound", async () => {
+  const repo = repository();
+  const probe = concurrencyProbe();
+  const queries = new Set<string>();
+  const providers = [provider({
+    discover: async (value) => probe.run(async () => {
+      queries.add(value.queryId);
+      return [observation({ externalId: value.queryId, contentFingerprint: value.queryId })];
+    }),
+  })];
+
+  await runTrendDiscovery({ asOf: "2026-09-27T12:00:00.000Z", maxQueries: 8, providers, repository: repo });
+
+  assertEquals(queries.size, 8);
+  assert(probe.maxActive > 1, `expected overlapping query work, saw peak ${probe.maxActive}`);
+  assert(probe.maxActive <= 4, `expected query work to stay bounded at four, saw peak ${probe.maxActive}`);
 });

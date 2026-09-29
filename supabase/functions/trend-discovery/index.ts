@@ -2,6 +2,7 @@ import { requiredEnv, resolveSupabaseSecretKey } from "../collect-instagram/conf
 import { resolveSourceDiscoveryConfig } from "../source-discovery/config.ts";
 import { createTrendDiscoveryHandler } from "./handler.ts";
 import { runTrendDiscovery } from "./orchestrator.ts";
+import { createArticleEnricher } from "./article_enrichment.ts";
 import { createTrendDiscoveryRepository } from "./repository.ts";
 import { createFeedDiscoveryProvider } from "./providers.ts";
 import { createGoogleNewsDiscoveryProvider } from "./google_news_provider.ts";
@@ -16,6 +17,7 @@ const serviceRoleKey = resolveSupabaseSecretKey(readEnv);
 const collectorSecret = requiredEnv(readEnv, "COLLECTOR_INVOKE_SECRET");
 const sourceConfig = resolveSourceDiscoveryConfig(readEnv);
 const repository = createTrendDiscoveryRepository({ supabaseUrl, serviceRoleKey });
+const enrichObservation = createArticleEnricher();
 const entityContextResolver = new EntityContextResolver(createSupabaseEntityContextDataSource({ supabaseUrl, serviceRoleKey }));
 function isLiveRole(role: string): role is DiscoveryProvider["sourceRole"] {
   return ["FACT_PRIMARY", "FACT_INDEPENDENT", "DISCOVERY_COMPETITOR", "DISCOVERY_COMMUNITY", "DISCOVERY_VIDEO"].includes(role as DiscoveryProvider["sourceRole"]);
@@ -38,7 +40,7 @@ const handler = createTrendDiscoveryHandler({
       gdeltProvider: createGdeltDiscoveryProvider(),
       readEnv,
     });
-    return runTrendDiscovery({ ...input, searchProfile, providers, repository, resolveEntityContext: (asOf) => entityContextResolver.resolve(asOf) });
+    return runTrendDiscovery({ ...input, searchProfile, providers, repository, enrichObservation, resolveEntityContext: (asOf) => entityContextResolver.resolve(asOf) });
   },
 });
 

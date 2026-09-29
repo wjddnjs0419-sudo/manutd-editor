@@ -57,6 +57,7 @@ export async function fetchBoundedText(
     readonly fetch?: typeof fetch;
     readonly timeoutMs?: number;
     readonly maxBytes?: number;
+    readonly accept?: string;
   },
 ): Promise<string | null> {
   if (url.protocol !== "https:" || url.username || url.password) return null;
@@ -68,7 +69,7 @@ export async function fetchBoundedText(
     const request = fetchImpl(url, {
       method: "GET",
       headers: {
-        accept: "application/rss+xml, application/atom+xml, application/json",
+        accept: options.accept ?? "application/rss+xml, application/atom+xml, application/json",
       },
       signal: controller.signal,
       redirect: "manual",
