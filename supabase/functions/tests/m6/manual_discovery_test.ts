@@ -30,7 +30,7 @@ Deno.test("manual discovery enqueues a bounded trend job with a per-request dedu
     await enqueueManualDiscovery(queue, "thread-1", "update-42", availableAt, {
       mode: "GENERAL",
       search_profile: "MANUAL",
-      max_queries: 24,
+      max_queries: 8,
     }),
     { status: "QUEUED", run_id: "job-1" },
   );
@@ -40,7 +40,7 @@ Deno.test("manual discovery enqueues a bounded trend job with a per-request dedu
       chain_key: "telegram-discovery:thread-1:update-42",
       mode: "GENERAL",
       search_profile: "MANUAL",
-      max_queries: 24,
+      max_queries: 8,
       trigger: "TELEGRAM_MANUAL",
       thread_id: "thread-1",
     },

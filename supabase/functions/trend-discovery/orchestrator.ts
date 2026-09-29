@@ -5,6 +5,8 @@ import { calculateTrendScore, deriveOpportunityLabels, deriveTrendState, normali
 import type { TrendDiscoveryRepository } from "./repository.ts";
 import type { DiscoveryEntityContext, DiscoveryMode, DiscoveryObservation, DiscoveryProvider, DiscoveryRunSummary, DiscoverySearchProfile, ProviderRunStatus, TrendSnapshot } from "./types.ts";
 
+const DISCOVERY_CONCURRENCY = 8;
+
 export interface RunTrendDiscoveryOptions {
   readonly asOf?: Date | string;
   readonly mode?: DiscoveryMode;
@@ -60,29 +62,39 @@ export async function runTrendDiscovery(options: RunTrendDiscoveryOptions): Prom
   }
   const queryRowIds = new Map<string, string>();
   for (const query of queries) queryRowIds.set(query.queryId, await options.repository.saveQuery(runId, query));
-  const providerStatuses: ProviderRunStatus[] = [];
   const observations = new Map<string, DiscoveryObservation>();
   const failures = new Set<string>();
-  for (const provider of options.providers) {
-    let providerObservationCount = 0;
-    for (const query of queries) {
+
+  const providerObservationCounts = new Map<string, number>();
+  const tasks = options.providers.flatMap((provider) => queries.map((query) => ({ provider, query })));
+  let nextTask = 0;
+  async function collect(): Promise<void> {
+    while (true) {
+      const task = tasks[nextTask++];
+      if (!task) return;
       try {
-        const values = await provider.discover(query);
+        const values = await task.provider.discover(task.query);
         for (const value of values) {
-          const observation = { ...value, discoveryQueryId: queryRowIds.get(query.queryId) ?? query.queryId };
+          const observation = { ...value, discoveryQueryId: queryRowIds.get(task.query.queryId) ?? task.query.queryId };
           if (!isTrendRelevant({ title: observation.title, excerpt: observation.excerpt })) continue;
           const key = `${observation.providerId}\u0000${observation.externalId}`;
           if (!observations.has(key)) {
             observations.set(key, observation);
-            providerObservationCount += 1;
+            providerObservationCounts.set(task.provider.providerId, (providerObservationCounts.get(task.provider.providerId) ?? 0) + 1);
           }
         }
       } catch {
-        failures.add(provider.providerId);
+        failures.add(task.provider.providerId);
       }
     }
-    providerStatuses.push({ providerId: provider.providerId, status: failures.has(provider.providerId) ? "FAILED" : "COMPLETED", observations: providerObservationCount, ...(failures.has(provider.providerId) ? { errorCategory: "PROVIDER_UNAVAILABLE" } : {}) });
   }
+  await Promise.all(Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, tasks.length) }, () => collect()));
+  const providerStatuses: ProviderRunStatus[] = options.providers.map((provider) => ({
+    providerId: provider.providerId,
+    status: failures.has(provider.providerId) ? "FAILED" : "COMPLETED",
+    observations: providerObservationCounts.get(provider.providerId) ?? 0,
+    ...(failures.has(provider.providerId) ? { errorCategory: "PROVIDER_UNAVAILABLE" } : {}),
+  }));
   const accepted = [...observations.values()];
   const persistence = await Promise.all(accepted.map((observation) => options.repository.upsertObservation(observation, runId)));
   const storyClusterByObservation = new Map(accepted.map((observation, index) => [

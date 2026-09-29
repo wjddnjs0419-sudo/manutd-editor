@@ -28,7 +28,7 @@ const trustedProviders = sourceConfig.feeds.flatMap((feed, index) => {
 
 const handler = createTrendDiscoveryHandler({
   collectorSecret,
-  defaultMaxQueries: 24,
+  defaultMaxQueries: 8,
   run: (input) => {
     const searchProfile = input.searchProfile ?? "MANUAL";
     const providers = createRoutedDiscoveryProviders({
