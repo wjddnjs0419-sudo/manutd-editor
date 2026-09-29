@@ -94,6 +94,7 @@ Deno.test("natural-language console intents resolve to the same business actions
   assertEquals(parseConsoleIntent("요즘 맨유 뭐가 핫해?"), { type: "OPEN_TRENDING", page: 1 });
   assertEquals(parseConsoleIntent("좀 더 찾아봐"), { type: "DISCOVER_MORE" });
   assertEquals(parseConsoleIntent("다른 거 더 없어?"), { type: "DISCOVER_MORE" });
+  assertEquals(parseConsoleIntent("새로운 소재 찾아줘"), { type: "DISCOVER_MORE" });
   assertEquals(parseConsoleIntent("이건 그냥 의견이야"), null);
 });
 
@@ -113,6 +114,21 @@ Deno.test("discover more invokes a fresh discovery run and returns deterministic
   assert(result.view.text.includes("새 discovery run"));
   assert(result.view.text.includes("2개"));
   assertEquals(result.event.action, "DISCOVERY_MORE_COMPLETED");
+});
+
+Deno.test("queued discovery tells the editor that results are pending", async () => {
+  const result = await dispatchEditorialConsoleAction({ type: "DISCOVER_MORE" }, state(), dependencies({ discoverMore: async () => ({ status: "QUEUED", run_id: "job-1" }) }));
+  assert(result.view.text.includes("대기열 등록됨"));
+  assert(result.view.text.includes("백그라운드"));
+  assertEquals(result.event.action, "DISCOVERY_MORE_QUEUED");
+  assertEquals(result.event.status, "COMPLETED");
+});
+
+Deno.test("failed discovery enqueue returns a safe failure view", async () => {
+  const result = await dispatchEditorialConsoleAction({ type: "DISCOVER_MORE" }, state(), dependencies({ discoverMore: async () => { throw new Error("queue unavailable"); } }));
+  assert(result.view.text.includes("대기열에 등록하지 못했습니다"));
+  assertEquals(result.event.action, "DISCOVERY_MORE_FAILED");
+  assertEquals(result.event.status, "FAILED");
 });
 
 Deno.test("opening a story reloads canonical state and renders detail", async () => {

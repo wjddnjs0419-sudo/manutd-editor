@@ -12,8 +12,10 @@ import { createM6Repository } from "../_shared/m6/repository.ts";
 import { createEditorialConsoleRepository, findCanonicalStoryByToken, paginateStories, shortCallbackToken, type CanonicalStory, type ConsoleView } from "../_shared/m6/editorial_console.ts";
 import { canHandleStaleConsoleCallback, dispatchEditorialConsoleAction, parseConsoleCallback, parseConsoleIntent, type ConsoleAction, type ConsoleState } from "../_shared/m6/editorial_console_actions.ts";
 import { invokeCanonicalCarousel } from "../_shared/m6/console_generation.ts";
+import { createEditorialJobQueue } from "../orchestration-worker/queue_client.ts";
 import { createTelegramAgentHandler } from "./handler.ts";
 import { answerNaturalLanguage, type CanonicalConversationContext } from "./conversation.ts";
+import { enqueueManualDiscovery, type ManualDiscoveryPayload } from "./manual_discovery.ts";
 import type { StoredCreativeBrief } from "../creative-generation/repository.ts";
 import type { CreativeBriefSlide } from "../creative-generation/types.ts";
 import type { EditorialSlideRole, ManutdEditorCarouselDraft } from "../_shared/editorial-style/types.ts";
@@ -27,6 +29,8 @@ const serviceKey = Deno.env.get("SUPABASE_SECRET_KEY") ?? Deno.env.get("SUPABASE
 const base = supabaseUrl.replace(/\/$/u, "");
 const repository = createM6Repository({ supabaseUrl, serviceRoleKey: serviceKey });
 const consoleRepository = createEditorialConsoleRepository({ supabaseUrl, serviceRoleKey: serviceKey });
+const editorialJobQueue = createEditorialJobQueue({ supabaseUrl, serviceKey });
+const manualDiscoveryPayload: ManualDiscoveryPayload = { mode: "GENERAL", search_profile: "MANUAL", max_queries: 24 };
 
 function profileHeaders(profile: string): Record<string, string> { return { apikey: serviceKey, authorization: `Bearer ${serviceKey}`, accept: "application/json", "accept-profile": profile, "content-profile": profile }; }
 async function rest(path: string, init: RequestInit = {}, profile?: string): Promise<unknown> {
@@ -258,14 +262,9 @@ async function currentTrendingStories(): Promise<readonly CanonicalStory[]> {
   return await consoleRepository.listTrendingStories(businessDate(new Date(), "Asia/Seoul"));
 }
 
-async function invokeDiscovery(): Promise<{ status: string; run_id?: string; new_story_count?: number; provider_failures?: number }> {
-  const secret = Deno.env.get("COLLECTOR_INVOKE_SECRET") ?? "";
-  if (!secret) return { status: "CONFIGURATION_MISSING", provider_failures: 1 };
+async function invokeDiscovery(threadId: string): Promise<{ status: string; run_id?: string; new_story_count?: number; provider_failures?: number }> {
   try {
-    const response = await fetch(`${base}/functions/v1/trend-discovery`, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify({ mode: "GENERAL", search_profile: "MANUAL", max_queries: 24 }) });
-    const value = await response.json().catch(() => ({}));
-    if (!response.ok || !isObject(value)) return { status: "FAILED", provider_failures: 1 };
-    return { status: typeof value.status === "string" ? value.status : "COMPLETED", run_id: typeof value.run_id === "string" ? value.run_id : undefined, new_story_count: typeof value.new_story_count === "number" ? value.new_story_count : 0, provider_failures: Array.isArray(value.provider_statuses) ? value.provider_statuses.filter((item) => isObject(item) && item.status === "FAILED").length : 0 };
+    return await enqueueManualDiscovery(editorialJobQueue, threadId, crypto.randomUUID(), new Date(), manualDiscoveryPayload);
   } catch {
     return { status: "FAILED", provider_failures: 1 };
   }
@@ -335,8 +334,8 @@ function consoleDependencies(thread: ThreadRow) {
   return {
     listStories: async (mode: "recommended" | "all", page: number) => paginateStories(await currentConsoleStories(thread, mode), page),
     listTrendingStories: async (page: number) => paginateStories(await currentTrendingStories(), page),
-    discoverMore: invokeDiscovery,
-    refreshDiscovery: invokeDiscovery,
+    discoverMore: async () => await invokeDiscovery(thread.id),
+    refreshDiscovery: async () => await invokeDiscovery(thread.id),
     getStoryByToken: async (token: string) => await resolveConsoleStory(thread, token),
     skipStory: async (story: CanonicalStory) => await skipCanonicalStory(thread, story),
     generateCarousel: async (story: CanonicalStory) => await generateCanonicalCarousel(story),

@@ -178,13 +178,21 @@ export async function dispatchEditorialConsoleAction(action: ConsoleAction, stat
   if (action.type === "OPEN_ALL") return listResult("all", action.page, state, dependencies, "LIST_OPENED");
   if (action.type === "OPEN_TRENDING") return listResult("trending", action.page, state, dependencies, "TRENDING_OPENED");
   if (action.type === "DISCOVER_MORE" || action.type === "REFRESH_DISCOVERY") {
-    const result = action.type === "DISCOVER_MORE" ? await dependencies.discoverMore?.() : await (dependencies.refreshDiscovery ?? dependencies.discoverMore)?.();
+    let result: Awaited<ReturnType<NonNullable<ConsoleActionDependencies["discoverMore"]>>> | undefined;
+    try {
+      result = action.type === "DISCOVER_MORE" ? await dependencies.discoverMore?.() : await (dependencies.refreshDiscovery ?? dependencies.discoverMore)?.();
+    } catch {
+      return safeError("새 discovery 작업을 대기열에 등록하지 못했습니다. 잠시 후 다시 시도해 주세요.", state, action.type === "DISCOVER_MORE" ? "DISCOVERY_MORE_FAILED" : "DISCOVERY_REFRESH_FAILED");
+    }
     if (!result) return safeError("discovery를 실행할 수 없습니다. 설정된 provider가 없습니다.", state, "DISCOVERY_UNAVAILABLE");
+    const queued = result.status === "QUEUED";
     const failures = result.provider_failures ?? 0;
     return {
-      view: { text: `🔎 새 discovery run\n\n상태: ${result.status}\n새롭게 확인된 소재: ${result.new_story_count ?? 0}개\nprovider 실패: ${failures}개`, inline_keyboard: [[{ text: "📈 지금 뜨는 소재", callback_data: "ideas:trending:1" }, { text: "🔎 다시 찾아보기", callback_data: "discovery:more" }]] },
+      view: { text: queued
+        ? `🔎 새 discovery run\n\n상태: 대기열 등록됨\n검색 작업이 백그라운드에서 시작됩니다. 잠시 후 /current 또는 📈 지금 뜨는 소재에서 확인해 주세요.`
+        : `🔎 새 discovery run\n\n상태: ${result.status}\n새롭게 확인된 소재: ${result.new_story_count ?? 0}개\nprovider 실패: ${failures}개`, inline_keyboard: [[{ text: "📈 지금 뜨는 소재", callback_data: "ideas:trending:1" }, { text: "🔎 다시 찾아보기", callback_data: "discovery:more" }]] },
       next_state: { ...state, mode: "trending", state_version: state.state_version + 1 },
-      event: { action: action.type === "DISCOVER_MORE" ? "DISCOVERY_MORE_COMPLETED" : "DISCOVERY_REFRESHED", status: "COMPLETED", metadata: { run_id: result.run_id ?? null, status: result.status, provider_failures: failures } },
+      event: { action: action.type === "DISCOVER_MORE" ? queued ? "DISCOVERY_MORE_QUEUED" : "DISCOVERY_MORE_COMPLETED" : queued ? "DISCOVERY_REFRESH_QUEUED" : "DISCOVERY_REFRESHED", status: "COMPLETED", metadata: { run_id: result.run_id ?? null, status: result.status, provider_failures: failures } },
     };
   }
   if (action.type === "NEXT_PAGE") return listResult(state.mode ?? "recommended", state.page + 1, state, dependencies, "LIST_OPENED");

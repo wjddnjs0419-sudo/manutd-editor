@@ -65,6 +65,14 @@ Deno.test("M6 repository exposes same-day fact observations as standalone briefi
         excerpt: "Independent Manchester United reporting.",
         canonical_url: "https://www.bbc.co.uk/sport/football/articles/example",
         observed_at: "2026-09-20T08:00:00.000Z",
+      }, {
+        id: "observation-2",
+        information_source_id: "source-1",
+        editorial_role: "FACT_INDEPENDENT",
+        title: "Manchester City dominate the derby",
+        excerpt: "Manchester City reporting unrelated to Manchester United.",
+        canonical_url: "https://www.bbc.co.uk/sport/football/articles/city-example",
+        observed_at: "2026-09-20T07:00:00.000Z",
       }]));
       if (url.includes("information_sources")) return new Response(JSON.stringify([{ id: "source-1", canonical_name: "BBC Sport" }]));
       return new Response(JSON.stringify([]));

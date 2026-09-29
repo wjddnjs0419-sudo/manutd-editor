@@ -2,6 +2,7 @@ import type { CanonicalFixture, StoredMatch } from "./fixture_types.ts";
 import type { FixtureAlertEvent, FixtureSyncRepository, FixtureSyncState } from "./fixture_service.ts";
 import type { CandidateReferencePost } from "./reference_media.ts";
 import type { IntelligenceReadinessRecord, IntelligenceReadinessStatus } from "./readiness.ts";
+import { isManchesterUnitedRelevant } from "../m8/manchester_united_relevance.ts";
 
 export interface M6RepositoryOptions {
   supabaseUrl: string;
@@ -197,6 +198,7 @@ export function createM6Repository(options: M6RepositoryOptions): M6Repository {
       if (Array.isArray(sources)) for (const source of sources) if (object(source) && typeof source.id === "string" && typeof source.canonical_name === "string") sourceNames.set(source.id, source.canonical_name);
       const sourceCandidates = Array.isArray(factObservations) ? factObservations.filter(object).flatMap((observation) => {
         if (typeof observation.id !== "string" || typeof observation.information_source_id !== "string" || typeof observation.editorial_role !== "string" || !["FACT_PRIMARY", "FACT_INDEPENDENT"].includes(observation.editorial_role) || typeof observation.title !== "string" || typeof observation.canonical_url !== "string") return [];
+        if (!isManchesterUnitedRelevant({ canonicalTitle: observation.title })) return [];
         return [{ candidate_id: `source:${observation.id}`, candidate_type: "FACT_SOURCE" as const, rank: null, priority_score: null, first_mover_flag: false, must_cover_flag: false, creative_status: "NOT_REQUESTED", reference_posts: [], editorial_rank: null, grounding_status: "VERIFIED", news_eligible: true, title: observation.title, source_name: sourceNames.get(observation.information_source_id) ?? "Fact source", source_url: observation.canonical_url }];
       }) : [];
       candidates.push(...sourceCandidates);
