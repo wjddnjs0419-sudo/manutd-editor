@@ -28,7 +28,8 @@ test("M8 B/C preserves its grounding/ranking chain after additive M8.5 discovery
   assert.match(types, /"RANK_EDITORIAL"/u);
   assert.match(worker, /RUN_INTELLIGENCE: "DISCOVER_SOURCES"/u);
   assert.match(worker, /DISCOVER_SOURCES: "DISCOVER_TRENDS"/u);
-  assert.match(worker, /DISCOVER_TRENDS: "GROUND_CLAIMS"/u);
+  assert.match(worker, /DISCOVER_TRENDS: "PROMOTE_DISCOVERY"/u);
+  assert.match(worker, /PROMOTE_DISCOVERY: "GROUND_CLAIMS"/u);
   assert.match(worker, /GROUND_CLAIMS: "RANK_EDITORIAL"/u);
   assert.match(worker, /RANK_EDITORIAL: "GENERATE_PRIORITY"/u);
   assert.match(schedule, /m7-morning-brief-0900-asia-seoul/u);

@@ -2,6 +2,7 @@ import { createEspnFixtureProvider } from "../_shared/m6/espn_fixture_provider.t
 import { businessDate } from "../_shared/m6/business_date.ts";
 import { buildMorningBriefingSnapshot, selectBriefingCandidates } from "../_shared/m6/briefing.ts";
 import { runFixtureSync } from "../_shared/m6/fixture_service.ts";
+import { buildMatchContext } from "../_shared/m6/match_assistant.ts";
 import { createM6Repository } from "../_shared/m6/repository.ts";
 import { createReferenceSignedUrl, selectRepresentativeReference } from "../_shared/m6/reference_media.ts";
 import { createTelegramClient } from "../_shared/m6/telegram_client.ts";
@@ -61,6 +62,15 @@ async function runMorningBrief(): Promise<MorningBriefResult> {
   if (readiness === "DEGRADED") return { status: "DEGRADED", briefing_date: briefingDate, messages_sent: 0, render_mode: "FALLBACK_TEMPLATE", readiness, warning: "오늘 Intelligence 후보 상태가 일치하지 않아 브리핑을 보내지 않았습니다." };
 
   const fixtureResult = await runFixtureSync({ mode: "FORCE", now }, { provider, repository, alertThreadId: ownerThreadId });
+  const canonicalMatches = await repository.listUpcomingMatches(new Date(now.getTime() - 24 * 60 * 60 * 1000), new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000));
+  const match = [...canonicalMatches]
+    .filter((candidate) => candidate.status === "LIVE" || candidate.status === "SCHEDULED" || candidate.status === "POSTPONED")
+    .sort((left, right) => {
+      if (left.status === "LIVE" && right.status !== "LIVE") return -1;
+      if (right.status === "LIVE" && left.status !== "LIVE") return 1;
+      return Date.parse(left.kickoff_at) - Date.parse(right.kickoff_at);
+    })[0];
+  const matchContext = match ? buildMatchContext(match, now) : {};
   const eligibleRows = selectBriefingCandidates(rows);
   const candidates = eligibleRows.slice(0, Number(config.briefing_top_n ?? 3)).map((row) => ({
     candidate_id: row.candidate_id,
@@ -76,7 +86,7 @@ async function runMorningBrief(): Promise<MorningBriefResult> {
     source_url: row.source_url ?? null,
     representative: selectRepresentativeReference(row.reference_posts),
   }));
-  const snapshot = buildMorningBriefingSnapshot({ briefing_date: briefingDate, timezone, match_day_mode: fixtureResult.match_day_mode, match_context: {}, overnight_counts: { candidates: eligibleRows.length, discovered_candidates: rows.length }, candidates, blocked_failed: fixtureResult.status === "FAILED" ? [{ type: "FIXTURE_SYNC", error_category: fixtureResult.error_category ?? "UNKNOWN" }] : [] });
+  const snapshot = buildMorningBriefingSnapshot({ briefing_date: briefingDate, timezone, match_day_mode: fixtureResult.match_day_mode, match_context: matchContext, overnight_counts: { candidates: eligibleRows.length, discovered_candidates: rows.length }, candidates, blocked_failed: fixtureResult.status === "FAILED" ? [{ type: "FIXTURE_SYNC", error_category: fixtureResult.error_category ?? "UNKNOWN" }] : [] });
   const signedItems = await Promise.all(snapshot.items.map(async (item) => ({ ...item, reference_media_url: null as string | null })));
   for (let index = 0; index < snapshot.items.length; index += 1) {
     const path = candidates[index]?.representative?.media_storage_path;
@@ -87,7 +97,7 @@ async function runMorningBrief(): Promise<MorningBriefResult> {
   const phrasing = await phraseMorningBrief(renderSnapshot, { generate: Deno.env.get("OPENAI_API_KEY") ? createOpenAIGenerator({ apiKey: Deno.env.get("OPENAI_API_KEY") ?? "", model: typeof modelConfig.model === "string" ? modelConfig.model : undefined }) : undefined, maxNoteChars: 140 });
   const plans = renderMorningBrief(renderSnapshot, phrasing);
   const rendered = plans.map((plan) => plan.text).join("\n\n");
-  const briefingInsert = await rest("/rest/v1/telegram_briefings", { profile: "app_private", method: "POST", body: { briefing_date: briefingDate, thread_id: ownerThreadId, match_context: {}, candidate_snapshot: snapshot, rendered_message: rendered, generation_metadata: { render_mode: phrasing.render_mode ?? "FALLBACK_TEMPLATE", fixture_sync_status: fixtureResult.status } }, prefer: "resolution=ignore-duplicates,return=representation" });
+  const briefingInsert = await rest("/rest/v1/telegram_briefings", { profile: "app_private", method: "POST", body: { briefing_date: briefingDate, thread_id: ownerThreadId, match_context: matchContext, candidate_snapshot: snapshot, rendered_message: rendered, generation_metadata: { render_mode: phrasing.render_mode ?? "FALLBACK_TEMPLATE", fixture_sync_status: fixtureResult.status } }, prefer: "resolution=ignore-duplicates,return=representation" });
   if (!Array.isArray(briefingInsert) || !briefingInsert[0]) return { status: "ALREADY_SENT", briefing_date: briefingDate, messages_sent: 0, render_mode: phrasing.render_mode ?? "FALLBACK_TEMPLATE" };
   const client = createTelegramClient({ token: botToken });
   let sent = 0;

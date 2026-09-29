@@ -99,6 +99,7 @@ function phrasingPayload(snapshot: MorningBriefingSnapshot): unknown {
     briefing: {
       briefing_date: snapshot.briefing_date,
       match_day_mode: snapshot.match_day_mode,
+      match_context: snapshot.match_context,
       overnight_counts: snapshot.overnight_counts,
       candidates: snapshot.items.map((item) => ({ position: item.position, creative_status: item.creative_status, has_reference: Boolean(item.reference_permalink ?? item.source_url) })),
       has_issues: snapshot.blocked_failed.length > 0,
@@ -136,7 +137,17 @@ function canonicalCandidateText(item: FrozenBriefingItem, note: string): string 
 
 export function renderMorningBrief(snapshot: MorningBriefingSnapshot, phrasing: PhrasedBriefing): TelegramMessagePlan[] {
   const notes = new Map(phrasing.candidate_notes.map((note) => [note.position, note.note]));
-  const plans: TelegramMessagePlan[] = [{ kind: "text", text: phrasing.intro }];
+  const match = snapshot.match_context;
+  const matchText = typeof match.match_id === "string" && typeof match.opponent === "string"
+    ? [
+      snapshot.match_day_mode === "MATCH_DAY_PRE" ? "⚽ 오늘 맨유 경기" : "⚽ 다음 맨유 경기",
+      `Manchester United vs ${match.opponent}`,
+      typeof match.competition === "string" ? match.competition : null,
+      typeof match.kickoff_display === "string" ? match.kickoff_display : null,
+      typeof match.venue === "string" && match.venue ? match.venue : null,
+    ].filter((line): line is string => Boolean(line)).join("\n")
+    : null;
+  const plans: TelegramMessagePlan[] = [{ kind: "text", text: matchText ? `${phrasing.intro}\n\n${matchText}` : phrasing.intro }];
   for (const item of snapshot.items) {
     const text = canonicalCandidateText(item, notes.get(item.position) ?? "핵심 소식과 원문을 확인해 주세요.");
     if (item.reference_media_url) plans.push({ kind: "photo", text, photo_url: item.reference_media_url });

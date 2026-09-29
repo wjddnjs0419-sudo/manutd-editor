@@ -2,7 +2,7 @@
 
 맨체스터 유나이티드 관련 Instagram 콘텐츠를 수집·분석하고, 객관적인 우선순위 점수와 실행 가능한 콘텐츠 브리프를 만드는 시스템입니다.
 
-현재 구현 범위는 **Milestone 1–8 Phase A/B/C**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. 이어서 intelligence Edge Function이 최근 게시물을 story cluster로 묶고 결정론적인 Priority Score·Data Confidence·FIRST_MOVER/MUST_COVER 결과를 생성합니다. M5는 M4 canonical evidence snapshot만 사용해 deterministic-first content mode를 분류하고, OpenAI Responses structured output을 검증한 뒤 append-only Creative Brief revision을 저장합니다. M8 Phase A는 private Instagram 이미지·캐러셀·Reel thumbnail을 server-only strict multimodal analysis로 보강하며, 원본·private media·M4 deterministic scoring은 유지합니다. M8 Phase B/C는 공식·독립 사실 출처로 claim을 검증하고, 경쟁 계정·Reddit·YouTube는 discovery/audience 신호로만 사용한 뒤 별도 editorial ranking projection을 작성합니다. Notion은 Supabase canonical state의 독립 projection consumer이며, 사람 소유 편집 필드는 보존합니다.
+현재 구현 범위는 **Milestone 1–8 Phase A/B/C와 Milestone 8.6 Personal Editorial Assistant**입니다. Edge Function은 DB의 active Instagram 계정을 읽어 concurrency 2로 격리 수집하고, 게시물 나이에 따른 cadence와 30분 bucket으로 메트릭 스냅숏을 갱신합니다. 이어서 intelligence Edge Function이 최근 게시물을 story cluster로 묶고 결정론적인 Priority Score·Data Confidence·FIRST_MOVER/MUST_COVER 결과를 생성합니다. M5는 M4 canonical evidence snapshot만 사용해 deterministic-first content mode를 분류하고, OpenAI Responses structured output을 검증한 뒤 append-only Creative Brief revision을 저장합니다. M8 Phase A는 private Instagram 이미지·캐러셀·Reel thumbnail을 server-only strict multimodal analysis로 보강하며, 원본·private media·M4 deterministic scoring은 유지합니다. M8 Phase B/C는 공식·독립 사실 출처로 claim을 검증하고, 경쟁 계정·Reddit·YouTube는 discovery/audience 신호로만 사용한 뒤 별도 editorial ranking projection을 작성합니다. M8.6은 공식/경쟁/커뮤니티 모니터링 풀, tracked-entity FAST/PLAYER_SWEEP discovery, Google News/GDELT 보조 검색, discovery-to-canonical promotion, 상태 전이 기반 Telegram alerts, 그리고 ESPN canonical fixture 기반 match assistant를 추가합니다. Notion은 Supabase canonical state의 독립 projection consumer이며, 사람 소유 편집 필드는 보존합니다.
 
 ## Milestone 7 final architecture
 
@@ -59,6 +59,49 @@ consume the same READY state without changing the core generation contract.
 n8n is legacy and not required for production. Historical exports and their
 validator remain under `n8n/` for audit, parity comparison, and an explicit
 temporary rollback only.
+
+## Milestone 8.6 Personal Editorial Assistant
+
+M8.6의 모니터링 풀은 `manutd` 공식 계정과 한국 경쟁 계정을 분리하고,
+기존 계정/게시물 이력은 삭제하지 않고 inactive로 보존합니다. `api_supported=false`
+계정은 수집 대상에서 제외되며, 공식 계정은 경쟁 계정 포화도 계산에 포함하지
+않습니다.
+
+Discovery는 기존 `editorial_jobs`와 orchestration-worker를 사용합니다.
+`FAST`는 10분 cadence, `PLAYER_SWEEP`는 시간 단위 cadence이며, Telegram의
+`더 찾아보기`는 bounded `MANUAL` profile을 사용합니다. Google News와 GDELT는
+고정 HTTPS provider host를 통한 보조 검색일 뿐 source of truth가 아닙니다.
+
+```text
+DISCOVER_TRENDS → PROMOTE_DISCOVERY → GROUND_CLAIMS → RANK_EDITORIAL
+                                             ↓
+                                  Telegram story transitions
+
+ESPN → Supabase matches → D-1/D-DAY briefing → optional Notion projection
+```
+
+`PROMOTE_DISCOVERY`는 fresh discovery observation을 canonical
+`story_clusters`에 idempotently attach/create하고, `DISCOVERY_ONLY` claim과
+editorial candidate를 남깁니다. Discovery provider는 절대로 claim을
+`VERIFIED`로 만들지 않습니다. `news_eligible=false`인 소재의 카드뉴스
+버튼은 검증된 근거 부족 안내를 표시하고 생성을 차단합니다.
+
+`BREAKING_STORY`, `RISING_STORY`, `VERIFIED_STORY` Telegram alert는 story
+state transition, event fingerprint, cooldown으로 dedupe합니다. 기존 morning
+brief는 별도로 유지하며, 매일 09:00 Asia/Seoul에는 Supabase canonical fixture의
+상대팀·킥오프 KST·대회·home/away·venue·status·match phase를 frozen
+`match_context`로 저장합니다. D-1 이벤트와 kickoff 변경 alert는 한 번만
+전송되고, `NOTION_MATCH_CALENDAR_DATABASE_ID`가 설정된 경우에만 Match ID
+기반 projection을 best-effort로 수행합니다.
+
+로컬 deterministic smoke:
+
+```bash
+./scripts/run-milestone-8-6-smoke.sh
+```
+
+이 smoke는 Telegram, Meta, OpenAI, Google News, GDELT, Notion 또는 production
+Supabase를 호출하지 않습니다.
 
 ## 핵심 원칙
 

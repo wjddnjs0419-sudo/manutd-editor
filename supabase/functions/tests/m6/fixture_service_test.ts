@@ -124,3 +124,22 @@ Deno.test("preserves canonical rows when fixture provider fails", async () => {
   assertEquals(result.status, "FAILED");
   assertEquals(repo.rows[0], before);
 });
+
+Deno.test("runs the match assistant hook for synced fixtures so D-1 and projection work are isolated", async () => {
+  const repo = repository([]);
+  const synced: string[] = [];
+  const result = await runFixtureSync(
+    { mode: "FORCE", now: new Date("2026-10-09T15:00:00Z") },
+    {
+      provider: provider([fixture({ kickoff_at: "2026-10-10T16:30:00.000Z" })]),
+      repository: repo,
+      alertThreadId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      onMatchSynced: async (saved, mode) => {
+        synced.push(`${saved.id}:${mode}`);
+        return 1;
+      },
+    },
+  );
+  assertEquals(result.alerts_created, 1);
+  assertEquals(synced.length, 1);
+});

@@ -92,6 +92,27 @@ Deno.test("renderer includes standalone fact source identity and link", () => {
   assert(plans[1].text.includes("https://www.manutd.com/en/news/example"));
 });
 
+Deno.test("D-DAY morning renderer includes only canonical match context", () => {
+  const plans = renderMorningBrief({
+    ...snapshot,
+    match_day_mode: "MATCH_DAY_PRE",
+    match_context: {
+      match_id: "match-1",
+      opponent: "Tottenham",
+      competition: "Premier League",
+      kickoff_display: "2026-10-11 01:30 KST",
+      venue: "Old Trafford",
+    },
+  }, {
+    intro: "좋은 아침입니다.",
+    candidate_notes: [{ position: 1, note: "경기 전 확인할 근거입니다." }],
+    issue_note: null,
+  });
+  assert(plans[0].text.includes("Manchester United vs Tottenham"));
+  assert(plans[0].text.includes("2026-10-11 01:30 KST"));
+  assert(plans[0].text.includes("Old Trafford"));
+});
+
 Deno.test("morning brief handler authenticates and returns safe delivery summary", async () => {
   const handler = createMorningBriefHandler({
     invokeSecret: "secret",

@@ -262,7 +262,7 @@ async function invokeDiscovery(): Promise<{ status: string; run_id?: string; new
   const secret = Deno.env.get("COLLECTOR_INVOKE_SECRET") ?? "";
   if (!secret) return { status: "CONFIGURATION_MISSING", provider_failures: 1 };
   try {
-    const response = await fetch(`${base}/functions/v1/trend-discovery`, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify({ mode: "GENERAL", max_queries: 24 }) });
+    const response = await fetch(`${base}/functions/v1/trend-discovery`, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify({ mode: "GENERAL", search_profile: "MANUAL", max_queries: 24 }) });
     const value = await response.json().catch(() => ({}));
     if (!response.ok || !isObject(value)) return { status: "FAILED", provider_failures: 1 };
     return { status: typeof value.status === "string" ? value.status : "COMPLETED", run_id: typeof value.run_id === "string" ? value.run_id : undefined, new_story_count: typeof value.new_story_count === "number" ? value.new_story_count : 0, provider_failures: Array.isArray(value.provider_statuses) ? value.provider_statuses.filter((item) => isObject(item) && item.status === "FAILED").length : 0 };

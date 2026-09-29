@@ -39,8 +39,9 @@ test("M8 completion alerts are canonical, compact, and deduplicated", async () =
   assert.match(alerts, /INTELLIGENCE_COMPLETE/u);
   assert.match(alerts, /event_fingerprint/u);
   assert.match(renderer, /inline_keyboard/u);
-  assert.match(index, /materializeIntelligenceCompleteAlert/u);
+  assert.match(index, /materializeEditorialStoryAlerts/u);
   assert.match(index, /telegram_alert_events/u);
+  assert.match(renderer, /BREAKING_STORY|RISING_STORY|VERIFIED_STORY/u);
 });
 
 test("M8 console does not add publishing or Figma runtime code", async () => {

@@ -463,7 +463,7 @@ export function createStoryClassifier(
     }
 
     const controller = new AbortController();
-    let timeoutId: number | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(
         () => reject(new Error("classifier timeout")),

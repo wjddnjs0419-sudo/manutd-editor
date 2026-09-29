@@ -36,6 +36,7 @@ export interface FixtureSyncDependencies {
   provider: FixtureProvider;
   repository: FixtureSyncRepository;
   alertThreadId: string;
+  onMatchSynced?: (match: StoredMatch, mode: MatchDayMode, syncedAt: Date) => Promise<number>;
 }
 
 export interface FixtureSyncContext {
@@ -122,6 +123,14 @@ function changed(left: StoredMatch, right: CanonicalFixture): boolean {
     left.away_score !== right.away_score;
 }
 
+function materialKickoffChange(previous: string, next: string): boolean {
+  const left = Date.parse(previous);
+  const right = Date.parse(next);
+  if (!Number.isFinite(left) || !Number.isFinite(right) || left === right) return false;
+  const localDate = (value: string): string => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date(value));
+  return localDate(previous) !== localDate(next) || Math.abs(right - left) >= 15 * 60 * 1000;
+}
+
 export async function runFixtureSync(
   request: { mode: "AUTO" | "FORCE"; now: Date },
   dependencies: FixtureSyncDependencies,
@@ -163,12 +172,17 @@ export async function runFixtureSync(
   }
 
   const previousByExternal = new Map(existing.map((match) => [match.external_match_id, match]));
+  const savedByExternal = new Map<string, StoredMatch>();
   let matchesChanged = 0;
   let alertsCreated = 0;
   for (const next of fetched) {
     const previous = previousByExternal.get(next.external_match_id);
-    if (previous && !changed(previous, next)) continue;
+    if (previous && !changed(previous, next)) {
+      savedByExternal.set(next.external_match_id, previous);
+      continue;
+    }
     const saved = await dependencies.repository.upsertMatch(next, request.now);
+    savedByExternal.set(next.external_match_id, saved);
     if (!previous) continue;
     matchesChanged += 1;
     const events: FixtureAlertEvent[] = [];
@@ -182,7 +196,7 @@ export async function runFixtureSync(
         status: "PENDING",
       });
     }
-    if (previous.kickoff_at !== next.kickoff_at) {
+    if (materialKickoffChange(previous.kickoff_at, next.kickoff_at)) {
       events.push({
         thread_id: dependencies.alertThreadId,
         event_type: "FIXTURE_KICKOFF_CHANGED",
@@ -207,11 +221,22 @@ export async function runFixtureSync(
     }
   }
 
-  const merged = [...existing.filter((row) => !fetched.some((item) => item.external_match_id === row.external_match_id)), ...fetched.map((item) => ({
+  const merged = [...existing.filter((row) => !fetched.some((item) => item.external_match_id === row.external_match_id)), ...fetched.map((item) => savedByExternal.get(item.external_match_id) ?? ({
     ...item,
     id: previousByExternal.get(item.external_match_id)?.id ?? crypto.randomUUID(),
   }))];
   const finalMode = deriveMatchDayMode(merged, request.now, "Asia/Seoul");
+  if (dependencies.onMatchSynced) {
+    for (const fixture of fetched) {
+      const saved = savedByExternal.get(fixture.external_match_id);
+      if (!saved) continue;
+      try {
+        alertsCreated += await dependencies.onMatchSynced(saved, finalMode, request.now);
+      } catch {
+        // Match assistant integrations are non-critical to canonical fixture sync.
+      }
+    }
+  }
   await dependencies.repository.saveFixtureSyncState({
     provider: providerName,
     last_full_sync_at: request.now.toISOString(),

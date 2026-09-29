@@ -1,5 +1,6 @@
 import type { TelegramClient, TelegramInlineKeyboardMarkup } from "./telegram_client.ts";
 import { displayStoryTitle } from "../m8/story_display.ts";
+import { renderEditorialStoryAlert } from "../../telegram-alerts/editorial_alerts.ts";
 
 export interface CandidateAlertState {
   first_mover_flag: boolean;
@@ -118,7 +119,30 @@ function defaultAlert(alert: PendingAlert): RenderedAlert {
     }) : [];
     return intelligenceSummary({ business_date: typeof payload.business_date === "string" ? payload.business_date : "", ranking_version: typeof payload.ranking_version === "string" ? payload.ranking_version : "", stories });
   }
+  if (alert.event_type === "BREAKING_STORY" || alert.event_type === "RISING_STORY" || alert.event_type === "VERIFIED_STORY") {
+    const payload = alert.payload;
+    return renderEditorialStoryAlert({
+      eventType: alert.event_type,
+      storyId: typeof payload.story_id === "string" ? payload.story_id : "story",
+      title: typeof payload.title === "string" ? payload.title : "맨유 관련 소재",
+      sourceCount: typeof payload.source_count === "number" ? payload.source_count : 0,
+      trendState: typeof payload.trend_state === "string" ? payload.trend_state : null,
+      groundingStatus: typeof payload.grounding_status === "string" ? payload.grounding_status : "DISCOVERY_ONLY",
+      newsEligible: payload.news_eligible === true,
+    });
+  }
   const payload = alert.payload;
+  if (alert.event_type === "MATCH_BRIEFING_D1") {
+    const opponent = typeof payload.opponent === "string" ? payload.opponent : "상대팀";
+    const competition = typeof payload.competition === "string" ? payload.competition : "경기";
+    const kickoff = typeof payload.kickoff_display === "string"
+      ? payload.kickoff_display
+      : typeof payload.kickoff_at === "string"
+      ? payload.kickoff_at
+      : "킥오프 미정";
+    const venue = typeof payload.venue === "string" ? payload.venue : "장소 미정";
+    return { text: `⚽ 내일 맨유 경기\n\nManchester United vs ${opponent}\n${competition}\n킥오프: ${kickoff}\n${venue}\n\n최근 관련 이슈는 검증된 canonical story에서 확인해 주세요.` };
+  }
   const prefix = alert.event_type === "FIRST_MOVER" ? "🚨 FIRST_MOVER" : alert.event_type === "MUST_COVER" ? "🚨 MUST_COVER" : "📅 경기 일정 변경";
   const lines = [prefix, typeof payload.title === "string" ? payload.title : "새 알림이 있습니다."];
   if (typeof payload.permalink === "string") lines.push(`🔗 원문: ${payload.permalink}`);
