@@ -6,6 +6,10 @@ set search_path = pgtap, extensions, public;
 
 select plan(34);
 
+-- Preserve the retired-account fixture without restoring it to the M8.6 pool.
+insert into public.source_accounts (username, region, active, api_supported)
+values ('utdreport', 'GLOBAL', true, true);
+
 select has_table('app_private', 'content_understandings', 'content understandings table exists');
 select has_column('app_private', 'content_understandings', 'raw_post_id', 'analysis references a raw post');
 select has_column('app_private', 'content_understandings', 'status', 'analysis stores status');

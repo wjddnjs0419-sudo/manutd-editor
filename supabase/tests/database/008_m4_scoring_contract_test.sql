@@ -5,6 +5,10 @@ create extension if not exists pgtap with schema extensions;
 set search_path = pgtap, extensions, public;
 select plan(16);
 
+-- Preserve the retired-account fixture without restoring it to the M8.6 pool.
+insert into public.source_accounts (username, region, active, api_supported)
+values ('utdreport', 'GLOBAL', true, true);
+
 create function pg_temp.m4_scoring_contract_fixture()
 returns setof text
 language plpgsql

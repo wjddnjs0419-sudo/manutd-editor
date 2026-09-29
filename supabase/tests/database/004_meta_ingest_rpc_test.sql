@@ -5,6 +5,12 @@ create extension if not exists pgtap with schema extensions;
 set search_path = pgtap, extensions, public;
 select plan(27);
 
+-- Milestone 2 predates the M8.6 monitoring-pool replacement. Keep its
+-- historical RPC contract covered with an isolated fixture instead of
+-- reactivating a retired production account in seed.sql.
+insert into public.source_accounts (username, region, active, api_supported)
+values ('utdreport', 'GLOBAL', true, true);
+
 select has_function(
   'public',
   'ingest_instagram_batch',

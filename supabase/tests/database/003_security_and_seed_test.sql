@@ -45,7 +45,7 @@ select ok(
   'service role can operate on backend tables'
 );
 
-select is((select count(*)::integer from public.source_accounts), 10, 'ten monitored accounts are seeded');
+select is((select count(*)::integer from public.source_accounts), 9, 'nine current monitoring accounts are seeded');
 select is((select count(*)::integer from public.information_sources), 5, 'five real information source entities are seeded');
 select is((select count(*)::integer from public.scoring_configs where is_active), 1, 'one scoring configuration is active');
 

@@ -5,6 +5,10 @@ create extension if not exists pgtap with schema extensions;
 set search_path = pgtap, extensions, public;
 select plan(45);
 
+-- Preserve the retired-account fixture without restoring it to the M8.6 pool.
+insert into public.source_accounts (username, region, active, api_supported)
+values ('utdreport', 'GLOBAL', true, true);
+
 -- A production change that removes an M4 boundary, changes a half-open time
 -- predicate, includes the evaluated post in its baseline, or weakens lease
 -- ownership must make one of these tests fail.
@@ -54,7 +58,7 @@ as $m4$
 declare
   -- Keep bucket-boundary fixtures deterministic; using clock_timestamp() makes
   -- the -59 and -30 minute rows collide for some current-minute values.
-  v_run_at timestamptz := '2026-09-27T16:00:00Z'::timestamptz;
+  v_run_at timestamptz := clock_timestamp() + interval '1 day';
   v_config uuid;
   v_global uuid;
   v_kr uuid;

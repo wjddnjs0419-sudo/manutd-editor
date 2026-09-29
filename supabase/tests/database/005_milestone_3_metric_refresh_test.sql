@@ -5,6 +5,12 @@ create extension if not exists pgtap with schema extensions;
 set search_path = pgtap, extensions, public;
 select plan(20);
 
+-- Historical account fixtures are local to this Milestone 3 contract test.
+insert into public.source_accounts (username, region, active, api_supported)
+values
+  ('utdreport', 'GLOBAL', true, true),
+  ('utddistrict', 'GLOBAL', true, true);
+
 select has_column(
   'public',
   'post_metric_snapshots',
