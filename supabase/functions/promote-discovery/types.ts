@@ -45,4 +45,5 @@ export interface PromotionSummary {
   readonly storiesUpdated: number;
   readonly claimsCreated: number;
   readonly editorialCandidatesEnsured: number;
+  readonly affectedStoryIds: readonly string[];
 }

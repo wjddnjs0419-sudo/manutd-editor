@@ -42,7 +42,7 @@ export interface GroundedClaim extends GroundingClaim {
 }
 
 export interface GroundingRepository {
-  listClaims(asOf?: Date): Promise<readonly GroundingClaim[]>;
+  listClaims(options?: GroundingPageOptions | Date): Promise<GroundingClaimPage | readonly GroundingClaim[]>;
   listObservations(asOf?: Date): Promise<readonly GroundingObservation[]>;
   upsertClaim(claim: GroundedClaim, version: string): Promise<string>;
   upsertEvidence(claimId: string, evidence: GroundingEvidence): Promise<void>;
@@ -50,13 +50,33 @@ export interface GroundingRepository {
 
 export interface GroundingRunInput {
   readonly asOf?: Date;
+  readonly storyClusterIds?: readonly string[];
+  readonly limit?: number;
+  readonly cursor?: string | null;
+  readonly requestId?: string;
+  readonly log?: (entry: Record<string, unknown>) => void;
+}
+
+export interface GroundingPageOptions {
+  readonly asOf?: Date;
+  readonly storyClusterIds?: readonly string[];
+  readonly limit?: number;
+  readonly cursor?: string | null;
+}
+
+export interface GroundingClaimPage {
+  readonly claims: readonly GroundingClaim[];
+  readonly hasMore: boolean;
+  readonly nextCursor: string | null;
 }
 
 export interface GroundingSummary {
-  readonly status: "COMPLETED";
+  readonly status: "COMPLETED" | "PARTIAL";
   readonly claimsProcessed: number;
   readonly verified: number;
   readonly discoveryOnly: number;
   readonly contradicted: number;
   readonly insufficient: number;
+  readonly hasMore?: boolean;
+  readonly nextCursor?: string | null;
 }

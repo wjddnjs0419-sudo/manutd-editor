@@ -8,4 +8,4 @@ const supabaseUrl = requiredEnv(readEnv, "SUPABASE_URL");
 const serviceRoleKey = resolveSupabaseSecretKey(readEnv);
 const collectorSecret = requiredEnv(readEnv, "COLLECTOR_INVOKE_SECRET");
 const repository = createGroundingRepository({ supabaseUrl, serviceRoleKey });
-Deno.serve(createGroundClaimsHandler({ collectorSecret, run: (input) => runClaimGrounding({ repository, ...input }) }));
+Deno.serve(createGroundClaimsHandler({ collectorSecret, run: (input, context) => runClaimGrounding({ repository, ...input, requestId: context?.requestId, log: context?.log }) }));

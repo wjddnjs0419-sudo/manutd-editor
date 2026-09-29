@@ -1,9 +1,10 @@
 import type { EditorialRankingRunInput, EditorialRankingSummary } from "./types.ts";
+import { businessDate } from "../_shared/m6/business_date.ts";
 
 export interface RankEditorialHandlerDependencies {
   readonly collectorSecret: string;
   readonly requestId?: () => string;
-  readonly run: (input: EditorialRankingRunInput) => Promise<EditorialRankingSummary>;
+  readonly run: (input: EditorialRankingRunInput & { readonly rankingDate: string }) => Promise<EditorialRankingSummary>;
   readonly log?: (entry: Record<string, unknown>) => void;
 }
 
@@ -48,7 +49,12 @@ export function createRankEditorialHandler(dependencies: RankEditorialHandlerDep
     const supplied = bearer(request.headers.get("authorization"));
     if (!supplied || !await equal(supplied, dependencies.collectorSecret)) { log({ requestId: id, event: "rank_editorial_rejected", code: "UNAUTHORIZED" }); return Response.json({ request_id: id, error: { code: "UNAUTHORIZED", message: "Unauthorized" } }, { status: 401 }); }
     try {
-      const result = await dependencies.run(await body(request));
+      const input = await body(request);
+      const rankingInput = {
+        ...input,
+        rankingDate: input.rankingDate ?? businessDate(input.asOf ?? new Date(), "Asia/Seoul"),
+      };
+      const result = await dependencies.run(rankingInput);
       return Response.json({ request_id: id, status: result.status, ranked: result.ranked, news_eligible: result.newsEligible, research_leads: result.researchLeads, version: result.version });
     } catch (error) {
       if (error instanceof InvalidRequestError) return Response.json({ request_id: id, error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 });

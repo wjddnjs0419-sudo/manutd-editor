@@ -1,4 +1,5 @@
 import type { BoundaryInvoker, EditorialJobType } from "./types.ts";
+import { isGroundingCursor, isGroundingLimit, isGroundingScope } from "../ground-claims/contract.ts";
 
 interface BoundaryClientOptions {
   readonly functionsUrl: string;
@@ -44,8 +45,20 @@ function requestBody(jobType: EditorialJobType, payload: Record<string, unknown>
     };
     return Object.keys(value).length === 0 ? undefined : value;
   }
-  if (jobType === "RUN_INTELLIGENCE" || jobType === "SYNC_NOTION" || jobType === "DISCOVER_SOURCES" || jobType === "GROUND_CLAIMS" || jobType === "RANK_EDITORIAL") {
+  if (jobType === "RUN_INTELLIGENCE" || jobType === "SYNC_NOTION" || jobType === "DISCOVER_SOURCES" || jobType === "RANK_EDITORIAL") {
     return typeof payload.as_of === "string" ? { as_of: payload.as_of } : undefined;
+  }
+  if (jobType === "GROUND_CLAIMS") {
+    if (payload.story_cluster_ids !== undefined && !isGroundingScope(payload.story_cluster_ids)) throw new Error("GROUNDING_PAYLOAD_INVALID");
+    if (payload.limit !== undefined && !isGroundingLimit(payload.limit)) throw new Error("GROUNDING_PAYLOAD_INVALID");
+    if (payload.cursor !== undefined && payload.cursor !== null && !isGroundingCursor(payload.cursor)) throw new Error("GROUNDING_PAYLOAD_INVALID");
+    const value = {
+      ...(typeof payload.as_of === "string" ? { as_of: payload.as_of } : {}),
+      ...(Array.isArray(payload.story_cluster_ids) ? { story_cluster_ids: payload.story_cluster_ids.filter((item): item is string => typeof item === "string") } : {}),
+      ...(typeof payload.limit === "number" && Number.isSafeInteger(payload.limit) ? { limit: payload.limit } : {}),
+      ...(typeof payload.cursor === "string" || payload.cursor === null ? { cursor: payload.cursor } : {}),
+    };
+    return Object.keys(value).length === 0 ? undefined : value;
   }
   if (jobType === "DISCOVER_TRENDS") {
     const value = {
@@ -91,7 +104,12 @@ export function createBoundaryInvoker(options: BoundaryClientOptions): BoundaryI
           return value === undefined ? undefined : JSON.stringify(value);
         })(),
       });
-      return { status: response.status };
+      if (!response.ok) return { status: response.status };
+      try {
+        return { status: response.status, body: await response.json() };
+      } catch {
+        return { status: response.status };
+      }
     },
   };
 }

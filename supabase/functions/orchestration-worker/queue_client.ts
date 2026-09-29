@@ -103,6 +103,20 @@ export function createEditorialJobQueue(options: EditorialJobQueueOptions): Edit
       throw new Error("QUEUE_ENQUEUE_RESPONSE_INVALID");
     },
 
+    async updatePayload(jobId, patch, workerId) {
+      if (!workerId) throw new Error("QUEUE_WORKER_ID_REQUIRED");
+      const value = await rpc("update_editorial_job_payload", {
+        p_job_id: jobId,
+        p_worker_id: workerId,
+        p_patch: {
+          grounding_story_cluster_ids: patch.grounding_story_cluster_ids,
+          grounding_as_of: patch.grounding_as_of,
+          grounding_limit: patch.grounding_limit,
+        },
+      });
+      if (value !== true) throw new Error("QUEUE_PAYLOAD_UPDATE_REJECTED");
+    },
+
     async claim(workerId, limit, now, leaseSeconds) {
       const value = await rpc("claim_editorial_jobs", {
         p_worker_id: workerId,
@@ -140,4 +154,3 @@ export function createEditorialJobQueue(options: EditorialJobQueueOptions): Edit
     },
   };
 }
-

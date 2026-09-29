@@ -5,6 +5,7 @@ import type {
   EditorialJobType,
   OrchestrationBatchSummary,
 } from "./types.ts";
+import { GROUNDING_DEFAULT_LIMIT, GROUNDING_MAX_SCOPE, isGroundingCursor, isGroundingLimit, isGroundingStoryId } from "../ground-claims/contract.ts";
 
 const NEXT_STAGE: Partial<Record<EditorialJobType, EditorialJobType>> = {
   COLLECT_INSTAGRAM: "ANALYZE_CONTENT",
@@ -52,9 +53,56 @@ function statusOf(body: unknown): string | null {
   return body.status;
 }
 
+function booleanField(body: unknown, camel: string, snake: string): boolean {
+  if (!isRecord(body)) return false;
+  return body[camel] === true || body[snake] === true;
+}
+
+function stringField(body: unknown, camel: string, snake: string): string | null {
+  if (!isRecord(body)) return null;
+  const value = body[camel] ?? body[snake];
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+function storyIds(value: unknown, field: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > GROUNDING_MAX_SCOPE || value.some((item) => !isGroundingStoryId(item)) || new Set(value).size !== value.length) {
+    throw { category: "GROUNDING_PAYLOAD_INVALID", message: `${field} is invalid` } satisfies SafeWorkerFailure;
+  }
+  return [...value] as string[];
+}
+
+function affectedStoryIds(body: unknown): string[] {
+  if (!isRecord(body)) return [];
+  const value = body.affectedStoryIds ?? body.affected_story_ids;
+  return storyIds(value, "affected_story_ids");
+}
+
+function asOfFor(job: EditorialJob, fallback: Date | string): string {
+  return typeof job.payload.as_of === "string" && job.payload.as_of.trim() !== ""
+    ? job.payload.as_of
+    : typeof fallback === "string" ? fallback : fallback.toISOString();
+}
+
+function groundLimit(payload: Record<string, unknown>): number {
+  if (payload.limit === undefined) return GROUNDING_DEFAULT_LIMIT;
+  if (!isGroundingLimit(payload.limit)) throw { category: "GROUNDING_PAYLOAD_INVALID", message: "limit is invalid" } satisfies SafeWorkerFailure;
+  return payload.limit;
+}
+
+function validateGroundingJob(job: EditorialJob): void {
+  if (job.job_type !== "GROUND_CLAIMS") return;
+  storyIds(job.payload.story_cluster_ids, "story_cluster_ids");
+  groundLimit(job.payload);
+  if (job.payload.cursor !== undefined && job.payload.cursor !== null && !isGroundingCursor(job.payload.cursor)) {
+    throw { category: "GROUNDING_PAYLOAD_INVALID", message: "cursor is invalid" } satisfies SafeWorkerFailure;
+  }
+}
+
 function downstreamFor(job: EditorialJob, result: { status: number; body?: unknown }): EditorialJobType | null {
   const next = NEXT_STAGE[job.job_type] ?? null;
   if (!next) return null;
+  if (job.job_type === "PROMOTE_DISCOVERY" || job.job_type === "GROUND_CLAIMS") return null;
   if (job.job_type === "RUN_INTELLIGENCE" && (result.status === 202 || statusOf(result.body) === "already_running")) {
     return null;
   }
@@ -88,6 +136,59 @@ function downstreamPayload(job: EditorialJob, next: EditorialJobType): Record<st
   };
 }
 
+interface DownstreamTransition {
+  readonly jobType: EditorialJobType;
+  readonly payload: Record<string, unknown>;
+  readonly dedupeKey: string;
+}
+
+function promotionTransition(job: EditorialJob, body: unknown, completedAt: Date): DownstreamTransition | null {
+  const savedIds = storyIds(job.payload.grounding_story_cluster_ids, "grounding_story_cluster_ids");
+  const ids = savedIds.length > 0 ? savedIds : affectedStoryIds(body);
+  if (ids.length === 0) return null;
+  if (ids.length > 100) throw { category: "PROMOTE_DISCOVERY_INVALID_RESULT", message: "Promotion grounding scope exceeds 100 stories" } satisfies SafeWorkerFailure;
+  const root = chainKey(job);
+  return {
+    jobType: "GROUND_CLAIMS",
+    payload: {
+      chain_key: root,
+      parent_job_id: job.id,
+      stage: "GROUND_CLAIMS",
+      as_of: savedIds.length > 0 && typeof job.payload.grounding_as_of === "string"
+        ? asOfFor(job, job.payload.grounding_as_of)
+        : asOfFor(job, completedAt),
+      story_cluster_ids: ids,
+      limit: savedIds.length > 0 ? groundLimit({ limit: job.payload.grounding_limit }) : GROUNDING_DEFAULT_LIMIT,
+      cursor: null,
+    },
+    dedupeKey: `${root}:GROUND_CLAIMS:initial`,
+  };
+}
+
+function groundingTransition(job: EditorialJob, body: unknown): DownstreamTransition {
+  const status = statusOf(body);
+  const hasMore = booleanField(body, "hasMore", "has_more");
+  const root = chainKey(job);
+  if (status === "PARTIAL" || hasMore) {
+    const cursor = stringField(body, "nextCursor", "next_cursor");
+    if (!cursor || !isGroundingCursor(cursor)) throw { category: "GROUND_CLAIMS_INVALID_RESULT", message: "GROUND_CLAIMS continuation cursor is invalid" } satisfies SafeWorkerFailure;
+    const payload: Record<string, unknown> = {
+      chain_key: root,
+      parent_job_id: job.id,
+      stage: "GROUND_CLAIMS",
+      as_of: typeof job.payload.as_of === "string" ? job.payload.as_of : undefined,
+      story_cluster_ids: job.payload.story_cluster_ids === undefined ? undefined : storyIds(job.payload.story_cluster_ids, "story_cluster_ids"),
+      limit: groundLimit(job.payload),
+      cursor,
+    };
+    Object.keys(payload).forEach((key) => payload[key] === undefined && delete payload[key]);
+    return { jobType: "GROUND_CLAIMS", payload, dedupeKey: `${root}:GROUND_CLAIMS:${cursor}` };
+  }
+  if (status !== "COMPLETED" || hasMore) throw { category: "GROUND_CLAIMS_INVALID_RESULT", message: "GROUND_CLAIMS did not complete" } satisfies SafeWorkerFailure;
+  const next = NEXT_STAGE.GROUND_CLAIMS!;
+  return { jobType: next, payload: downstreamPayload(job, next), dedupeKey: `${root}:${next}` };
+}
+
 export function createOrchestrationWorker(options: OrchestrationWorkerOptions): {
   processBatch(): Promise<OrchestrationBatchSummary>;
 } {
@@ -99,16 +200,35 @@ export function createOrchestrationWorker(options: OrchestrationWorkerOptions): 
 
   async function processJob(job: EditorialJob, claimedAt: Date): Promise<{ succeeded: boolean; downstreamEnqueued: number }> {
     try {
-      const result = await options.invoker.invoke(job.job_type, job.payload);
+      validateGroundingJob(job);
+      // Once the handoff is durable, retries only replay it. Promoting again could
+      // assign new observations to a scope whose downstream job already exists.
+      const result = job.job_type === "PROMOTE_DISCOVERY" && storyIds(job.payload.grounding_story_cluster_ids, "grounding_story_cluster_ids").length > 0
+        ? { status: 200, body: { affectedStoryIds: [] } }
+        : await options.invoker.invoke(job.job_type, job.payload);
       if (result.status < 200 || result.status >= 300) throw httpFailure(job.job_type, result.status);
 
-      const next = downstreamFor(job, result);
+      const transition = job.job_type === "PROMOTE_DISCOVERY"
+        ? promotionTransition(job, result.body, now())
+        : job.job_type === "GROUND_CLAIMS"
+        ? groundingTransition(job, result.body)
+        : (() => {
+          const next = downstreamFor(job, result);
+          return next ? { jobType: next, payload: downstreamPayload(job, next), dedupeKey: `${chainKey(job)}:${next}` } : null;
+        })();
       let downstreamEnqueued = 0;
-      if (next) {
+      if (transition) {
+        if (job.job_type === "PROMOTE_DISCOVERY" && options.queue.updatePayload) {
+          await options.queue.updatePayload(job.id, {
+            grounding_story_cluster_ids: transition.payload.story_cluster_ids,
+            grounding_as_of: transition.payload.as_of,
+            grounding_limit: transition.payload.limit,
+          }, options.workerId);
+        }
         await options.queue.enqueue(
-          next,
-          downstreamPayload(job, next),
-          `${chainKey(job)}:${next}`,
+          transition.jobType,
+          transition.payload,
+          transition.dedupeKey,
           job.max_attempts,
           claimedAt,
         );

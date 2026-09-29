@@ -52,6 +52,7 @@ export interface EditorialJobQueue {
   complete(jobId: string, workerId: string, finishedAt: Date): Promise<boolean>;
   fail(jobId: string, workerId: string, category: string, message: string, failedAt: Date): Promise<EditorialJob>;
   enqueue(jobType: EditorialJobType, payload: Record<string, unknown>, dedupeKey: string, maxAttempts: number, availableAt: Date): Promise<string>;
+  updatePayload?(jobId: string, patch: Record<string, unknown>, workerId?: string): Promise<void>;
 }
 
 export interface OrchestrationBatchSummary {
