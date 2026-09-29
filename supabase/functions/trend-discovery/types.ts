@@ -1,4 +1,18 @@
-export type DiscoveryMode = "GENERAL" | "BREAKING" | "TRANSFERS" | "MATCH" | "PLAYERS" | "COMMUNITY";
+export type DiscoveryMode =
+  | "GENERAL"
+  | "BREAKING"
+  | "TRANSFERS"
+  | "MATCH"
+  | "PLAYERS"
+  | "COMMUNITY";
+
+export type DiscoverySearchProfile = "FAST" | "PLAYER_SWEEP" | "MANUAL";
+export type DiscoveryEntityType =
+  | "PLAYER"
+  | "MANAGER"
+  | "OWNER"
+  | "TRANSFER_TARGET";
+export type DiscoveryTrackingTier = "HOT" | "FIRST_TEAM" | "BACKGROUND";
 
 export type DiscoveryWindow = "BREAKING" | "HOT" | "CURRENT" | "BACKGROUND";
 
@@ -31,6 +45,22 @@ export interface DiscoveryEntityContext {
   readonly nextOpponent?: string | null;
   readonly competitions?: readonly string[];
   readonly recentlyDetectedEntities?: readonly string[];
+  readonly hotEntities?: readonly DiscoveryHotEntity[];
+}
+
+export interface DiscoveryHotEntity {
+  readonly canonicalName: string;
+  readonly entityType: DiscoveryEntityType;
+  readonly trackingTier: "HOT";
+  readonly nationalTeam?: string | null;
+  readonly hotStartedAt?: string | null;
+  readonly hotUntil: string;
+  readonly signalFamily?:
+    | "INJURY"
+    | "TRANSFER"
+    | "CONTRACT"
+    | "INTERNATIONAL_DUTY"
+    | null;
 }
 
 export interface DiscoveryQuery {
@@ -42,11 +72,14 @@ export interface DiscoveryQuery {
   readonly windowStart: string;
   readonly windowEnd: string;
   readonly priority: number;
+  readonly searchProfile?: DiscoverySearchProfile;
+  readonly entityName?: string;
 }
 
 export interface QueryExpansionInput {
   readonly asOf: Date | string;
   readonly mode?: DiscoveryMode;
+  readonly searchProfile?: DiscoverySearchProfile;
   readonly entityContext?: DiscoveryEntityContext;
   readonly maxQueries?: number;
 }
@@ -62,14 +95,26 @@ export interface EngagementMetrics {
 export interface DiscoveryObservation {
   readonly providerId: string;
   readonly sourceCanonicalName: string;
-  readonly sourceRole: "FACT_PRIMARY" | "FACT_INDEPENDENT" | "DISCOVERY_COMPETITOR" | "DISCOVERY_COMMUNITY" | "DISCOVERY_VIDEO";
+  readonly sourceRole:
+    | "FACT_PRIMARY"
+    | "FACT_INDEPENDENT"
+    | "DISCOVERY_COMPETITOR"
+    | "DISCOVERY_COMMUNITY"
+    | "DISCOVERY_VIDEO";
   readonly externalId: string;
   readonly canonicalUrl: string;
   readonly title: string;
   readonly excerpt: string | null;
   readonly publishedAt: string | null;
   readonly observedAt: string;
-  readonly platform: "WEB" | "RSS" | "ATOM" | "REDDIT" | "INSTAGRAM" | "YOUTUBE" | "OTHER";
+  readonly platform:
+    | "WEB"
+    | "RSS"
+    | "ATOM"
+    | "REDDIT"
+    | "INSTAGRAM"
+    | "YOUTUBE"
+    | "OTHER";
   readonly engagement: EngagementMetrics;
   readonly engagementAvailable: boolean;
   readonly discoveryQueryId: string;
@@ -84,7 +129,13 @@ export interface DiscoveryProvider {
   discover(input: DiscoveryQuery): Promise<readonly DiscoveryObservation[]>;
 }
 
-export type TrendState = "BREAKING" | "RISING" | "HOT" | "STABLE" | "COOLING" | "SATURATED";
+export type TrendState =
+  | "BREAKING"
+  | "RISING"
+  | "HOT"
+  | "STABLE"
+  | "COOLING"
+  | "SATURATED";
 
 export interface TrendSnapshot {
   readonly storyClusterId: string | null;
