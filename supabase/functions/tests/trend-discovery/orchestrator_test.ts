@@ -123,6 +123,31 @@ Deno.test("uncertain observations are retained for later relevance refinement", 
   assertEquals(repo.snapshots.length, 0);
 });
 
+Deno.test("re-evaluates retained candidates after bounded enrichment", async () => {
+  const repo = repository();
+  const result = await runTrendDiscovery({
+    asOf: "2026-09-27T12:00:00.000Z",
+    maxQueries: 1,
+    providers: [provider({
+      discover: async (value) => [observation({
+        discoveryQueryId: value.queryId,
+        title: "Liverpool transfer roundup",
+        excerpt: "Liverpool Liverpool and a late United mention.",
+      })],
+    })],
+    enrichObservation: async (value) => ({
+      ...value,
+      excerpt: "Manchester United injury update: a first-team player returned to training.",
+    }),
+    repository: repo,
+  });
+
+  assertEquals(result.observationCount, 1);
+  assertEquals(result.newStoryCount, 1);
+  assertEquals(repo.snapshots.length, 1);
+  assertEquals(repo.observations[0]?.excerpt, "Manchester United injury update: a first-team player returned to training.");
+});
+
 Deno.test("runs providers concurrently without exceeding the discovery concurrency bound", async () => {
   const repo = repository();
   const probe = concurrencyProbe();

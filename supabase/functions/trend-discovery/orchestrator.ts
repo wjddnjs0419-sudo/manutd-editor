@@ -1,4 +1,5 @@
 import { clusterObservations } from "./clustering.ts";
+import type { ArticleEnricher } from "./article_enrichment.ts";
 import { expandDiscoveryQueries } from "./query_expansion.ts";
 import { calculateManutdRelevanceScore } from "./relevance.ts";
 import { calculateTrendScore, deriveOpportunityLabels, deriveTrendState, normalizedEngagementScore, trendSignalsFromObservations } from "./scoring.ts";
@@ -6,6 +7,8 @@ import type { TrendDiscoveryRepository } from "./repository.ts";
 import type { DiscoveryEntityContext, DiscoveryMode, DiscoveryObservation, DiscoveryProvider, DiscoveryRunSummary, DiscoverySearchProfile, ProviderRunStatus, TrendSnapshot } from "./types.ts";
 
 const DISCOVERY_CONCURRENCY = 4;
+const ENRICHMENT_CONCURRENCY = 2;
+const DEFAULT_MAX_ENRICHMENTS = 12;
 
 export interface RunTrendDiscoveryOptions {
   readonly asOf?: Date | string;
@@ -14,6 +17,8 @@ export interface RunTrendDiscoveryOptions {
   readonly entityContext?: DiscoveryEntityContext;
   readonly resolveEntityContext?: (asOf: Date | string) => Promise<DiscoveryEntityContext>;
   readonly maxQueries?: number;
+  readonly enrichObservation?: ArticleEnricher;
+  readonly maxEnrichments?: number;
   readonly providers: readonly DiscoveryProvider[];
   readonly repository: TrendDiscoveryRepository;
   readonly now?: () => Date;
@@ -27,6 +32,46 @@ function safeNow(now: () => Date): Date {
 
 function groundingStatus(observations: readonly DiscoveryObservation[]): string {
   return observations.some((item) => item.sourceRole === "FACT_PRIMARY" || item.sourceRole === "FACT_INDEPENDENT") ? "VERIFIED" : "DISCOVERY_ONLY";
+}
+
+function observationKey(observation: DiscoveryObservation): string {
+  return `${observation.providerId}\u0000${observation.externalId}`;
+}
+
+function relevanceScore(observation: DiscoveryObservation): number {
+  return calculateManutdRelevanceScore({ title: observation.title, excerpt: observation.excerpt });
+}
+
+function publishedTime(observation: DiscoveryObservation): number {
+  const value = observation.publishedAt ? Date.parse(observation.publishedAt) : Number.NaN;
+  return Number.isFinite(value) ? value : 0;
+}
+
+async function enrichObservations(
+  observations: readonly DiscoveryObservation[],
+  enricher: ArticleEnricher | undefined,
+  maxEnrichments: number,
+): Promise<readonly DiscoveryObservation[]> {
+  if (!enricher || observations.length === 0 || maxEnrichments <= 0) return observations;
+  const enrich = enricher;
+  const candidates = [...observations]
+    .sort((left, right) => relevanceScore(left) - relevanceScore(right) || publishedTime(right) - publishedTime(left))
+    .slice(0, maxEnrichments);
+  const enriched = new Map<string, DiscoveryObservation>();
+  let nextCandidate = 0;
+  async function worker(): Promise<void> {
+    while (true) {
+      const candidate = candidates[nextCandidate++];
+      if (!candidate) return;
+      try {
+        enriched.set(observationKey(candidate), await enrich(candidate));
+      } catch {
+        // Keep the provider observation when article enrichment is unavailable.
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(ENRICHMENT_CONCURRENCY, candidates.length) }, () => worker()));
+  return observations.map((observation) => enriched.get(observationKey(observation)) ?? observation);
 }
 
 function mentionWindows(observations: readonly DiscoveryObservation[], asOf: Date | string): { mentionsLast1h: number; mentionsLast3h: number; mentionsPrevious3h: number; mentionsLast12h: number } {
@@ -102,14 +147,14 @@ export async function runTrendDiscovery(options: RunTrendDiscoveryOptions): Prom
     const failed = failures.has(provider.providerId);
     providerStatuses.push({ providerId: provider.providerId, status: failed ? "FAILED" : "COMPLETED", observations: providerObservationCounts.get(provider.providerId) ?? 0, ...(failed ? { errorCategory: "PROVIDER_UNAVAILABLE" } : {}) });
   }
-  const accepted = [...observations.values()];
+  const accepted = await enrichObservations([...observations.values()], options.enrichObservation, options.maxEnrichments ?? DEFAULT_MAX_ENRICHMENTS);
   const persistence = await Promise.all(accepted.map((observation) => options.repository.upsertObservation(observation, runId)));
   const storyClusterByObservation = new Map(accepted.map((observation, index) => [
-    `${observation.providerId}\u0000${observation.externalId}`,
+    observationKey(observation),
     persistence[index]?.storyClusterId ?? null,
   ]));
   const trendObservations = accepted.filter((observation) =>
-    calculateManutdRelevanceScore({ title: observation.title, excerpt: observation.excerpt }) > 0
+    relevanceScore(observation) > 0
   );
   const clusters = clusterObservations(trendObservations);
   const snapshots: TrendSnapshot[] = [];
@@ -128,7 +173,7 @@ export async function runTrendDiscovery(options: RunTrendDiscoveryOptions): Prom
     const state = deriveTrendState({ trendScore: scores.trendScore, velocityScore: scores.components.velocity, crossSourceScore: scores.components.crossSource, freshnessScore: scores.components.freshness, noveltyScore: scores.components.novelty, acceleration: scores.acceleration });
     const relevance = scores.components.manutdRelevance;
     const storyClusterId = clusterObservations
-      .map((observation) => storyClusterByObservation.get(`${observation.providerId}\u0000${observation.externalId}`) ?? null)
+      .map((observation) => storyClusterByObservation.get(observationKey(observation)) ?? null)
       .find((value): value is string => value !== null) ?? null;
     const snapshot: TrendSnapshot = {
       storyClusterId,
