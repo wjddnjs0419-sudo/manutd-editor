@@ -24,7 +24,7 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/u;
 export function createPromoteDiscoveryHandler(dependencies: PromoteDiscoveryHandlerDependencies): (request: Request) => Promise<Response> {
   if (!dependencies.invokeSecret.trim()) throw new Error("Promotion invoke secret is required");
   const now = dependencies.now ?? (() => new Date());
-  const defaultLimit = dependencies.defaultLimit ?? 500;
+  const defaultLimit = dependencies.defaultLimit ?? 100;
   return async (request) => {
     if (request.method !== "POST") return Response.json({ error: { code: "METHOD_NOT_ALLOWED", message: "POST required" } }, { status: 405 });
     if (!await equal(bearer(request.headers.get("authorization")), dependencies.invokeSecret)) return Response.json({ error: { code: "UNAUTHORIZED", message: "Unauthorized" } }, { status: 401 });
@@ -36,7 +36,7 @@ export function createPromoteDiscoveryHandler(dependencies: PromoteDiscoveryHand
     const asOf = value.as_of === undefined ? now() : typeof value.as_of === "string" && ISO.test(value.as_of) ? new Date(value.as_of) : null;
     const limit = value.limit === undefined ? defaultLimit : value.limit;
     const rankingDate = value.ranking_date === undefined ? undefined : typeof value.ranking_date === "string" && DATE.test(value.ranking_date) ? value.ranking_date : null;
-    if (!asOf || !Number.isFinite(asOf.getTime()) || typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 500 || rankingDate === null) return Response.json({ error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 });
+    if (!asOf || !Number.isFinite(asOf.getTime()) || typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 || rankingDate === null) return Response.json({ error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 });
     const result = await dependencies.run({ asOf, limit, ...(rankingDate ? { rankingDate } : {}) });
     return Response.json(result);
   };

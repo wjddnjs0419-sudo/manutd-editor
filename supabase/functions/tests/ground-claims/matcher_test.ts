@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { classifyClaimEvidence } from "../../ground-claims/matcher.ts";
+import * as matcher from "../../ground-claims/matcher.ts";
 import type { GroundingClaim, GroundingObservation } from "../../ground-claims/types.ts";
 
 const claim: GroundingClaim = {
@@ -108,4 +109,25 @@ Deno.test("requires an entity anchor instead of generic shared football tokens",
 
   assert.equal(result.status, "INSUFFICIENT");
   assert.equal(result.evidence.length, 0);
+});
+
+Deno.test("prepared matcher is equivalent across fact, discovery, contradiction, ignored, and unrelated fixtures", () => {
+  const prepared = matcher as unknown as {
+    prepareGroundingObservations?: (items: readonly GroundingObservation[]) => unknown;
+    classifyPreparedClaimEvidence?: (claim: GroundingClaim, prepared: unknown) => ReturnType<typeof classifyClaimEvidence>;
+  };
+  assert.equal(typeof prepared.prepareGroundingObservations, "function");
+  assert.equal(typeof prepared.classifyPreparedClaimEvidence, "function");
+  const fixtures: readonly (readonly GroundingObservation[])[] = [
+    [observation("FACT_PRIMARY")],
+    [observation("DISCOVERY_COMMUNITY")],
+    [observation("DISCOVERY_COMMUNITY"), observation("FACT_INDEPENDENT", "CONTRADICTS")],
+    [observation("MATCH_CONTEXT"), observation("OWN_PERFORMANCE")],
+    [{ ...observation("FACT_INDEPENDENT"), id: "unrelated", title: "Arsenal academy update", excerpt: "Arsenal academy trained in London" }],
+  ];
+  for (const observations of fixtures) {
+    const expected = classifyClaimEvidence(claim, observations);
+    const actual = prepared.classifyPreparedClaimEvidence!(claim, prepared.prepareGroundingObservations!(observations));
+    assert.deepEqual(actual, expected, expected.status);
+  }
 });

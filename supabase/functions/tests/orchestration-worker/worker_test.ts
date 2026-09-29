@@ -9,6 +9,9 @@ import type {
 } from "../../orchestration-worker/types.ts";
 
 const now = new Date("2026-09-26T00:00:00.000Z");
+const storyOne = "11111111-1111-4111-8111-111111111111";
+const storyTwo = "22222222-2222-4222-8222-222222222222";
+const storyOther = "33333333-3333-4333-8333-333333333333";
 
 function job(
   id: string,
@@ -38,21 +41,28 @@ function job(
 
 function queueWith(
   initialJobs: readonly EditorialJob[],
-  options: { repeatClaims?: boolean } = {},
+  options: { repeatClaims?: boolean; enqueueFailures?: number } = {},
 ): EditorialJobQueue & {
   readonly completed: string[];
   readonly failed: Array<{ id: string; category: string; message: string }>;
   readonly enqueued: Map<string, string>;
+  readonly enqueueCalls: Array<{ jobType: EditorialJobType; payload: Record<string, unknown>; dedupeKey: string }>;
+  readonly payloadUpdates: Array<{ jobId: string; patch: Record<string, unknown> }>;
 } {
   const jobs = [...initialJobs];
   const completed: string[] = [];
   const failed: Array<{ id: string; category: string; message: string }> = [];
   const enqueued = new Map<string, string>();
+  const enqueueCalls: Array<{ jobType: EditorialJobType; payload: Record<string, unknown>; dedupeKey: string }> = [];
+  const payloadUpdates: Array<{ jobId: string; patch: Record<string, unknown> }> = [];
+  let enqueueFailuresRemaining = options.enqueueFailures ?? 0;
   let enqueueSequence = 0;
   return {
     completed,
     failed,
     enqueued,
+    enqueueCalls,
+    payloadUpdates,
     async claim() {
       if (options.repeatClaims) return jobs;
       const pending = jobs.filter((entry) => entry.status === "PENDING");
@@ -71,12 +81,22 @@ function queueWith(
       if (entry) entry.status = "PENDING";
       return entry ?? job(id, "COLLECT_INSTAGRAM");
     },
-    async enqueue(_jobType, _payload, dedupeKey) {
+    async enqueue(jobType, payload, dedupeKey) {
+      enqueueCalls.push({ jobType, payload, dedupeKey });
+      if (enqueueFailuresRemaining > 0) {
+        enqueueFailuresRemaining -= 1;
+        throw new Error("QUEUE_ENQUEUE_FAILED");
+      }
       const existing = enqueued.get(dedupeKey);
       if (existing) return existing;
       const id = `downstream-${++enqueueSequence}`;
       enqueued.set(dedupeKey, id);
       return id;
+    },
+    async updatePayload(jobId, patch) {
+      payloadUpdates.push({ jobId, patch });
+      const entry = jobs.find((value) => value.id === jobId);
+      if (entry) Object.assign(entry.payload, patch);
     },
   };
 }
@@ -205,9 +225,14 @@ Deno.test("intelligence already_running is safe but does not start priority gene
   assert.deepEqual(queue.completed, ["intelligence-1"]);
 });
 
-Deno.test("source grounding, promotion, and ranking stages form the Phase B/C chain", async () => {
-  const stages: EditorialJobType[] = ["RUN_INTELLIGENCE", "DISCOVER_SOURCES", "DISCOVER_TRENDS", "PROMOTE_DISCOVERY", "GROUND_CLAIMS", "RANK_EDITORIAL"];
-  for (const [index, stage] of stages.entries()) {
+Deno.test("unaffected editorial stages retain their downstream transitions", async () => {
+  const transitions: Array<[EditorialJobType, EditorialJobType]> = [
+    ["RUN_INTELLIGENCE", "DISCOVER_SOURCES"],
+    ["DISCOVER_SOURCES", "DISCOVER_TRENDS"],
+    ["DISCOVER_TRENDS", "PROMOTE_DISCOVERY"],
+    ["RANK_EDITORIAL", "GENERATE_PRIORITY"],
+  ];
+  for (const [index, [stage, expected]] of transitions.entries()) {
     const queue = queueWith([job(`stage-${index}`, stage)]);
     const worker = createOrchestrationWorker({
       queue,
@@ -216,9 +241,210 @@ Deno.test("source grounding, promotion, and ranking stages form the Phase B/C ch
       now: () => now,
     });
     await worker.processBatch();
-    const expected = stages[index + 1] ?? "GENERATE_PRIORITY";
     assert.deepEqual([...queue.enqueued.keys()], [`pipeline-1:${expected}`]);
   }
+});
+
+Deno.test("promotion enqueues grounding for only its affected story IDs with a canonical payload", async () => {
+  const asOf = "2026-09-25T12:00:00.000Z";
+  const queue = queueWith([job("promotion-1", "PROMOTE_DISCOVERY", {
+    payload: { chain_key: "pipeline-1", as_of: asOf },
+  })]);
+  const worker = createOrchestrationWorker({
+    queue,
+    invoker: invoker(async () => ({
+      status: 200,
+      body: { status: "COMPLETED", affectedStoryIds: [storyOne, storyTwo], unrelatedStoryId: storyOther },
+    })),
+    workerId: "worker-1",
+    now: () => now,
+  });
+
+  const result = await worker.processBatch();
+
+  assert.deepEqual(result, { claimed: 1, succeeded: 1, failed: 0, downstream_enqueued: 1 });
+  assert.deepEqual(queue.enqueueCalls, [{
+    jobType: "GROUND_CLAIMS",
+    payload: {
+      chain_key: "pipeline-1",
+      parent_job_id: "promotion-1",
+      stage: "GROUND_CLAIMS",
+      as_of: asOf,
+      story_cluster_ids: [storyOne, storyTwo],
+      limit: 25,
+      cursor: null,
+    },
+    dedupeKey: "pipeline-1:GROUND_CLAIMS:initial",
+  }]);
+  assert.deepEqual(queue.completed, ["promotion-1"]);
+});
+
+Deno.test("promotion snapshots grounding after promotion when the root has no as-of", async () => {
+  const times = [
+    new Date("2026-09-25T12:00:00.000Z"),
+    new Date("2026-09-25T12:00:01.000Z"),
+    new Date("2026-09-25T12:00:02.000Z"),
+  ];
+  const queue = queueWith([job("promotion-1", "PROMOTE_DISCOVERY")]);
+  const worker = createOrchestrationWorker({
+    queue,
+    invoker: invoker(async () => ({ status: 200, body: { status: "COMPLETED", affectedStoryIds: [storyOne] } })),
+    workerId: "worker-1",
+    now: () => times.shift() ?? new Date("2026-09-25T12:00:03.000Z"),
+  });
+
+  await worker.processBatch();
+
+  assert.equal(queue.enqueueCalls[0]?.payload.as_of, "2026-09-25T12:00:01.000Z");
+});
+
+Deno.test("promotion with empty or missing affected story IDs does not enqueue grounding", async () => {
+  for (const body of [
+    { status: "COMPLETED", affectedStoryIds: [] },
+    { status: "COMPLETED" },
+  ]) {
+    const queue = queueWith([job("promotion-1", "PROMOTE_DISCOVERY")]);
+    const worker = createOrchestrationWorker({
+      queue,
+      invoker: invoker(async () => ({ status: 200, body })),
+      workerId: "worker-1",
+      now: () => now,
+    });
+
+    const result = await worker.processBatch();
+
+    assert.deepEqual(result, { claimed: 1, succeeded: 1, failed: 0, downstream_enqueued: 0 });
+    assert.deepEqual(queue.enqueueCalls, []);
+    assert.deepEqual(queue.completed, ["promotion-1"]);
+  }
+});
+
+Deno.test("promotion retry replays a persisted grounding scope when the response is empty", async () => {
+  const queue = queueWith([job("promotion-1", "PROMOTE_DISCOVERY", {
+    payload: {
+      chain_key: "pipeline-1",
+      grounding_story_cluster_ids: [storyOne],
+      grounding_as_of: "2026-09-25T12:00:01.000Z",
+      grounding_limit: 25,
+    },
+  })]);
+  const worker = createOrchestrationWorker({
+    queue,
+    invoker: invoker(async () => ({ status: 200, body: { status: "COMPLETED", affectedStoryIds: [] } })),
+    workerId: "worker-1",
+    now: () => now,
+  });
+
+  const result = await worker.processBatch();
+
+  assert.equal(result.downstream_enqueued, 1);
+  assert.deepEqual(queue.enqueueCalls[0]?.payload.story_cluster_ids, [storyOne]);
+  assert.equal(queue.enqueueCalls[0]?.payload.as_of, "2026-09-25T12:00:01.000Z");
+});
+
+Deno.test("promotion persists grounding scope before an enqueue failure so retry can recover", async () => {
+  const queue = queueWith([job("promotion-1", "PROMOTE_DISCOVERY")], { enqueueFailures: 1 });
+  let invocation = 0;
+  const worker = createOrchestrationWorker({
+    queue,
+    invoker: invoker(async () => {
+      invocation += 1;
+      return { status: 200, body: { status: "COMPLETED", affectedStoryIds: invocation === 1 ? [storyOne] : [] } };
+    }),
+    workerId: "worker-1",
+    now: () => now,
+  });
+
+  const first = await worker.processBatch();
+  const second = await worker.processBatch();
+
+  assert.equal(first.failed, 1);
+  assert.equal(second.succeeded, 1);
+  assert.deepEqual(queue.payloadUpdates[0]?.patch.grounding_story_cluster_ids, [storyOne]);
+  assert.equal(queue.enqueued.size, 1);
+});
+
+Deno.test("worker rejects malformed grounding promotion metadata before enqueue", async () => {
+  const queue = queueWith([job("promotion-1", "PROMOTE_DISCOVERY")]);
+  const worker = createOrchestrationWorker({
+    queue,
+    invoker: invoker(async () => ({ status: 200, body: { status: "COMPLETED", affectedStoryIds: ["not-a-uuid"] } })),
+    workerId: "worker-1",
+    now: () => now,
+  });
+
+  const result = await worker.processBatch();
+
+  assert.deepEqual(result, { claimed: 1, succeeded: 0, failed: 1, downstream_enqueued: 0 });
+  assert.equal(queue.enqueueCalls.length, 0);
+  assert.equal(queue.failed[0]?.category, "GROUNDING_PAYLOAD_INVALID");
+});
+
+Deno.test("partial grounding enqueues a scoped continuation with a cursor-specific dedupe key", async () => {
+  const asOf = "2026-09-25T12:00:00.000Z";
+  const scope = [storyOne, storyTwo];
+  const queue = queueWith([job("grounding-1", "GROUND_CLAIMS", {
+    payload: { chain_key: "pipeline-1", as_of: asOf, story_cluster_ids: scope, limit: 25, cursor: null },
+    dedupe_key: "pipeline-1:GROUND_CLAIMS:initial",
+  })]);
+  const worker = createOrchestrationWorker({
+    queue,
+    invoker: invoker(async () => ({
+      status: 200,
+      body: { status: "PARTIAL", has_more: true, next_cursor: "d:claim-2" },
+    })),
+    workerId: "worker-1",
+    now: () => now,
+  });
+
+  const result = await worker.processBatch();
+
+  assert.deepEqual(result, { claimed: 1, succeeded: 1, failed: 0, downstream_enqueued: 1 });
+  assert.deepEqual(queue.enqueueCalls, [{
+    jobType: "GROUND_CLAIMS",
+    payload: {
+      chain_key: "pipeline-1",
+      parent_job_id: "grounding-1",
+      stage: "GROUND_CLAIMS",
+      as_of: asOf,
+      story_cluster_ids: scope,
+      limit: 25,
+      cursor: "d:claim-2",
+    },
+    dedupeKey: "pipeline-1:GROUND_CLAIMS:d:claim-2",
+  }]);
+  assert.deepEqual(queue.completed, ["grounding-1"]);
+});
+
+Deno.test("completed grounding with no more pages enqueues editorial ranking", async () => {
+  const queue = queueWith([job("grounding-2", "GROUND_CLAIMS", {
+    payload: {
+      chain_key: "pipeline-1",
+      as_of: "2026-09-25T12:00:00.000Z",
+      story_cluster_ids: [storyOne],
+      limit: 25,
+      cursor: "d:claim-2",
+    },
+    dedupe_key: "pipeline-1:GROUND_CLAIMS:d:claim-2",
+  })]);
+  const worker = createOrchestrationWorker({
+    queue,
+    invoker: invoker(async () => ({
+      status: 200,
+      body: { status: "COMPLETED", has_more: false, next_cursor: null },
+    })),
+    workerId: "worker-1",
+    now: () => now,
+  });
+
+  const result = await worker.processBatch();
+
+  assert.deepEqual(result, { claimed: 1, succeeded: 1, failed: 0, downstream_enqueued: 1 });
+  assert.deepEqual(queue.enqueueCalls.map(({ jobType, dedupeKey }) => ({ jobType, dedupeKey })), [{
+    jobType: "RANK_EDITORIAL",
+    dedupeKey: "pipeline-1:RANK_EDITORIAL",
+  }]);
+  assert.deepEqual(queue.completed, ["grounding-2"]);
 });
 
 Deno.test("Notion failure is isolated and does not enqueue selected polling", async () => {

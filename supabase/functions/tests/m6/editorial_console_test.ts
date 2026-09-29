@@ -152,7 +152,7 @@ Deno.test("carousel renderer keeps editor warning outside public slides", () => 
   assert(view.inline_keyboard.flat().some((button) => button.callback_data.startsWith("draft:approve:")));
 });
 
-Deno.test("repository joins canonical ranking, story, candidate, source, and evidence rows", async () => {
+Deno.test("repository recovers trend scores from pre-promotion snapshots by content fingerprint", async () => {
   const repository = createEditorialConsoleRepository({
     supabaseUrl: "https://example.supabase.co",
     serviceRoleKey: "service-role",
@@ -165,7 +165,20 @@ Deno.test("repository joins canonical ranking, story, candidate, source, and evi
       if (url.includes("story_claims")) return new Response(JSON.stringify([{ id: "claim-1", story_cluster_id: firstStory.story_cluster_id, claim_text: "산초가 새 팀을 찾고 있다.", grounding_status: "VERIFIED" }]));
       if (url.includes("claim_evidence")) return new Response(JSON.stringify([{ claim_id: "claim-1", source_observation_id: "observation-1", evidence_text: "BBC confirms the status.", is_grounding: true }]));
       if (url.includes("source_observations")) return new Response(JSON.stringify([{ id: "observation-1", information_source_id: "source-1", canonical_url: "https://example.test/bbc", title: "BBC Sport", editorial_role: "FACT_PRIMARY" }]));
-      if (url.includes("trend_snapshots")) return new Response(JSON.stringify([{ story_cluster_id: null, cluster_key: "trend:fingerprint-1", snapshot_at: "2026-09-27T11:00:00.000Z", trend_score: 94, trend_state: "RISING", source_count: 2, platform_count: 3, opportunity_labels: ["🔥 빠르게 뜨는 중"], input_snapshot: { content_fingerprints: ["fingerprint-1"] } }]));
+      if (url.includes("trend_snapshots")) {
+        const select = new URL(url).searchParams.get("select")?.split(",") ?? [];
+        return new Response(JSON.stringify([{
+          story_cluster_id: null,
+          cluster_key: "discovery:source-story-1",
+          snapshot_at: "2026-09-27T11:00:00.000Z",
+          trend_score: 94,
+          trend_state: "RISING",
+          source_count: 2,
+          platform_count: 3,
+          opportunity_labels: ["🔥 빠르게 뜨는 중"],
+          ...(select.includes("input_snapshot") ? { input_snapshot: { content_fingerprints: ["fingerprint-1"] } } : {}),
+        }]));
+      }
       return new Response(JSON.stringify([]));
     },
   });

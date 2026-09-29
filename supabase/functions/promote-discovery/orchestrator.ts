@@ -1,4 +1,5 @@
 import { clusterObservations } from "../trend-discovery/clustering.ts";
+import { businessDate } from "../_shared/m6/business_date.ts";
 import type { PromotionObservation, PromotionStory, DiscoveryPromotionRepository, PromotionSummary } from "./types.ts";
 
 interface PromoteDiscoveryOptions {
@@ -104,15 +105,19 @@ function signatureFor(
 
 export async function promoteDiscovery(options: PromoteDiscoveryOptions): Promise<PromotionSummary> {
   const asOf = asOfDate(options.asOf);
-  const observations = [...await options.repository.listFreshUnassigned(asOf, options.limit ?? 500)];
-  if (observations.length === 0) return { status: "COMPLETED", observationsProcessed: 0, storiesCreated: 0, storiesUpdated: 0, claimsCreated: 0, editorialCandidatesEnsured: 0 };
+  const limit = options.limit ?? 100;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("INVALID_PROMOTION_LIMIT");
+  const observations = [...await options.repository.listFreshUnassigned(asOf, limit)];
+  if (observations.length > limit) throw new Error("PROMOTION_LIMIT_EXCEEDED");
+  if (observations.length === 0) return { status: "COMPLETED", observationsProcessed: 0, storiesCreated: 0, storiesUpdated: 0, claimsCreated: 0, editorialCandidatesEnsured: 0, affectedStoryIds: [] };
   const stories = [...await options.repository.listStories(asOf)];
   const clusters = clusterObservations(observations);
-  const rankingDate = options.rankingDate ?? asOf.toISOString().slice(0, 10);
+  const rankingDate = options.rankingDate ?? businessDate(asOf, "Asia/Seoul");
   let storiesCreated = 0;
   let storiesUpdated = 0;
   let claimsCreated = 0;
   let editorialCandidatesEnsured = 0;
+  const affectedStoryIds = new Set<string>();
   for (const cluster of clusters) {
     const items = cluster.observations as readonly PromotionObservation[];
     const topic = topicOf(items[0]!);
@@ -132,6 +137,7 @@ export async function promoteDiscovery(options: PromoteDiscoveryOptions): Promis
     });
     if (story.created) storiesCreated += 1;
     else storiesUpdated += 1;
+    affectedStoryIds.add(story.id);
     for (const item of items) {
       await options.repository.assignObservation(item.id, story.id);
       const sourceObservationId = await options.repository.ensureSourceObservation(item);
@@ -141,5 +147,5 @@ export async function promoteDiscovery(options: PromoteDiscoveryOptions): Promis
       editorialCandidatesEnsured += 1;
     }
   }
-  return { status: "COMPLETED", observationsProcessed: observations.length, storiesCreated, storiesUpdated, claimsCreated, editorialCandidatesEnsured };
+  return { status: "COMPLETED", observationsProcessed: observations.length, storiesCreated, storiesUpdated, claimsCreated, editorialCandidatesEnsured, affectedStoryIds: [...affectedStoryIds] };
 }

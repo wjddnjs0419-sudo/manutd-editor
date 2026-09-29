@@ -43,17 +43,28 @@ function strongAnchors(claim: GroundingClaim): readonly string[] {
     });
 }
 
-function hasEntityAnchor(claim: GroundingClaim, observation: GroundingObservation): boolean {
-  const haystack = normalizedPhrase(`${observation.title} ${observation.excerpt ?? ""}`);
-  return strongAnchors(claim).some((anchor) => {
+export interface PreparedGroundingObservation {
+  readonly observation: GroundingObservation;
+  readonly haystack: string;
+  readonly terms: ReadonlySet<string>;
+}
+
+export function prepareGroundingObservations(observations: readonly GroundingObservation[]): readonly PreparedGroundingObservation[] {
+  return observations.map((observation) => ({
+    observation,
+    haystack: normalizedPhrase(`${observation.title} ${observation.excerpt ?? ""}`),
+    terms: terms(`${observation.title} ${observation.excerpt ?? ""}`),
+  }));
+}
+
+function hasEntityAnchor(anchors: readonly string[], haystack: string): boolean {
+  return anchors.some((anchor) => {
     const aliases = ANCHOR_ALIASES[anchor] ?? [anchor];
     return aliases.some((alias) => ` ${haystack} `.includes(` ${normalizedPhrase(alias)} `));
   });
 }
 
-function overlap(claim: GroundingClaim, observation: GroundingObservation): number {
-  const claimTerms = terms(`${claim.subject} ${claim.predicate} ${claim.object} ${claim.claimText}`);
-  const observationTerms = terms(`${observation.title} ${observation.excerpt ?? ""}`);
+function overlap(claimTerms: ReadonlySet<string>, observationTerms: ReadonlySet<string>): number {
   if (claimTerms.size === 0 || observationTerms.size === 0) return 0;
   let matches = 0;
   for (const term of claimTerms) if (observationTerms.has(term)) matches += 1;
@@ -64,11 +75,21 @@ export function classifyClaimEvidence(
   claim: GroundingClaim,
   observations: readonly GroundingObservation[],
 ): GroundedClaim {
+  return classifyPreparedClaimEvidence(claim, prepareGroundingObservations(observations));
+}
+
+export function classifyPreparedClaimEvidence(
+  claim: GroundingClaim,
+  observations: readonly PreparedGroundingObservation[],
+): GroundedClaim {
   const evidence: GroundingEvidence[] = [];
-  for (const observation of observations) {
+  const anchors = strongAnchors(claim);
+  const claimTerms = terms(`${claim.subject} ${claim.predicate} ${claim.object} ${claim.claimText}`);
+  for (const prepared of observations) {
+    const { observation } = prepared;
     if (IGNORED_ROLES.has(observation.editorialRole)) continue;
-    if (!hasEntityAnchor(claim, observation)) continue;
-    const score = overlap(claim, observation);
+    if (!hasEntityAnchor(anchors, prepared.haystack)) continue;
+    const score = overlap(claimTerms, prepared.terms);
     if (score < 0.25) continue;
     const fact = FACT_ROLES.has(observation.editorialRole);
     evidence.push({

@@ -351,7 +351,7 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
         request("/rest/v1/source_observations?select=id,information_source_id,canonical_url,title,editorial_role", "app_private"),
         request("/rest/v1/information_sources?select=id,canonical_name&limit=500"),
         request("/rest/v1/creative_briefs?select=id,candidate_id,version,status&order=version.desc"),
-        request(`/rest/v1/trend_snapshots?select=story_cluster_id,cluster_key,snapshot_at,trend_score,trend_state,source_count,platform_count,opportunity_labels&snapshot_at=lte.${encodeURIComponent(`${rankingDate}T23:59:59.999Z`)}&order=snapshot_at.desc`, "app_private"),
+        request(`/rest/v1/trend_snapshots?select=story_cluster_id,cluster_key,snapshot_at,trend_score,trend_state,source_count,platform_count,opportunity_labels,input_snapshot&snapshot_at=lte.${encodeURIComponent(`${rankingDate}T23:59:59.999Z`)}&order=snapshot_at.desc`, "app_private"),
       ]);
 
       const clusterById = new Map(array(clusters).flatMap((value) => typeof value.id === "string" && typeof value.canonical_title === "string" ? [[value.id, value]] as const : []));

@@ -134,3 +134,58 @@ Deno.test("boundary client preserves empty-body contracts for unscoped collectio
   await invoker.invoke("SYNC_NOTION", {});
   assert.deepEqual(bodies, [null, null, null, null, null]);
 });
+
+Deno.test("boundary client preserves a successful parsed JSON response body", async () => {
+  const body = { status: "COMPLETED", affectedStoryIds: ["story-1", "story-2"] };
+  const invoker = createBoundaryInvoker({
+    functionsUrl: "https://supabase.test/functions/v1",
+    collectorSecret: "collector-secret",
+    telegramSecret: "telegram-secret",
+    request: async () => response(body),
+  });
+
+  assert.deepEqual(await invoker.invoke("PROMOTE_DISCOVERY", {}), { status: 200, body });
+});
+
+Deno.test("boundary client rejects malformed grounding payload values", async () => {
+  const invoker = createBoundaryInvoker({
+    functionsUrl: "https://supabase.test/functions/v1",
+    collectorSecret: "collector-secret",
+    telegramSecret: "telegram-secret",
+    request: async () => response({ status: "COMPLETED" }),
+  });
+
+  await assert.rejects(() => invoker.invoke("GROUND_CLAIMS", {
+    story_cluster_ids: ["not-a-uuid"],
+    limit: 101,
+    cursor: "not-a-cursor",
+  }));
+});
+
+Deno.test("boundary client handles a successful response with an empty body", async () => {
+  const invoker = createBoundaryInvoker({
+    functionsUrl: "https://supabase.test/functions/v1",
+    collectorSecret: "collector-secret",
+    telegramSecret: "telegram-secret",
+    request: async () => new Response(null, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+
+  assert.deepEqual(await invoker.invoke("PROMOTE_DISCOVERY", {}), { status: 200 });
+});
+
+Deno.test("boundary client ignores invalid JSON in a successful response", async () => {
+  const invoker = createBoundaryInvoker({
+    functionsUrl: "https://supabase.test/functions/v1",
+    collectorSecret: "collector-secret",
+    telegramSecret: "telegram-secret",
+    request: async () => new Response("{invalid", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+
+  assert.deepEqual(await invoker.invoke("PROMOTE_DISCOVERY", {}), { status: 200 });
+});
