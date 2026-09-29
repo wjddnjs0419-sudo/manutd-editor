@@ -287,6 +287,7 @@ export function createIngestRepository(
       const query = new URLSearchParams({
         select: "id,username,active",
         active: "eq.true",
+        api_supported: "not.is.false",
         order: "username.asc",
       });
       const response = await request(

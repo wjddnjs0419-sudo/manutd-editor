@@ -50,7 +50,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-Deno.test("loads active accounts and rejects rows outside the response contract", async () => {
+Deno.test("loads active accounts with unknown API capability for probing and rejects invalid rows", async () => {
   let requestUrl = "";
   const repository = createIngestRepository({
     supabaseUrl: "http://127.0.0.1:55321/",
@@ -61,6 +61,7 @@ Deno.test("loads active accounts and rejects rows outside the response contract"
         id: sourceAccountId,
         username: "utdreport",
         active: true,
+        api_supported: null,
       }]));
     },
     sleep: () => Promise.resolve(),
@@ -72,7 +73,7 @@ Deno.test("loads active accounts and rejects rows outside the response contract"
   }]);
   assert.equal(
     requestUrl,
-    "http://127.0.0.1:55321/rest/v1/source_accounts?select=id%2Cusername%2Cactive&active=eq.true&order=username.asc",
+    "http://127.0.0.1:55321/rest/v1/source_accounts?select=id%2Cusername%2Cactive&active=eq.true&api_supported=not.is.false&order=username.asc",
   );
 
   for (
