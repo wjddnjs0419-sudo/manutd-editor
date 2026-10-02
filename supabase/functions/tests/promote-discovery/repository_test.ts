@@ -44,6 +44,33 @@ Deno.test("source registry lookup preserves spaces in canonical names", async ()
   assertEquals(new URL(sourceLookup).searchParams.get("canonical_name"), "eq.Google News");
 });
 
+Deno.test("new publisher source records its publisher homepage and remains explicitly uncurated", async () => {
+  const writes: { url: string; body: Record<string, unknown> }[] = [];
+  const repository = createDiscoveryPromotionRepository({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "service-role-key",
+    request: async (input, init) => {
+      const url = String(input);
+      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null;
+      if (body) writes.push({ url, body });
+      if (url.includes("/information_sources?") && !init?.method) return new Response("[]");
+      if (url.includes("/information_sources")) return new Response(JSON.stringify([{ id: "source-goal" }]));
+      if (url.includes("/source_observations")) return new Response(JSON.stringify([{ id: "source-observation-goal" }]));
+      return new Response("[]");
+    },
+  });
+
+  await repository.ensureSourceObservation({
+    ...observation,
+    sourceCanonicalName: "Goal.com",
+    metadata: { publisher_url: "https://www.goal.com/en" },
+  });
+  const registryInsert = writes.find((item) => item.url.endsWith("/information_sources"));
+  assertEquals(registryInsert?.body.website_url, "https://www.goal.com");
+  assertEquals(registryInsert?.body.reliability_score, 0);
+  assertEquals(registryInsert?.body.reliability_rationale, "Publisher reliability has not been curated.");
+});
+
 Deno.test("promotion retry re-reads observations already assigned by the same job", async () => {
   const promotionJobId = "99999999-9999-4999-8999-999999999999";
   const requests: { url: string; method: string; body: Record<string, unknown> | null }[] = [];

@@ -64,7 +64,19 @@ Deno.test("Google News uses fixed RSS search, normalizes dates and retains undat
   assertEquals(result[0].providerId, "google-news");
   assertEquals(result[0].sourceRole, "DISCOVERY_COMMUNITY");
   assertEquals(result[0].platform, "RSS");
-  assertEquals(result[0].metadata, {});
+  assertEquals(result[0].metadata, { feed_url: "https://news.google.com/rss/search", format: "RSS" });
+});
+
+Deno.test("Google News results retain the article publisher separately from the discovery provider", async () => {
+  const provider = createGoogleNewsDiscoveryProvider({
+    fetch: () => Promise.resolve(new Response(`<rss><channel>${rssItem("goal-1").replace("</item>", '<source url="https://www.goal.com">Goal.com</source></item>')}</channel></rss>`)),
+    now: () => new Date("2026-09-29T12:01:00.000Z"),
+  });
+  const [result] = await provider.discover(query);
+  assertEquals(result?.providerId, "google-news");
+  assertEquals(result?.sourceCanonicalName, "Goal.com");
+  assertEquals(result?.sourceRole, "DISCOVERY_COMMUNITY");
+  assertEquals(result?.metadata.publisher_url, "https://www.goal.com/");
 });
 
 Deno.test("GDELT DOC uses fixed structured endpoint, bounded dates and safe article fields", async () => {

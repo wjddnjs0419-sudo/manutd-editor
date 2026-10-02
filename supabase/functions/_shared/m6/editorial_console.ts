@@ -10,6 +10,7 @@ export interface EditorialEvidence {
   status: "SUPPORTED" | "REPORTED" | "CONTRADICTED";
   canonical_url: string | null;
   editorial_role?: string | null;
+  source_reliability_score?: number | null;
 }
 
 export interface EditorialStoryInput {
@@ -266,9 +267,20 @@ export function renderStoryDetail(story: CanonicalStory): ConsoleView {
     : story.grounding_status === "DISCOVERY_ONLY" && discoverySources.length > 0
     ? `발견 경로: ${discoverySources.join(" / ")}`
     : `주요 출처: ${sourceNames.length > 0 ? sourceNames.join(" / ") : "확인 중"}`;
+  const reliabilityBySource = new Map<string, number | null>();
+  for (const evidence of story.evidence) {
+    reliabilityBySource.set(evidence.source_name, typeof evidence.source_reliability_score === "number" && evidence.source_reliability_score > 0 ? evidence.source_reliability_score : null);
+  }
+  const ratedSources = unique([...reliabilityBySource.keys()]);
+  const reliabilityLine = ratedSources.length > 0
+    ? `매체 신뢰도: ${ratedSources.map((name) => {
+      const score = reliabilityBySource.get(name);
+      return `${name} ${typeof score !== "number" || score <= 0 ? "미등록" : `${score.toFixed(1)}/10`}`;
+    }).join(" · ")}`
+    : "매체 신뢰도: 미등록";
   const format = story.news_eligible ? "카드뉴스 초안" : "카드뉴스 초안 · 확인 수준 표시";
   return {
-    text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n${editorialTrustLabel(editorialTrustState(story))}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${story.trend_state ?? "STABLE"} · ${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼\n\n정보격차 ${score10(story.information_gap_score)}\n훅 ${score10(story.hook_strength)}\n공유성 ${score10(story.shareability)}\n사실 검증 ${score10(story.source_confidence)}/10\n\n추천 포맷:\n${format}\n\n${sourceLine}`,
+    text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n${editorialTrustLabel(editorialTrustState(story))}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${story.trend_state ?? "STABLE"} · ${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼\n\n정보격차 ${score10(story.information_gap_score)}\n훅 ${score10(story.hook_strength)}\n공유성 ${score10(story.shareability)}\n사실 검증 ${score10(story.source_confidence)}/10\n${reliabilityLine}\n\n추천 포맷:\n${format}\n\n${sourceLine}`,
     inline_keyboard: [
       [
         { text: "📰 원문/출처", callback_data: callbackData("idea:evidence", story.id) },
@@ -363,7 +375,7 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
         request("/rest/v1/story_claims?select=id,story_cluster_id,claim_text,grounding_status", "app_private"),
         request("/rest/v1/claim_evidence?select=claim_id,source_observation_id,evidence_text,is_grounding", "app_private"),
         request("/rest/v1/source_observations?select=id,information_source_id,canonical_url,title,editorial_role", "app_private"),
-        request("/rest/v1/information_sources?select=id,canonical_name&limit=500"),
+        request("/rest/v1/information_sources?select=id,canonical_name,reliability_score,reliability_rationale&limit=500"),
         request("/rest/v1/creative_briefs?select=id,candidate_id,version,status&order=version.desc"),
         request(`/rest/v1/trend_snapshots?select=story_cluster_id,cluster_key,snapshot_at,trend_score,trend_state,source_count,platform_count,opportunity_labels,input_snapshot&snapshot_at=lte.${encodeURIComponent(`${rankingDate}T23:59:59.999Z`)}&order=snapshot_at.desc`, "app_private"),
       ]);
@@ -380,7 +392,12 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
       const observationById = new Map<string, JsonObject>();
       for (const value of array(observations)) if (typeof value.id === "string") observationById.set(value.id, value);
       const informationSourceNameById = new Map<string, string>();
-      for (const value of array(informationSources)) if (typeof value.id === "string" && typeof value.canonical_name === "string") informationSourceNameById.set(value.id, value.canonical_name);
+      const sourceReliabilityById = new Map<string, number | null>();
+      for (const value of array(informationSources)) {
+        if (typeof value.id !== "string" || typeof value.canonical_name !== "string") continue;
+        informationSourceNameById.set(value.id, value.canonical_name);
+        sourceReliabilityById.set(value.id, typeof value.reliability_score === "number" ? value.reliability_score : null);
+      }
       const evidenceByClaim = new Map<string, JsonObject[]>();
       for (const value of array(claimEvidence)) if (typeof value.claim_id === "string") evidenceByClaim.set(value.claim_id, [...(evidenceByClaim.get(value.claim_id) ?? []), value]);
       const evidenceByCluster = new Map<string, EditorialEvidence[]>();
@@ -397,6 +414,7 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
           status,
           canonical_url: observation && typeof observation.canonical_url === "string" ? observation.canonical_url : null,
           editorial_role: observation && typeof observation.editorial_role === "string" ? observation.editorial_role : null,
+          source_reliability_score: observation && typeof observation.information_source_id === "string" ? sourceReliabilityById.get(observation.information_source_id) ?? null : null,
         };
         evidenceByCluster.set(claim.story_cluster_id, [...(evidenceByCluster.get(claim.story_cluster_id) ?? []), entry]);
       }

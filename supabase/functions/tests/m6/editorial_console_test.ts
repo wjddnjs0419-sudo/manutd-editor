@@ -112,16 +112,31 @@ Deno.test("discovery-only detail labels unverified facts separately from the Goo
   const discoveryStory = buildCanonicalStories([{
     ...secondStory,
     fact_grounding_score: 0,
-    source_names: ["Google News"],
-    evidence: [{ evidence_id: "discovery:1", source_name: "Google News", claim_text: "기사 후보", status: "REPORTED", canonical_url: "https://news.google.com/rss/articles/example", editorial_role: "DISCOVERY_COMMUNITY" }],
+    source_names: ["Goal.com"],
+    evidence: [{ evidence_id: "discovery:1", source_name: "Goal.com", claim_text: "기사 후보", status: "REPORTED", canonical_url: "https://news.google.com/rss/articles/example", editorial_role: "DISCOVERY_COMMUNITY", source_reliability_score: null }],
   }])[0]!;
   const detail = renderStoryDetail(discoveryStory);
   const evidence = renderEvidenceView(discoveryStory);
 
   assert(detail.text.includes("사실 검증 0.0/10"));
-  assert(detail.text.includes("발견 경로: Google News"));
-  assertFalse(detail.text.includes("출처신뢰"));
+  assert(detail.text.includes("발견 경로: Goal.com"));
+  assert(detail.text.includes("매체 신뢰도: Goal.com 미등록"));
+  assertFalse(detail.text.includes("매체 신뢰도: Goal.com 0.0/10"));
   assert(evidence.text.includes("https://news.google.com/rss/articles/example"));
+});
+
+Deno.test("editorial detail shows curated outlet reliability separately from fact verification", () => {
+  const story = buildCanonicalStories([{
+    ...firstStory,
+    fact_grounding_score: 0,
+    grounding_status: "DISCOVERY_ONLY",
+    news_eligible: false,
+    source_names: ["BBC Sport"],
+    evidence: [{ evidence_id: "discovery:2", source_name: "BBC Sport", claim_text: "기사 후보", status: "REPORTED", canonical_url: "https://bbc.com/story", editorial_role: "DISCOVERY_COMMUNITY", source_reliability_score: 8 }],
+  }])[0]!;
+  const detail = renderStoryDetail(story);
+  assert(detail.text.includes("사실 검증 0.0/10"));
+  assert(detail.text.includes("매체 신뢰도: BBC Sport 8.0/10"));
 });
 
 Deno.test("trending renderer exposes trend/editorial scores, state, and platform diversity", () => {
@@ -187,6 +202,7 @@ Deno.test("repository recovers trend scores from pre-promotion snapshots by cont
       if (url.includes("story_claims")) return new Response(JSON.stringify([{ id: "claim-1", story_cluster_id: firstStory.story_cluster_id, claim_text: "산초가 새 팀을 찾고 있다.", grounding_status: "VERIFIED" }]));
       if (url.includes("claim_evidence")) return new Response(JSON.stringify([{ claim_id: "claim-1", source_observation_id: "observation-1", evidence_text: "BBC confirms the status.", is_grounding: true }]));
       if (url.includes("source_observations")) return new Response(JSON.stringify([{ id: "observation-1", information_source_id: "source-1", canonical_url: "https://example.test/bbc", title: "BBC Sport", editorial_role: "FACT_PRIMARY" }]));
+      if (url.includes("information_sources?")) return new Response(JSON.stringify([{ id: "source-1", canonical_name: "BBC Sport", reliability_score: 8, reliability_rationale: "Curated primary outlet." }]));
       if (url.includes("trend_snapshots")) {
         const select = new URL(url).searchParams.get("select")?.split(",") ?? [];
         return new Response(JSON.stringify([{
@@ -209,6 +225,7 @@ Deno.test("repository recovers trend scores from pre-promotion snapshots by cont
   assertEquals(stories[0]?.title, firstStory.canonical_title);
   assertEquals(stories[0]?.source_count, 1);
   assertEquals(stories[0]?.evidence[0]?.status, "SUPPORTED");
+  assertEquals(stories[0]?.evidence[0]?.source_reliability_score, 8);
   assertEquals(stories[0]?.trend_score, 94);
   assertEquals(stories[0]?.trend_platform_count, 3);
 });

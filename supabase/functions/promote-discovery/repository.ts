@@ -153,7 +153,13 @@ export function createDiscoveryPromotionRepository(options: RepositoryOptions): 
       const sourceQuery = new URLSearchParams({ select: "id", canonical_name: `eq.${item.sourceCanonicalName}`, limit: "1" });
       let source = await first(`/rest/v1/information_sources?${sourceQuery}`);
       if (!source || typeof source.id !== "string") {
-        source = await first("/rest/v1/information_sources", { method: "POST", headers: { prefer: "return=representation" }, body: JSON.stringify({ canonical_name: item.sourceCanonicalName, entity_type: "MEDIA_OUTLET", aliases: [], website_url: new URL(item.canonicalUrl).origin, reliability_score: 0, reliability_rationale: "Discovery provider; not a verification source.", editorial_role: item.sourceRole, active: true }) });
+        const publisherUrl = typeof item.metadata.publisher_url === "string" ? item.metadata.publisher_url : item.canonicalUrl;
+        let websiteUrl = new URL(item.canonicalUrl).origin;
+        try {
+          const parsedPublisherUrl = new URL(publisherUrl);
+          if (parsedPublisherUrl.protocol === "https:" && !parsedPublisherUrl.username && !parsedPublisherUrl.password) websiteUrl = parsedPublisherUrl.origin;
+        } catch { /* Keep the canonical article host when publisher metadata is invalid. */ }
+        source = await first("/rest/v1/information_sources", { method: "POST", headers: { prefer: "return=representation" }, body: JSON.stringify({ canonical_name: item.sourceCanonicalName, entity_type: "MEDIA_OUTLET", aliases: [], website_url: websiteUrl, reliability_score: 0, reliability_rationale: "Publisher reliability has not been curated.", editorial_role: item.sourceRole, active: true }) });
       }
       if (!source || typeof source.id !== "string") throw new Error("SOURCE_REGISTRY_PERSISTENCE_ERROR");
       const payload = { information_source_id: source.id, editorial_role: item.sourceRole, external_id: item.externalId, canonical_url: item.canonicalUrl, title: item.title, excerpt: item.excerpt, published_at: item.publishedAt, observed_at: item.lastObservedAt, discovery_signal: 0.7, content_fingerprint: item.contentFingerprint, metadata: { ...item.metadata, discovery_observation_id: item.id } };

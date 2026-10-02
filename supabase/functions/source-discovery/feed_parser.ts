@@ -24,6 +24,19 @@ function field(block: string, tag: string): string {
   return match?.[1] ?? "";
 }
 
+function publisher(block: string): { name: string; url: string | null } | null {
+  const match = block.match(/<source\b([^>]*)>([\s\S]*?)<\/source>/iu);
+  const name = text(match?.[2] ?? "").slice(0, 120);
+  if (!name) return null;
+  const rawUrl = (match?.[1] ?? "").match(/\burl=["']([^"']+)["']/iu)?.[1];
+  try {
+    const url = rawUrl ? new URL(rawUrl) : null;
+    return { name, url: url?.protocol === "https:" && !url.username && !url.password ? url.toString().slice(0, 500) : null };
+  } catch {
+    return { name, url: null };
+  }
+}
+
 function atomLink(block: string): string {
   return block.match(/<link\b[^>]*\bhref=["']([^"']+)["'][^>]*\/?>(?:<\/link>)?/iu)?.[1] ?? "";
 }
@@ -121,8 +134,9 @@ export async function parseFeedDocument(
     if (!included(feed, title, excerpt)) continue;
     const publishedAt = parseDate(field(block, "pubDate") || field(block, "published") || field(block, "updated"));
     const normalizedUrl = parsedUrl.toString();
+    const itemPublisher = publisher(block);
     result.push({
-      sourceCanonicalName: feed.canonicalName,
+      sourceCanonicalName: itemPublisher?.name ?? feed.canonicalName,
       editorialRole: feed.editorialRole,
       externalId: externalId.slice(0, 320),
       canonicalUrl: normalizedUrl.slice(0, 2_000),
@@ -131,7 +145,7 @@ export async function parseFeedDocument(
       publishedAt,
       discoverySignal: feed.editorialRole.startsWith("DISCOVERY_") ? 0.7 : 0.5,
       contentFingerprint: await fingerprint(`${externalId}\u0000${title}\u0000${excerpt ?? ""}\u0000${normalizedUrl}`),
-      metadata: { feed_url: feed.url, format: xml.includes("<entry") ? "ATOM" : "RSS" },
+      metadata: { feed_url: feed.url, format: xml.includes("<entry") ? "ATOM" : "RSS", ...(itemPublisher?.url ? { publisher_url: itemPublisher.url } : {}) },
     });
   }
   return result;

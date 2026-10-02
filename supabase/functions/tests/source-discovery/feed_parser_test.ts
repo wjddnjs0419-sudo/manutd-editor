@@ -25,6 +25,19 @@ Deno.test("parseFeedDocument extracts bounded RSS observations", async () => {
   assert.equal(result[0].editorialRole, "FACT_INDEPENDENT");
 });
 
+Deno.test("parseFeedDocument preserves the publisher from an RSS source element", async () => {
+  const result = await parseFeedDocument(`<rss><channel>
+    <item><guid>google-1</guid><title>United update</title>
+      <link>https://news.google.com/rss/articles/abc</link>
+      <source url="https://www.goal.com/en">Goal.com</source>
+    </item>
+  </channel></rss>`, { ...feed, canonicalName: "Google News", editorialRole: "DISCOVERY_COMMUNITY" }, { maxItems: 5, maxExcerptChars: 200 });
+
+  assert.equal(result[0].sourceCanonicalName, "Goal.com");
+  assert.equal(result[0].canonicalUrl, "https://news.google.com/rss/articles/abc");
+  assert.equal(result[0].metadata.publisher_url, "https://www.goal.com/en");
+});
+
 Deno.test("parseFeedDocument limits broad feeds to configured Manchester United terms", async () => {
   const result = await parseFeedDocument(`<rss><channel>
     <item><guid>mu-1</guid><title>Manchester United team news</title><link>https://example.test/mu</link></item>

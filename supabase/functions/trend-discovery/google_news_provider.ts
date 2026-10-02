@@ -61,7 +61,7 @@ export function createGoogleNewsDiscoveryProvider(
           if (!safeHttpsUrl(item.canonicalUrl)) continue;
           const normalized = await normalizeDiscoveryObservation({
             ...item,
-            metadata: {},
+            metadata: item.metadata,
           }, { provider, query, observedAt });
           if (normalized && inWindow(normalized.publishedAt, window)) {
             result.push(normalized);
