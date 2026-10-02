@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1.0.8";
 import {
   dispatchEditorialConsoleAction,
-  canHandleStaleConsoleCallback,
+  isStaleConsoleCallback,
   parseConsoleCallback,
   parseConsoleIntent,
   type ConsoleActionDependencies,
@@ -70,13 +70,11 @@ Deno.test("parses compact callback actions and rejects stale-shaped payloads", (
   assertEquals(parseConsoleCallback("discovery:more"), { type: "DISCOVER_MORE" });
 });
 
-Deno.test("allows stale callbacks only for actions that re-resolve canonical story state", () => {
-  assertEquals(canHandleStaleConsoleCallback({ type: "OPEN_STORY", token: story.id }), true);
-  assertEquals(canHandleStaleConsoleCallback({ type: "OPEN_EVIDENCE", token: story.id }), true);
-  assertEquals(canHandleStaleConsoleCallback({ type: "GENERATE_CAROUSEL", token: story.id }), true);
-  assertEquals(canHandleStaleConsoleCallback({ type: "SKIP_STORY", token: story.id }), true);
-  assertEquals(canHandleStaleConsoleCallback({ type: "SELECT_DRAFT", token: "brief-1" }), false);
-  assertEquals(canHandleStaleConsoleCallback({ type: "EDIT_DRAFT", token: "brief-1" }), false);
+Deno.test("callbacks from an older console message are rejected regardless of action", () => {
+  assertEquals(isStaleConsoleCallback(507, 513), true);
+  assertEquals(isStaleConsoleCallback(513, 513), false);
+  assertEquals(isStaleConsoleCallback(null, 513), false);
+  assertEquals(isStaleConsoleCallback(507, null), false);
 });
 
 Deno.test("natural-language console intents resolve to the same business actions as buttons", () => {

@@ -67,26 +67,8 @@ export interface ConsoleActionDependencies {
 
 type ParsedCallback = Exclude<ConsoleAction, { type: "NEXT_PAGE" | "BACK" }> | { type: "BACK" };
 
-export function canHandleStaleConsoleCallback(action: ConsoleAction): boolean {
-  switch (action.type) {
-    case "OPEN_RECOMMENDED":
-    case "OPEN_ALL":
-    case "OPEN_TRENDING":
-    case "DISCOVER_MORE":
-    case "REFRESH_DISCOVERY":
-    case "NEXT_PAGE":
-    case "OPEN_STORY":
-    case "OPEN_EVIDENCE":
-    case "SKIP_STORY":
-    case "GENERATE_CAROUSEL":
-    case "OPEN_REEL":
-    case "BACK":
-      return true;
-    case "SELECT_DRAFT":
-    case "SHOW_ALTERNATE_HOOKS":
-    case "EDIT_DRAFT":
-      return false;
-  }
+export function isStaleConsoleCallback(incomingMessageId: number | null, activeMessageId: number | null): boolean {
+  return incomingMessageId !== null && activeMessageId !== null && incomingMessageId !== activeMessageId;
 }
 
 function positivePage(value: string): number | null {

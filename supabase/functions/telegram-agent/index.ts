@@ -10,7 +10,7 @@ import { reviseCaption, reviseSlide, selectHook } from "../_shared/m6/revisions.
 import { createTelegramClient } from "../_shared/m6/telegram_client.ts";
 import { createM6Repository } from "../_shared/m6/repository.ts";
 import { createEditorialConsoleRepository, findCanonicalStoryByToken, paginateStories, shortCallbackToken, verifiedRecommendations, type CanonicalStory, type ConsoleView } from "../_shared/m6/editorial_console.ts";
-import { canHandleStaleConsoleCallback, dispatchEditorialConsoleAction, parseConsoleCallback, type ConsoleAction, type ConsoleState } from "../_shared/m6/editorial_console_actions.ts";
+import { dispatchEditorialConsoleAction, isStaleConsoleCallback, parseConsoleCallback, type ConsoleAction, type ConsoleState } from "../_shared/m6/editorial_console_actions.ts";
 import { invokeCanonicalCarousel } from "../_shared/m6/console_generation.ts";
 import { createEditorialJobQueue } from "../orchestration-worker/queue_client.ts";
 import { createTelegramAgentHandler } from "./handler.ts";
@@ -454,8 +454,8 @@ async function runConsoleAction(thread: ThreadRow, incoming: TelegramUpdate, act
   if (queryId) await client.answerCallbackQuery(queryId).catch(() => undefined);
   const state = await loadConsoleState(thread.id);
   const incomingMessageId = callbackMessageId(incoming);
-  const staleCallback = incomingMessageId !== null && state.telegram_message_id !== null && incomingMessageId !== state.telegram_message_id;
-  if (staleCallback && !canHandleStaleConsoleCallback(action)) {
+  const staleCallback = isStaleConsoleCallback(incomingMessageId, state.telegram_message_id);
+  if (staleCallback) {
     if (queryId) await client.answerCallbackQuery(queryId, "이전 화면입니다. 최신 목록을 열어 주세요.").catch(() => undefined);
     await recordConsoleEvent(thread.id, incoming, { action: "STALE_CALLBACK", status: "STALE" });
     return { status: "STALE", reply: "이전 화면입니다. 최신 목록을 열어 주세요." };
