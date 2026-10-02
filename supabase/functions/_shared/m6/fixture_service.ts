@@ -232,8 +232,14 @@ export async function runFixtureSync(
       if (!saved) continue;
       try {
         alertsCreated += await dependencies.onMatchSynced(saved, finalMode, request.now);
-      } catch {
+      } catch (error) {
         // Match assistant integrations are non-critical to canonical fixture sync.
+        console.error(JSON.stringify({
+          event: "fixture_sync_match_hook",
+          status: "FAILED",
+          match_id: saved.id,
+          error: error instanceof Error ? error.message : String(error),
+        }));
       }
     }
   }

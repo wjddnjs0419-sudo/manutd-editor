@@ -26,7 +26,7 @@ select has_table('cron', 'job', 'pg_cron job catalog exists');
 select is(
   (select count(*)::integer from cron.job where jobname in (
     'm7-instagram-collector-every-30-minutes',
-    'm7-fixture-sync-every-15-minutes',
+    'm7-fixture-sync-daily-0400-asia-seoul',
     'm7-morning-brief-0900-asia-seoul'
   )),
   3,
@@ -38,9 +38,9 @@ select is(
   'Instagram Cron runs every 30 minutes'
 );
 select is(
-  (select schedule from cron.job where jobname = 'm7-fixture-sync-every-15-minutes'),
-  '*/15 * * * *',
-  'fixture Cron runs every 15 minutes'
+  (select schedule from cron.job where jobname = 'm7-fixture-sync-daily-0400-asia-seoul'),
+  '0 19 * * *',
+  'fixture Cron runs daily at 19:00 UTC / 04:00 Seoul'
 );
 select is(
   (select schedule from cron.job where jobname = 'm7-morning-brief-0900-asia-seoul'),
@@ -51,7 +51,7 @@ select ok(
   (select count(*) from cron.job
     where jobname in (
       'm7-instagram-collector-every-30-minutes',
-      'm7-fixture-sync-every-15-minutes',
+      'm7-fixture-sync-daily-0400-asia-seoul',
       'm7-morning-brief-0900-asia-seoul'
     )
     and command ilike '%enqueue_scheduled_editorial_job%'

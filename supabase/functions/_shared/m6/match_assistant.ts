@@ -2,7 +2,6 @@ import type { NotionClient } from "../../notion-sync/notion_client.ts";
 import { businessDate } from "./business_date.ts";
 import { deriveMatchDayMode } from "./fixture_service.ts";
 import {
-  type MatchCalendarProjectionResult,
   type MatchCalendarSyncState,
   projectMatchToCalendar,
 } from "./match_calendar.ts";
@@ -123,10 +122,19 @@ export function isMaterialKickoffChange(
 }
 
 export type NonCriticalMatchCalendarProjectionResult =
-  | MatchCalendarProjectionResult
   | {
-    status: "SKIPPED";
+    status: "SKIPPED_CONFIGURATION";
     notion_page_id: null;
+  }
+  | {
+    status: "SCHEMA_MISMATCH" | "PROJECTION_FAILED";
+    notion_page_id: string | null;
+    error_code: "MATCH_CALENDAR_SCHEMA_MISMATCH" | "MATCH_CALENDAR_PROJECTION_FAILED";
+  }
+  | {
+    status: "SYNCED";
+    notion_page_id: string | null;
+    sync_state: MatchCalendarSyncState;
   };
 
 export interface MatchCalendarProjectionDependencies {
@@ -138,6 +146,7 @@ export interface MatchCalendarProjectionDependencies {
     | null;
   getState: (matchId: string) => Promise<MatchCalendarSyncState | null>;
   saveState: (state: MatchCalendarSyncState) => Promise<void>;
+  missingConfiguration?: string[];
   syncedAt?: Date;
 }
 
@@ -168,13 +177,22 @@ export async function projectMatchToCalendarBestEffort(
   dependencies: MatchCalendarProjectionDependencies,
 ): Promise<NonCriticalMatchCalendarProjectionResult> {
   if (!dependencies.configured || !dependencies.notion) {
-    return { status: "SKIPPED", notion_page_id: null };
+    const result = { status: "SKIPPED_CONFIGURATION" as const, notion_page_id: null };
+    console.warn(JSON.stringify({
+      event: "match_calendar_projection",
+      status: result.status,
+      match_id: dependencies.match.id,
+      configured: dependencies.configured,
+      notion_client_available: Boolean(dependencies.notion),
+      missing_configuration: dependencies.missingConfiguration ?? [],
+    }));
+    return result;
   }
   const syncedAt = dependencies.syncedAt ?? new Date();
   try {
     let state = await dependencies.getState(dependencies.match.id);
     if (state && state.match_id !== dependencies.match.id) state = null;
-    if (!state) {
+    if (!state?.notion_page_id) {
       const pages = await dependencies.notion.queryDatabase({
         filter: {
           property: "Match ID",
@@ -189,7 +207,8 @@ export async function projectMatchToCalendarBestEffort(
         state = {
           match_id: dependencies.match.id,
           notion_page_id: existingPage.id,
-          last_synced_hash: null,
+          last_synced_hash: state?.last_synced_hash ?? null,
+          last_synced_at: state?.last_synced_at ?? null,
         };
       }
     }
@@ -201,15 +220,50 @@ export async function projectMatchToCalendarBestEffort(
       syncedAt,
     );
     if (projection.status !== "SYNCED" || !projection.sync_state) {
-      return projection;
+      const status = projection.error_code === "MATCH_CALENDAR_SCHEMA_MISMATCH"
+        ? "SCHEMA_MISMATCH"
+        : "PROJECTION_FAILED";
+      console.error(JSON.stringify({
+        event: "match_calendar_projection",
+        status,
+        match_id: dependencies.match.id,
+        error_code: projection.error_code ?? "MATCH_CALENDAR_PROJECTION_FAILED",
+      }));
+      return {
+        status,
+        notion_page_id: projection.notion_page_id,
+        error_code: projection.error_code ?? "MATCH_CALENDAR_PROJECTION_FAILED",
+      };
     }
     await dependencies.saveState(projection.sync_state);
-    return projection;
-  } catch {
+    console.info(JSON.stringify({
+      event: "match_calendar_projection",
+      status: "SYNCED",
+      match_id: dependencies.match.id,
+      notion_page_id: projection.notion_page_id,
+    }));
     return {
-      status: "FAILED",
+      status: "SYNCED",
+      notion_page_id: projection.notion_page_id,
+      sync_state: projection.sync_state,
+    };
+  } catch (error) {
+    const category = typeof error === "object" && error !== null && "category" in error
+      ? String(error.category)
+      : "";
+    const status = category === "BAD_REQUEST" ? "SCHEMA_MISMATCH" : "PROJECTION_FAILED";
+    console.error(JSON.stringify({
+      event: "match_calendar_projection",
+      status,
+      match_id: dependencies.match.id,
+      error_code: category || "MATCH_CALENDAR_PROJECTION_FAILED",
+    }));
+    return {
+      status,
       notion_page_id: null,
-      error_code: "MATCH_CALENDAR_PROJECTION_FAILED",
+      error_code: category === "BAD_REQUEST"
+        ? "MATCH_CALENDAR_SCHEMA_MISMATCH"
+        : "MATCH_CALENDAR_PROJECTION_FAILED",
     };
   }
 }

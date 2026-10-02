@@ -13,33 +13,11 @@ const provider = createEspnFixtureProvider();
 const alertThreadId = Deno.env.get("TELEGRAM_OWNER_THREAD_ID") ?? "00000000-0000-0000-0000-000000000000";
 const notionToken = Deno.env.get("NOTION_TOKEN") ?? Deno.env.get("NOTION_API_KEY") ?? "";
 const notionDatabaseId = Deno.env.get("NOTION_MATCH_CALENDAR_DATABASE_ID") ?? "";
+const missingNotionConfiguration = [
+  ...(!notionToken ? ["NOTION_TOKEN"] : []),
+  ...(!notionDatabaseId ? ["NOTION_MATCH_CALENDAR_DATABASE_ID"] : []),
+];
 const notion = notionToken && notionDatabaseId ? createNotionClient({ token: notionToken, databaseId: notionDatabaseId }) : null;
-
-interface CalendarStateRow {
-  match_id: string;
-  notion_page_id: string | null;
-  last_synced_hash: string | null;
-  last_synced_at?: string | null;
-}
-
-async function rest(path: string, init: RequestInit = {}): Promise<unknown> {
-  const base = supabaseUrl.replace(/\/$/u, "");
-  const response = await fetch(`${base}${path}`, {
-    ...init,
-    headers: {
-      apikey: serviceRoleKey,
-      authorization: `Bearer ${serviceRoleKey}`,
-      accept: "application/json",
-      "accept-profile": "app_private",
-      "content-profile": "app_private",
-      ...(init.body ? { "content-type": "application/json" } : {}),
-      ...init.headers,
-    },
-  });
-  if (!response.ok) throw new Error("FIXTURE_RUNTIME_STORAGE_FAILED");
-  const text = await response.text();
-  return text.trim() ? JSON.parse(text) : null;
-}
 
 async function projectCalendar(match: Parameters<NonNullable<Parameters<typeof runFixtureSync>[1]["onMatchSynced"]>>[0], mode: Parameters<NonNullable<Parameters<typeof runFixtureSync>[1]["onMatchSynced"]>>[1], syncedAt: Date): Promise<void> {
   await projectMatchToCalendarBestEffort({
@@ -47,14 +25,9 @@ async function projectCalendar(match: Parameters<NonNullable<Parameters<typeof r
     mode,
     configured: Boolean(notion),
     notion,
-    async getState(matchId) {
-      const rows = await rest(`/rest/v1/match_calendar_sync_state?select=match_id,notion_page_id,last_synced_hash,last_synced_at&match_id=eq.${encodeURIComponent(matchId)}&limit=1`);
-      const value = Array.isArray(rows) ? rows[0] as CalendarStateRow | undefined : undefined;
-      return value?.match_id ? value : null;
-    },
-    async saveState(state) {
-      await rest("/rest/v1/match_calendar_sync_state?on_conflict=match_id", { method: "POST", headers: { prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(state) });
-    },
+    missingConfiguration: missingNotionConfiguration,
+    getState: (matchId) => repository.getMatchCalendarSyncState(matchId),
+    saveState: (state) => repository.saveMatchCalendarSyncState(state),
     syncedAt,
   });
 }
@@ -88,12 +61,17 @@ async function onMatchSynced(match: Parameters<NonNullable<Parameters<typeof run
 
 const handler = createFixtureSyncHandler({
   invokeSecret: secret,
-  run: ({ mode }) => runFixtureSync({ mode, now: new Date() }, {
-    provider,
-    repository,
-    alertThreadId,
-    onMatchSynced,
-  }),
+  run: async ({ mode }) => {
+    if (missingNotionConfiguration.length > 0) {
+      console.warn(JSON.stringify({ event: "match_calendar_projection", status: "SKIPPED_CONFIGURATION", missing_configuration: missingNotionConfiguration }));
+    }
+    return await runFixtureSync({ mode, now: new Date() }, {
+      provider,
+      repository,
+      alertThreadId,
+      onMatchSynced,
+    });
+  },
 });
 
 Deno.serve(handler);

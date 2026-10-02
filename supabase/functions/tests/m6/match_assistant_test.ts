@@ -140,7 +140,7 @@ Deno.test("Notion projection failure is reported without escaping into fixture p
     },
     syncedAt: new Date("2026-10-09T15:00:00.000Z"),
   });
-  assertEquals(result.status, "FAILED");
+  assertEquals(result.status, "PROJECTION_FAILED");
   assertEquals(result.notion_page_id, null);
 });
 
@@ -157,8 +157,47 @@ Deno.test("Notion projection is skipped cleanly when the calendar is not configu
     },
     async saveState() {},
   });
-  assertEquals(result.status, "SKIPPED");
+  assertEquals(result.status, "SKIPPED_CONFIGURATION");
   assertEquals(stateReads, 0);
+});
+
+Deno.test("configured Notion projection creates a page and persists sync state", async () => {
+  const created: unknown[] = [];
+  const saved: string[] = [];
+  const result = await projectMatchToCalendarBestEffort({
+    match: match(),
+    mode: "MATCH_EVE",
+    configured: true,
+    notion: {
+      async createPage(payload) { created.push(payload); return { id: "created-page" }; },
+      async updatePage() { throw new Error("unexpected update"); },
+      async queryDatabase() { return []; },
+    },
+    async getState() { return null; },
+    async saveState(state) { saved.push(`${state.match_id}:${state.notion_page_id}`); },
+    syncedAt: new Date("2026-10-09T15:00:00.000Z"),
+  });
+  assertEquals(result.status, "SYNCED");
+  assertEquals(created.length, 1);
+  assertEquals(saved, [`${match().id}:created-page`]);
+});
+
+Deno.test("Notion property schema errors are classified as schema mismatches", async () => {
+  const error = Object.assign(new Error("bad property"), { category: "BAD_REQUEST" });
+  const result = await projectMatchToCalendarBestEffort({
+    match: match(),
+    mode: "MATCH_EVE",
+    configured: true,
+    notion: {
+      async createPage() { throw error; },
+      async updatePage() { throw error; },
+      async queryDatabase() { throw error; },
+    },
+    async getState() { return null; },
+    async saveState() {},
+  });
+  assertEquals(result.status, "SCHEMA_MISMATCH");
+  if (result.status === "SCHEMA_MISMATCH") assertEquals(result.error_code, "MATCH_CALENDAR_SCHEMA_MISMATCH");
 });
 
 Deno.test("Notion projection reuses a page found by canonical Match ID and stores only projection state", async () => {
@@ -199,4 +238,26 @@ Deno.test("Notion projection reuses a page found by canonical Match ID and store
   assertEquals(result.status, "SYNCED");
   assertEquals(updated, ["existing-notion-page"]);
   assertEquals(saved, [`${match().id}:existing-notion-page`]);
+});
+
+Deno.test("Notion projection repairs sync state with a null page ID before creating", async () => {
+  let created = 0;
+  const updated: string[] = [];
+  const result = await projectMatchToCalendarBestEffort({
+    match: match(),
+    mode: "MATCH_EVE",
+    configured: true,
+    notion: {
+      async createPage() { created += 1; return { id: "new-page" }; },
+      async updatePage(pageId) { updated.push(pageId); return { id: pageId }; },
+      async queryDatabase() {
+        return [{ id: "recovered-page", properties: { "Match ID": { rich_text: [{ plain_text: match().id }] } } }];
+      },
+    },
+    async getState() { return { match_id: match().id, notion_page_id: null, last_synced_hash: "old-hash" }; },
+    async saveState() {},
+  });
+  assertEquals(result.status, "SYNCED");
+  assertEquals(created, 0);
+  assertEquals(updated, ["recovered-page"]);
 });

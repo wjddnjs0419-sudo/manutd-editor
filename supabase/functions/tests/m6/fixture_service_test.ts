@@ -143,3 +143,18 @@ Deno.test("runs the match assistant hook for synced fixtures so D-1 and projecti
   assertEquals(result.alerts_created, 1);
   assertEquals(synced.length, 1);
 });
+
+Deno.test("match assistant or Notion hook failure does not fail canonical fixture sync", async () => {
+  const repo = repository([]);
+  const result = await runFixtureSync(
+    { mode: "FORCE", now: new Date("2026-10-09T15:00:00Z") },
+    {
+      provider: provider([fixture()]),
+      repository: repo,
+      alertThreadId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      onMatchSynced: async () => { throw new Error("Notion unavailable"); },
+    },
+  );
+  assertEquals(result.status, "SYNCED");
+  assertEquals(repo.rows.length, 1);
+});

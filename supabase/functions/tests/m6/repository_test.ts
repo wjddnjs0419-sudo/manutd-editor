@@ -23,6 +23,64 @@ Deno.test("M6 repository marks JSON writes with the JSON content type", async ()
   assertEquals(capturedHeaders?.get("content-type"), "application/json");
 });
 
+Deno.test("M6 repository reads canonical calendar fixtures and persists projection state", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const repository = createM6Repository({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "test-service-role-key",
+    fetch: async (input, init) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url.includes("match_calendar_sync_state") && init?.method !== "POST") {
+        return new Response(JSON.stringify([{
+          match_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+          notion_page_id: "notion-page",
+          last_synced_hash: "hash",
+          last_synced_at: "2026-10-01T00:00:00.000Z",
+        }]));
+      }
+      if (url.includes("/matches?")) return new Response(JSON.stringify([{
+        id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        provider: "espn",
+        external_match_id: "123",
+        competition: "Premier League",
+        season: "2026",
+        home_team: "Manchester United",
+        away_team: "Arsenal",
+        opponent: "Arsenal",
+        is_home: true,
+        kickoff_at: "2026-10-10T16:30:00.000Z",
+        venue: "Old Trafford",
+        status: "SCHEDULED",
+        home_score: null,
+        away_score: null,
+        provider_payload: {},
+        provider_updated_at: null,
+      }]));
+      return new Response(null, { status: 204 });
+    },
+  });
+
+  const from = new Date("2026-10-01T00:00:00.000Z");
+  const to = new Date("2026-11-30T00:00:00.000Z");
+  const matches = await repository.listMatchesForCalendar(from, to);
+  const state = await repository.getMatchCalendarSyncState(matches[0]!.id);
+  await repository.saveMatchCalendarSyncState({
+    match_id: matches[0]!.id,
+    notion_page_id: state!.notion_page_id,
+    last_synced_hash: "new-hash",
+    last_synced_at: "2026-10-02T00:00:00.000Z",
+  });
+
+  assertEquals(matches.length, 1);
+  assertEquals(state?.notion_page_id, "notion-page");
+  assertEquals(requests[0]?.url.includes(encodeURIComponent(from.toISOString())), true);
+  assertEquals(requests[0]?.url.includes(encodeURIComponent(to.toISOString())), true);
+  assertEquals(new Headers(requests[1]?.init?.headers).get("accept-profile"), "app_private");
+  assertEquals(requests[2]?.url.includes("on_conflict=match_id"), true);
+  assertEquals(new Headers(requests[2]?.init?.headers).get("content-profile"), "app_private");
+});
+
 Deno.test("M6 repository consumes same-date editorial ranking and preserves safe fallback", async () => {
   const requests: string[] = [];
   const repository = createM6Repository({

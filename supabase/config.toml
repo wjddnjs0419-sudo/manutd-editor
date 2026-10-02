@@ -16,6 +16,9 @@ verify_jwt = false
 [functions.fixture-sync]
 verify_jwt = false
 
+[functions.notion-match-calendar-backfill]
+verify_jwt = false
+
 [functions.telegram-morning-brief]
 verify_jwt = false
 
