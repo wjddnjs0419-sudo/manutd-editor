@@ -128,6 +128,7 @@ export function parseConsoleCallback(value: string): ParsedCallback | null {
 
 export function parseConsoleIntent(value: string, activeStoryToken?: string | null): ConsoleAction | null {
   const normalized = value.trim().toLocaleLowerCase("ko-KR").replace(/\s+/gu, " ");
+  if (/^오늘.*(?:소식|뉴스).*(?:뭐\s*있어|있니|보여줘|알려줘|요약해줘|[?？])$/u.test(normalized)) return { type: "OPEN_RECOMMENDED", page: 1 };
   if (/^(\/today|오늘 뭐 있어\??|오늘 올릴 거 보여줘|추천 소재)$/u.test(normalized)) return { type: "OPEN_RECOMMENDED", page: 1 };
   if (/^(전체 수집한 거 보여줘|전체 소재|전체 수집본)$/u.test(normalized)) return { type: "OPEN_ALL", page: 1 };
   if (/^(지금 뭐 뜨고 있어\??|요즘 맨유 뭐가 핫해\??|지금 트렌드 보여줘|지금 뜨는 소재)$/u.test(normalized)) return { type: "OPEN_TRENDING", page: 1 };

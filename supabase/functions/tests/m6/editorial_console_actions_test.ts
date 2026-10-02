@@ -82,6 +82,8 @@ Deno.test("allows stale callbacks only for actions that re-resolve canonical sto
 Deno.test("natural-language console intents resolve to the same business actions as buttons", () => {
   assertEquals(parseConsoleIntent("/today"), { type: "OPEN_RECOMMENDED", page: 1 });
   assertEquals(parseConsoleIntent("오늘 뭐 있어?"), { type: "OPEN_RECOMMENDED", page: 1 });
+  assertEquals(parseConsoleIntent("오늘 새로 올라온 맨유 소식 뭐 있어?"), { type: "OPEN_RECOMMENDED", page: 1 });
+  assertEquals(parseConsoleIntent("오늘 맨유 뉴스 요약해줘"), { type: "OPEN_RECOMMENDED", page: 1 });
   assertEquals(parseConsoleIntent("전체 수집한 거 보여줘"), { type: "OPEN_ALL", page: 1 });
   assertEquals(parseConsoleIntent("1"), { type: "OPEN_STORY", token: "1" });
   assertEquals(parseConsoleIntent("1번 소재 선택"), { type: "OPEN_STORY", token: "1" });
