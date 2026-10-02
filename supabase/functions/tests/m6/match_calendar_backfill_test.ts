@@ -103,6 +103,20 @@ function makeBackfill(options: {
 
 Deno.test("backfill creates missing pages and reruns update the saved page without duplicates", async () => {
   const backfill = makeBackfill();
+  const window: string[] = [];
+  const defaultNow = new Date("2026-10-09T15:00:00.000Z");
+  const windowCheck = await runMatchCalendarBackfill({
+    configured: true,
+    now: defaultNow,
+    async listMatches(from, to) {
+      window.push(from.toISOString(), to.toISOString());
+      return [];
+    },
+    async project() { throw new Error("no fixtures to project"); },
+  });
+  assertEquals(windowCheck.status, "SYNCED");
+  assertEquals(window, ["2026-09-09T15:00:00.000Z", "2026-12-08T15:00:00.000Z"]);
+
   const first = await backfill.run();
   const second = await backfill.run(new Date("2026-10-09T15:15:00.000Z"));
   assertEquals(first.matches_synced, 1);

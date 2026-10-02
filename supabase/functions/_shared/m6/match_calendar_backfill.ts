@@ -34,7 +34,7 @@ export async function runMatchCalendarBackfill(input: {
     };
   }
 
-  const from = new Date(input.now.getTime() - 24 * 60 * 60 * 1000);
+  const from = new Date(input.now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const to = new Date(input.now.getTime() + 60 * 24 * 60 * 60 * 1000);
   const matches = await input.listMatches(from, to);
   const mode = deriveMatchDayMode(matches, input.now, "Asia/Seoul");
