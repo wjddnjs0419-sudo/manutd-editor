@@ -620,10 +620,11 @@ async function runAgent(value: unknown): Promise<{ status: string; reply: string
   const command = parseCommand(text);
   const config = await loadAgentConfig();
   const provider = Deno.env.get("OPENAI_API_KEY") ? createOpenAIGenerator({ apiKey: Deno.env.get("OPENAI_API_KEY") ?? "", model: typeof config.model_config.conversation_model === "string" ? config.model_config.conversation_model : undefined }) : undefined;
+  if (!command && !provider) console.warn(JSON.stringify({ event: "telegram_editorial_intent", outcome: "PROVIDER_UNAVAILABLE" }));
   if (!command && provider) {
     const consoleState = await loadConsoleState(thread.id);
     const presented = await latestPresentedStories(thread.id);
-    const intent = await parseEditorialIntent(text, { generate: provider, presented_titles: presented.map((item) => item.title), has_active_story: Boolean(replied?.storyId || consoleState.story_id), has_active_draft: Boolean(thread.active_brief_id || consoleState.brief_id) });
+    const intent = await parseEditorialIntent(text, { generate: provider, presented_titles: presented.map((item) => item.title), has_active_story: Boolean(replied?.storyId || consoleState.story_id), has_active_draft: Boolean(thread.active_brief_id || consoleState.brief_id), onDiagnostic: (diagnostic) => console.info(JSON.stringify({ event: "telegram_editorial_intent", ...diagnostic })) });
     let action: ConsoleAction | null = null;
     if (intent.intent === "OPEN_RECOMMENDED") action = { type: "OPEN_RECOMMENDED", page: 1 };
     if (intent.intent === "OPEN_TRENDING") action = { type: "OPEN_TRENDING", page: 1 };

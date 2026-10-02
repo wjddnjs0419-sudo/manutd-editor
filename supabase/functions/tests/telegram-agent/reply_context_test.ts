@@ -158,6 +158,16 @@ Deno.test("LLM intent router defaults omitted nullable fields instead of discard
   }), { intent: "OPEN_RECOMMENDED", story_position: null, slide_count: null, edit_target: null, instruction: null });
 });
 
+Deno.test("LLM intent router reports only a safe provider failure category", async () => {
+  let diagnostic: unknown = null;
+  const dependencies = {
+    generate: async () => { throw new Error("provider body must not be logged"); },
+    onDiagnostic: (value: unknown) => { diagnostic = value; },
+  };
+  assertEquals((await parseEditorialIntent("오늘 뭐 있어?", dependencies)).intent, "UNKNOWN");
+  assertEquals(diagnostic, { outcome: "PROVIDER_ERROR" });
+});
+
 Deno.test("story positions resolve only against the latest bounded presented list", () => {
   const stories = [{ story_id: "story-1" }, { story_id: "digest-story-2" }];
   assertEquals(resolvePresentedStoryPosition(stories, 2), stories[1]);

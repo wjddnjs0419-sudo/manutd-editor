@@ -199,15 +199,23 @@ export interface EditorialIntentResult {
   instruction: string | null;
 }
 
+type EditorialIntentDiagnostic =
+  | { outcome: "PROVIDER_ERROR" | "INVALID_RESPONSE" | "UNEXPECTED_KEYS" | "INVALID_INTENT" | "INVALID_FIELDS" | "INVALID_ACTION" }
+  | { outcome: "ACCEPTED"; intent: EditorialIntentResult["intent"] };
+
 export function resolvePresentedStoryPosition<T>(stories: readonly T[], position: number): T | null {
   return Number.isInteger(position) && position >= 1 && position <= 5 ? stories[position - 1] ?? null : null;
 }
 
 export async function parseEditorialIntent(
   message: string,
-  dependencies: { generate: (payload: unknown) => Promise<unknown>; presented_titles?: readonly string[]; has_active_story?: boolean; has_active_draft?: boolean },
+  dependencies: { generate: (payload: unknown) => Promise<unknown>; presented_titles?: readonly string[]; has_active_story?: boolean; has_active_draft?: boolean; onDiagnostic?: (diagnostic: EditorialIntentDiagnostic) => void },
 ): Promise<EditorialIntentResult> {
   const empty: EditorialIntentResult = { intent: "UNKNOWN", story_position: null, slide_count: null, edit_target: null, instruction: null };
+  const reject = (outcome: Exclude<EditorialIntentDiagnostic, { outcome: "ACCEPTED" }>["outcome"]): EditorialIntentResult => {
+    dependencies.onDiagnostic?.({ outcome });
+    return empty;
+  };
   try {
     const value = await dependencies.generate({
       task: "classify_telegram_editorial_intent",
@@ -216,11 +224,11 @@ export async function parseEditorialIntent(
       rules: ["Classify only; never perform actions or invent story identifiers.", "Return exactly JSON keys intent, story_position, slide_count, edit_target, instruction.", "OPEN_RECOMMENDED means today's candidates; OPEN_TRENDING means current hot stories; DISCOVER_MORE means run a fresh search.", "OPEN_STORY means explain/open the explicit numbered item; GENERATE_CAROUSEL means create a draft from the active or explicit numbered story; SHOW_SOURCES means show its evidence and original URLs; EDIT_DRAFT means revise only the active draft.", "Korean examples: '2번 가자. 3페이지로' => GENERATE_CAROUSEL position 2 slide_count 3; '2번 자세히' => OPEN_STORY position 2; '첫 장 좀 세게' => EDIT_DRAFT slide_1; '2페이지 줄여' => EDIT_DRAFT slide_2; '캡션 좀 더 짧게' => EDIT_DRAFT caption; '출처 보여줘' => SHOW_SOURCES; '다른 기사 더 찾아봐' => DISCOVER_MORE.", "story_position must be 1..5 and only when explicitly referenced.", "slide_count may only be 3 or 4.", "edit_target may only be slide_1..slide_4 or caption.", "For ambiguous/unknown requests use UNKNOWN and null fields."],
       schema: { intent: ["OPEN_RECOMMENDED", "OPEN_TRENDING", "DISCOVER_MORE", "OPEN_STORY", "GENERATE_CAROUSEL", "SHOW_SOURCES", "EDIT_DRAFT", "UNKNOWN"], story_position: "integer 1..5 or null", slide_count: "3, 4, or null", edit_target: "slide_1..slide_4, caption, or null", instruction: "short Korean edit instruction or null" },
     });
-    if (!object(value)) return empty;
+    if (!object(value)) return reject("INVALID_RESPONSE");
     const keys = ["intent", "story_position", "slide_count", "edit_target", "instruction"];
-    if (Object.keys(value).some((key) => !keys.includes(key))) return empty;
+    if (Object.keys(value).some((key) => !keys.includes(key))) return reject("UNEXPECTED_KEYS");
     const intents = ["OPEN_RECOMMENDED", "OPEN_TRENDING", "DISCOVER_MORE", "OPEN_STORY", "GENERATE_CAROUSEL", "SHOW_SOURCES", "EDIT_DRAFT", "UNKNOWN"];
-    if (!intents.includes(String(value.intent))) return empty;
+    if (!intents.includes(String(value.intent))) return reject("INVALID_INTENT");
     const positionValue = value.story_position ?? null;
     const slideCountValue = value.slide_count ?? null;
     const targetValue = value.edit_target ?? null;
@@ -229,14 +237,15 @@ export async function parseEditorialIntent(
     const slideCount = slideCountValue === null ? null : slideCountValue === 3 || slideCountValue === 4 ? slideCountValue : -1;
     const target = targetValue === null ? null : ["slide_1", "slide_2", "slide_3", "slide_4", "caption"].includes(String(targetValue)) ? targetValue as EditorialIntentResult["edit_target"] : "invalid";
     const instruction = instructionValue === null ? null : typeof instructionValue === "string" && instructionValue.trim().length <= 200 ? instructionValue.trim() : "invalid";
-    if (position === -1 || slideCount === -1 || target === "invalid" || instruction === "invalid") return empty;
+    if (position === -1 || slideCount === -1 || target === "invalid" || instruction === "invalid") return reject("INVALID_FIELDS");
     const intent = value.intent as EditorialIntentResult["intent"];
-    if (intent === "OPEN_STORY" && position === null) return empty;
-    if (intent === "EDIT_DRAFT" && (!target || !instruction || !dependencies.has_active_draft)) return empty;
-    if (intent === "GENERATE_CAROUSEL" && position === null && !dependencies.has_active_story) return empty;
+    if (intent === "OPEN_STORY" && position === null) return reject("INVALID_ACTION");
+    if (intent === "EDIT_DRAFT" && (!target || !instruction || !dependencies.has_active_draft)) return reject("INVALID_ACTION");
+    if (intent === "GENERATE_CAROUSEL" && position === null && !dependencies.has_active_story) return reject("INVALID_ACTION");
+    dependencies.onDiagnostic?.({ outcome: "ACCEPTED", intent });
     return { intent, story_position: position, slide_count: slideCount, edit_target: target, instruction };
   } catch {
-    return empty;
+    return reject("PROVIDER_ERROR");
   }
 }
 
