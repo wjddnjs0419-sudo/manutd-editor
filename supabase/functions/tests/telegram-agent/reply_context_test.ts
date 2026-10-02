@@ -152,6 +152,12 @@ Deno.test("LLM intent router fails safely on malformed, unknown, or out-of-range
   assertEquals((await parseEditorialIntent("이거", { ...context, generate: async () => { throw new Error("offline"); } })).intent, "UNKNOWN");
 });
 
+Deno.test("LLM intent router defaults omitted nullable fields instead of discarding a valid intent", async () => {
+  assertEquals(await parseEditorialIntent("오늘 새로 올라온 맨유 소식 뭐 있어?", {
+    generate: async () => ({ intent: "OPEN_RECOMMENDED" }),
+  }), { intent: "OPEN_RECOMMENDED", story_position: null, slide_count: null, edit_target: null, instruction: null });
+});
+
 Deno.test("story positions resolve only against the latest bounded presented list", () => {
   const stories = [{ story_id: "story-1" }, { story_id: "digest-story-2" }];
   assertEquals(resolvePresentedStoryPosition(stories, 2), stories[1]);
