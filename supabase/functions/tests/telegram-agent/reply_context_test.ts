@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { answerNaturalLanguage, canonicalStoryFromReplyContext, parseReplyMessageId, replyConsoleIntent, resolveReplyContext, resolveReplyReference, type ReplyReference } from "../../telegram-agent/conversation.ts";
+import { answerNaturalLanguage, canonicalStoryFromReplyContext, parseEditorialIntent, parseReplyMessageId, replyConsoleIntent, resolvePresentedStoryPosition, resolveReplyContext, resolveReplyReference, type EditorialIntentResult, type ReplyReference } from "../../telegram-agent/conversation.ts";
 
 const thread = { id: "thread-1", conversation_summary: null, summary_message_count: 0, context_history: [], active_candidate_id: "candidate-active", active_brief_id: null, active_match_id: null };
 
@@ -124,4 +124,37 @@ Deno.test("non-reply generation and conversation keep active context", async () 
     generate: async (value) => { payload = value as Record<string, unknown>; return { reply: "현재 후보입니다." }; },
   });
   assertEquals(payload.canonical_context, { candidate: { id: "candidate-active" }, brief: null, match: null });
+});
+
+Deno.test("LLM intent router validates bounded Korean editorial actions", async () => {
+  const examples: Array<{ message: string; expected: EditorialIntentResult }> = [
+    { message: "2번 가자. 3페이지로", expected: { intent: "GENERATE_CAROUSEL", story_position: 2, slide_count: 3, edit_target: null, instruction: null } },
+    { message: "2번 카드뉴스 3장으로", expected: { intent: "GENERATE_CAROUSEL", story_position: 2, slide_count: 3, edit_target: null, instruction: null } },
+    { message: "2번 자세히", expected: { intent: "OPEN_STORY", story_position: 2, slide_count: null, edit_target: null, instruction: null } },
+    { message: "이거 카드뉴스 가자", expected: { intent: "GENERATE_CAROUSEL", story_position: null, slide_count: null, edit_target: null, instruction: null } },
+    { message: "3페이지로 만들어줘", expected: { intent: "GENERATE_CAROUSEL", story_position: null, slide_count: 3, edit_target: null, instruction: null } },
+    { message: "첫 장 좀 세게", expected: { intent: "EDIT_DRAFT", story_position: null, slide_count: null, edit_target: "slide_1", instruction: "후킹 강화" } },
+    { message: "2페이지 줄여", expected: { intent: "EDIT_DRAFT", story_position: null, slide_count: null, edit_target: "slide_2", instruction: "분량 줄이기" } },
+    { message: "캡션 좀 더 짧게", expected: { intent: "EDIT_DRAFT", story_position: null, slide_count: null, edit_target: "caption", instruction: "더 짧게" } },
+    { message: "출처 보여줘", expected: { intent: "SHOW_SOURCES", story_position: null, slide_count: null, edit_target: null, instruction: null } },
+    { message: "다른 기사 더 찾아봐", expected: { intent: "DISCOVER_MORE", story_position: null, slide_count: null, edit_target: null, instruction: null } },
+  ];
+  for (const item of examples) {
+    const result = await parseEditorialIntent(item.message, { generate: async () => item.expected, has_active_story: true, has_active_draft: true });
+    assertEquals(result, item.expected);
+  }
+});
+
+Deno.test("LLM intent router fails safely on malformed, unknown, or out-of-range actions", async () => {
+  const context = { generate: async () => ({ intent: "GENERATE_CAROUSEL", story_position: 9, slide_count: 5, edit_target: null, instruction: null }), has_active_story: true };
+  assertEquals((await parseEditorialIntent("9번 가자", context)).intent, "UNKNOWN");
+  assertEquals((await parseEditorialIntent("아무거나", { ...context, generate: async () => ({ intent: "DELETE_DATABASE" }) })).intent, "UNKNOWN");
+  assertEquals((await parseEditorialIntent("이거", { ...context, generate: async () => { throw new Error("offline"); } })).intent, "UNKNOWN");
+});
+
+Deno.test("story positions resolve only against the latest bounded presented list", () => {
+  const stories = [{ story_id: "story-1" }, { story_id: "digest-story-2" }];
+  assertEquals(resolvePresentedStoryPosition(stories, 2), stories[1]);
+  assertEquals(resolvePresentedStoryPosition(stories, 3), null);
+  assertEquals(resolvePresentedStoryPosition(stories, 0), null);
 });

@@ -37,7 +37,9 @@ async function requestedTrigger(request: Request): Promise<GenerationTrigger> {
   const object = value as Record<string, unknown>;
   if (typeof object.candidate_id !== "string" || object.candidate_id.trim() === "") throw new InvalidRequestError();
   if (object.trigger_type !== "AUTO_PRIORITY" && object.trigger_type !== "NOTION_SELECTED" && object.trigger_type !== "MANUAL") throw new InvalidRequestError();
-  return { candidate_id: object.candidate_id, trigger_type: object.trigger_type };
+  if (object.trust_state !== undefined && !["VERIFIED", "REPORTED", "DISCOVERY"].includes(String(object.trust_state))) throw new InvalidRequestError();
+  if (object.slide_count !== undefined && object.slide_count !== 3 && object.slide_count !== 4) throw new InvalidRequestError();
+  return { candidate_id: object.candidate_id, trigger_type: object.trigger_type, ...(object.trust_state ? { trust_state: object.trust_state as GenerationTrigger["trust_state"] } : {}), ...(object.slide_count ? { slide_count: object.slide_count } : {}) };
 }
 
 export function createCreativeGenerationHandler(

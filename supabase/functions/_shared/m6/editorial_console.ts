@@ -1,6 +1,7 @@
 import type { ManutdEditorCarouselDraft, EditorialSlide } from "../editorial-style/types.ts";
 import { isManchesterUnitedRelevant } from "../m8/manchester_united_relevance.ts";
 import { displayStoryTitle } from "../m8/story_display.ts";
+import { editorialTrustLabel, editorialTrustState, type EditorialTrustState } from "./editorial_trust.ts";
 
 export interface EditorialEvidence {
   evidence_id: string;
@@ -233,7 +234,7 @@ function listButtons(page: StoryPage, mode: "recommended" | "all" | "trending"):
 
 function renderList(page: StoryPage, mode: "recommended" | "all"): ConsoleView {
   const title = mode === "recommended" ? "🔥 추천 소재" : "📚 오늘 수집된 소재";
-  const lines = page.items.map((story, index) => `${index + 1}️⃣ ${story.title}\n정보격차 ${score10(story.information_gap_score)} · 훅 ${score10(story.hook_strength)}${story.grounding_status === "DISCOVERY_ONLY" ? "\n⚠ 추가 확인 필요" : ""}`);
+  const lines = page.items.map((story, index) => `${index + 1}️⃣ ${story.title} ${editorialTrustLabel(editorialTrustState(story))}\n정보격차 ${score10(story.information_gap_score)} · 훅 ${score10(story.hook_strength)}`);
   return { text: `${pageHeader(title, page)}\n\n${lines.join("\n\n") || "현재 표시할 소재가 없습니다."}`, inline_keyboard: listButtons(page, mode) };
 }
 
@@ -259,17 +260,13 @@ export function renderStoryDetail(story: CanonicalStory): ConsoleView {
   const evidenceSources = unique(story.evidence.map((item) => item.source_name));
   const sourceNames = story.sources.length > 0 ? story.sources : evidenceSources;
   const sourceLine = sourceNames.length > 0 ? sourceNames.join(" / ") : "확인 중";
-  const format = story.news_eligible ? "카드뉴스 + 텍스트 릴스" : "텍스트 릴스 검토";
+  const format = story.news_eligible ? "카드뉴스 초안" : "카드뉴스 초안 · 확인 수준 표시";
   return {
-    text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${story.trend_state ?? "STABLE"} · ${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼\n\n정보격차 ${score10(story.information_gap_score)}\n훅 ${score10(story.hook_strength)}\n공유성 ${score10(story.shareability)}\n출처신뢰 ${score10(story.source_confidence)}\n\n추천 포맷:\n${format}\n\n주요 출처: ${sourceLine}`,
+    text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n${editorialTrustLabel(editorialTrustState(story))}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${story.trend_state ?? "STABLE"} · ${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼\n\n정보격차 ${score10(story.information_gap_score)}\n훅 ${score10(story.hook_strength)}\n공유성 ${score10(story.shareability)}\n출처신뢰 ${score10(story.source_confidence)}\n\n추천 포맷:\n${format}\n\n주요 출처: ${sourceLine}`,
     inline_keyboard: [
       [
-        { text: "📝 카드뉴스 생성", callback_data: callbackData("idea:carousel", story.id) },
-        { text: "🎬 릴스 초안", callback_data: callbackData("idea:reel", story.id) },
-      ],
-      [
-        { text: "🔎 근거 보기", callback_data: callbackData("idea:evidence", story.id) },
-        { text: "❌ 제외", callback_data: callbackData("idea:skip", story.id) },
+        { text: "📰 원문/출처", callback_data: callbackData("idea:evidence", story.id) },
+        { text: "📱 카드뉴스", callback_data: callbackData("idea:carousel", story.id) },
       ],
       [{ text: "◀ 목록", callback_data: "idea:back:list" }],
     ],
@@ -303,13 +300,18 @@ function slideText(slide: EditorialSlide): string {
   ].filter((value): value is string => typeof value === "string" && value.trim() !== "").join("\n");
 }
 
-export function renderCarouselDraft(draft: ManutdEditorCarouselDraft, storyTitle?: string): ConsoleView {
+export function renderCarouselDraft(draft: ManutdEditorCarouselDraft, storyTitle?: string, trustState?: EditorialTrustState, evidence: readonly EditorialEvidence[] = []): ConsoleView {
   const body = draft.slides.map(slideText).join("\n\n");
   const warning = draft.editor_warning ? `\n\n편집자 메모\n${draft.editor_warning}` : "";
   const subject = storyTitle?.trim() ? `\n소재: ${storyTitle.trim()}` : "";
+  const trust = trustState ? `\n신뢰 수준: ${editorialTrustLabel(trustState)}` : "";
+  const sources = [...new Map(evidence.filter((item) => item.canonical_url).map((item) => [item.canonical_url!, item])).values()];
+  const sourceText = sources.length > 0 ? `\n\n출처\n${sources.map((item) => `${item.source_name}: ${item.canonical_url}`).join("\n")}` : "";
+  const imageDirections = draft.slides.flatMap((slide) => slide.visual_direction ? [`${slide.index}장: ${slide.visual_direction.subject} · ${slide.visual_direction.image_type} · ${slide.visual_direction.layout_intent}${slide.visual_direction.stat_emphasis ? ` · 강조: ${slide.visual_direction.stat_emphasis}` : ""}`] : []);
+  const imageText = imageDirections.length > 0 ? `\n\n이미지 방향\n${imageDirections.join("\n")}` : "";
   const token = draft.creative_brief_id ?? draft.story_id;
   return {
-    text: `📱 카드뉴스 초안${subject}\n\n${body}\n\n캡션\n${draft.caption.body}${draft.caption.cta ? `\n${draft.caption.cta}` : ""}${warning}`,
+    text: `📱 카드뉴스 초안${subject}${trust}\n\n${body}\n\n캡션\n${draft.caption.body}${draft.caption.cta ? `\n${draft.caption.cta}` : ""}${sourceText}${imageText}${warning}`,
     inline_keyboard: [
       [
         { text: "🔄 다른 훅", callback_data: callbackData("draft:rehook", token) },

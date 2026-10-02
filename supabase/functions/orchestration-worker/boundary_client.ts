@@ -24,6 +24,7 @@ const BOUNDARIES: Record<EditorialJobType, { path: string; secret: "collector" |
   DISPATCH_ALERTS: { path: "telegram-alerts", secret: "telegram" },
   FIXTURE_SYNC: { path: "fixture-sync", secret: "telegram" },
   MORNING_BRIEF: { path: "telegram-morning-brief", secret: "telegram" },
+  EDITORIAL_DIGEST: { path: "telegram-alerts", secret: "telegram" },
 };
 
 function record(value: unknown): Record<string, unknown> {
@@ -85,6 +86,10 @@ function requestBody(jobType: EditorialJobType, payload: Record<string, unknown>
   }
   if (jobType === "FIXTURE_SYNC") {
     return { mode: payload.mode === "FORCE" ? "FORCE" : "AUTO" };
+  }
+  if (jobType === "EDITORIAL_DIGEST") {
+    if (typeof payload.window_start !== "string" || typeof payload.window_end !== "string" || Date.parse(payload.window_start) >= Date.parse(payload.window_end)) throw new Error("EDITORIAL_DIGEST_WINDOW_INVALID");
+    return { mode: "HOURLY_DIGEST", window_start: payload.window_start, window_end: payload.window_end, timezone: "Asia/Seoul" };
   }
   return {};
 }

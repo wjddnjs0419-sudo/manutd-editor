@@ -3,7 +3,8 @@ import { createTelegramClient } from "../_shared/m6/telegram_client.ts";
 import { createEditorialConsoleRepository } from "../_shared/m6/editorial_console.ts";
 import { createTelegramAlertsHandler } from "./handler.ts";
 import { materializeEditorialJobDeadAlerts } from "./dead_alerts.ts";
-import { editorialAlertMessageMetadata, hasCanonicalGrounding, materializeEditorialStoryAlerts, selectPrimaryEditorialEvidence, type CanonicalEditorialEvidence, type EditorialStoryAlertRepository, type EditorialStoryAlertRow, type StoryAlertStateRecord } from "./editorial_alerts.ts";
+import { buildEditorialDigest } from "./editorial_digest.ts";
+import { editorialAlertMessageMetadata, hasCanonicalGrounding, selectPrimaryEditorialEvidence, type CanonicalEditorialEvidence, type EditorialStoryAlertRepository, type EditorialStoryAlertRow, type StoryAlertStateRecord } from "./editorial_alerts.ts";
 
 const secret = Deno.env.get("TELEGRAM_AGENT_INVOKE_SECRET") ?? "";
 const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
@@ -36,11 +37,11 @@ function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "") : [];
 }
 
-async function createEditorialStoryAlertRepository(now: Date): Promise<EditorialStoryAlertRepository> {
-  const cutoff = new Date(now.getTime() - 6 * 60 * 60 * 1000).toISOString();
+async function createEditorialStoryAlertRepository(now: Date, window?: { start: string; end: string }): Promise<EditorialStoryAlertRepository> {
+  const cutoff = window?.start ?? new Date(now.getTime() - 6 * 60 * 60 * 1000).toISOString();
   const rankingDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(now);
-  const storiesValue = await rest(`/rest/v1/story_clusters?select=id,canonical_title,summary,first_seen_at,last_seen_at,signature_json&status=neq.ARCHIVED&last_seen_at=gte.${encodeURIComponent(cutoff)}&limit=500`);
-  const snapshotsValue = await rest(`/rest/v1/trend_snapshots?select=story_cluster_id,snapshot_at,trend_score,trend_state,manutd_relevance_score,source_count,input_snapshot&snapshot_at=gte.${encodeURIComponent(cutoff)}&order=snapshot_at.desc&limit=2000`, { headers: { "accept-profile": "app_private" } });
+  const storiesValue = await rest(`/rest/v1/story_clusters?select=id,canonical_title,summary,first_seen_at,last_seen_at,signature_json&status=neq.ARCHIVED&last_seen_at=gte.${encodeURIComponent(cutoff)}${window ? `&last_seen_at=lt.${encodeURIComponent(window.end)}` : ""}&limit=500`);
+  const snapshotsValue = await rest(`/rest/v1/trend_snapshots?select=story_cluster_id,snapshot_at,trend_score,trend_state,manutd_relevance_score,source_count,input_snapshot&snapshot_at=gte.${encodeURIComponent(cutoff)}${window ? `&snapshot_at=lt.${encodeURIComponent(window.end)}` : ""}&order=snapshot_at.desc&limit=2000`, { headers: { "accept-profile": "app_private" } });
   const rankingsValue = await rest(`/rest/v1/editorial_rankings?select=story_cluster_id,ranking_version,grounding_status,news_eligible&ranking_date=eq.${encodeURIComponent(rankingDate)}&order=calculated_at.desc&limit=1000`, { headers: { "accept-profile": "app_private" } });
   const [canonicalStories, claimsValue, claimEvidenceValue, observationsValue, informationSourcesValue] = await Promise.all([
     createEditorialConsoleRepository({ supabaseUrl, serviceRoleKey }).listCanonicalStories(rankingDate),
@@ -140,6 +141,8 @@ async function createEditorialStoryAlertRepository(now: Date): Promise<Editorial
       primarySourceObservationId: primary?.source_observation_id ?? null,
       primaryClaimId: primary?.claim_id ?? null,
       groundingEvidenceAvailable: grounded,
+      trustState: canonical.grounding_status === "VERIFIED" && grounded && canonical.news_eligible ? "VERIFIED" : primary?.canonical_url && (primary.editorial_role === "FACT_PRIMARY" || primary.editorial_role === "FACT_INDEPENDENT") ? "REPORTED" : "DISCOVERY",
+      materialFingerprint: JSON.stringify([canonical.title, story.summary ?? null, canonical.grounding_status, primary?.source_name ?? null, primary?.canonical_url ?? null]),
     });
   }
   return {
@@ -166,17 +169,42 @@ async function createEditorialStoryAlertRepository(now: Date): Promise<Editorial
   };
 }
 
-async function runAlerts() {
-  await materializeEditorialJobDeadAlerts({ supabaseUrl, serviceKey: serviceRoleKey, threadId: ownerThreadId });
-  if (ownerThreadId) {
-    try {
-      const alertRepository = await createEditorialStoryAlertRepository(new Date());
-      await materializeEditorialStoryAlerts(new Date(), alertRepository);
-    } catch {
-      // Real-time alert materialization is non-critical to pending alert delivery.
+async function materializeHourlyEditorialDigest(window: { start: string; end: string }) {
+  if (!ownerThreadId) return;
+  const repo = await createEditorialStoryAlertRepository(new Date(window.end), window);
+  const rows = await repo.listStories(new Date(window.end));
+  const prior = await rest("/rest/v1/telegram_alert_events?select=payload&event_type=eq.EDITORIAL_DIGEST&status=eq.SENT&order=sent_at.desc&limit=24", { headers: { "accept-profile": "app_private" } });
+  const previousFingerprints: string[] = [];
+  for (const value of Array.isArray(prior) ? prior : []) {
+    const payload = object(object(value).payload);
+    if (!Array.isArray(payload.stories)) continue;
+    for (const item of payload.stories) {
+      const row = object(item);
+      if (typeof row.material_fingerprint === "string") previousFingerprints.push(row.material_fingerprint);
     }
   }
-  const rows = await rest("/rest/v1/telegram_alert_events?select=id,event_type,payload,thread_id,story_cluster_id,candidate_id&status=eq.PENDING&order=created_at.asc&limit=50", { headers: { "accept-profile": "app_private" } });
+  const previouslySent = new Set(previousFingerprints);
+  const digest = buildEditorialDigest(rows.map((row) => ({
+    story_id: row.storyId,
+    title: row.title,
+    trust_state: row.trustState ?? "DISCOVERY",
+    source_name: row.primarySourceName ?? null,
+    source_url: row.primarySourceUrl ?? null,
+    last_seen_at: row.lastSeenAt,
+    trend_state: row.trendState,
+    material_fingerprint: row.materialFingerprint,
+  })), new Date(window.start), new Date(window.end), previouslySent);
+  if (!digest) return;
+  await rest("/rest/v1/telegram_alert_events?on_conflict=event_fingerprint", { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=ignore-duplicates,return=representation", "content-profile": "app_private" }, body: JSON.stringify({ thread_id: ownerThreadId, story_cluster_id: null, candidate_id: null, event_type: "EDITORIAL_DIGEST", event_fingerprint: digest.event_fingerprint, payload: { window_start: window.start, window_end: window.end, stories: digest.stories }, status: "PENDING" }) });
+}
+
+async function runAlerts(input?: { mode: "HOURLY_DIGEST"; window_start: string; window_end: string }) {
+  await materializeEditorialJobDeadAlerts({ supabaseUrl, serviceKey: serviceRoleKey, threadId: ownerThreadId });
+  if (input?.mode === "HOURLY_DIGEST") {
+    await materializeHourlyEditorialDigest({ start: input.window_start, end: input.window_end });
+  }
+  const digestFilter = input ? "&event_type=eq.EDITORIAL_DIGEST" : "&event_type=neq.EDITORIAL_DIGEST";
+  const rows = await rest(`/rest/v1/telegram_alert_events?select=id,event_type,payload,thread_id,story_cluster_id,candidate_id,attempt_count,max_attempt_count&status=eq.PENDING${digestFilter}&order=created_at.asc&limit=50`, { headers: { "accept-profile": "app_private" } });
   const pending = Array.isArray(rows) ? rows as PendingAlert[] : [];
   const client = createTelegramClient({ token: botToken });
   return dispatchPendingAlerts({
@@ -184,7 +212,11 @@ async function runAlerts() {
     resolveChatId: async () => Deno.env.get("TELEGRAM_CHAT_ID") ?? "",
     client,
     markSent: async (id, sentAt) => { await rest(`/rest/v1/telegram_alert_events?id=eq.${encodeURIComponent(id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal", "content-profile": "app_private" }, body: JSON.stringify({ status: "SENT", sent_at: sentAt }) }); },
-    markFailed: async (id, message) => { await rest(`/rest/v1/telegram_alert_events?id=eq.${encodeURIComponent(id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal", "content-profile": "app_private" }, body: JSON.stringify({ status: "FAILED", last_error: message.slice(0, 120) }) }); },
+    markFailed: async (id, message) => {
+      const item = pending.find((alert) => alert.id === id);
+      const attempt = (item?.attempt_count ?? 0) + 1;
+      await rest(`/rest/v1/telegram_alert_events?id=eq.${encodeURIComponent(id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal", "content-profile": "app_private" }, body: JSON.stringify({ status: attempt >= (item?.max_attempt_count ?? 5) ? "FAILED" : "PENDING", attempt_count: attempt, last_error: message.slice(0, 120) }) });
+    },
     persistSentMessage: async (alert, telegramMessageId, rendered) => {
       const threadId = alert.thread_id ?? ownerThreadId;
       if (!threadId) return;
@@ -201,7 +233,9 @@ async function runAlerts() {
           role: "ASSISTANT",
           message_type: "ALERT",
           content: rendered.text,
-          metadata: editorialAlertMessageMetadata(alert.event_type, { ...payload, story_cluster_id: storyClusterId, candidate_id: candidateId }),
+          metadata: alert.event_type === "EDITORIAL_DIGEST"
+            ? { message_kind: "EDITORIAL_DIGEST", story_positions: Array.isArray(payload.stories) ? payload.stories.flatMap((item) => object(item) && text(item.story_id) && text(item.title) ? [{ story_id: text(item.story_id), title: text(item.title) }] : []).slice(0, 5) : [] }
+            : editorialAlertMessageMetadata(alert.event_type, { ...payload, story_cluster_id: storyClusterId, candidate_id: candidateId }),
         }),
       }, "app_private");
     },

@@ -8,6 +8,7 @@ export interface EditorialSlide {
   body: string | null;
   closing_line: string | null;
   evidence_ids: string[];
+  visual_direction?: { subject: string; image_type: string; layout_intent: string; stat_emphasis?: string | null };
 }
 
 export interface EditorialCaption {
@@ -68,4 +69,3 @@ export interface StyleValidationResult {
   valid: boolean;
   errors: StyleValidationError[];
 }
-

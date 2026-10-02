@@ -10,6 +10,12 @@ Deno.test("accepts explicit Manchester United signals", () => {
   assert(isManchesterUnitedRelevant({ canonicalTitle: "산초, 3개월째 FA" }));
 });
 
+Deno.test("keeps common English and Korean club aliases in the deterministic relevance path", () => {
+  for (const alias of ["Manchester United", "Man Utd", "Man United", "MUFC", "맨유"]) {
+    assert(isManchesterUnitedRelevant({ canonicalTitle: `${alias} injury update` }), alias);
+  }
+});
+
 Deno.test("accepts a story from a focused United source", () => {
   assert(isManchesterUnitedFocusedSource("utdreport"));
   assert(isManchesterUnitedRelevant({ canonicalTitle: "새로운 훈련 소식", sourceUsernames: ["utdreport"] }));

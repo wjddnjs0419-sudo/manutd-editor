@@ -50,5 +50,7 @@ Deno.test("generation evidence includes M8 grounded fact sources", async () => {
     evidence_text: "BBC Sport: Sancho is still looking for a club — BBC confirms the latest status.",
     first_cited_post_id: null,
     citation_count: 1,
+    editorial_role: "FACT_INDEPENDENT",
+    canonical_url: "https://bbc.test/article/1",
   }]);
 });

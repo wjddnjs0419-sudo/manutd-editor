@@ -49,6 +49,8 @@ export interface EvidenceSourceInput {
   readonly evidence_text: string | null;
   readonly first_cited_post_id: string | null;
   readonly citation_count: number;
+  readonly editorial_role?: string | null;
+  readonly canonical_url?: string | null;
 }
 
 export interface EvidencePost extends EvidencePostInput {

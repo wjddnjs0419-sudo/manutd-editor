@@ -68,7 +68,8 @@ test("M8.6 proactive alerts use transition state, cooldown, and grounded console
   assert.match(migration, /RISING_STORY/u);
   assert.match(migration, /VERIFIED_STORY/u);
   assert.match(renderer, /renderEditorialStoryAlert/u);
-  assert.match(index, /materializeEditorialStoryAlerts/u);
+  assert.match(index, /materializeHourlyEditorialDigest/u);
+  assert.match(index, /EDITORIAL_DIGEST/u);
   assert.doesNotMatch(index, /materializeIntelligenceCompleteAlert\(/u);
 });
 

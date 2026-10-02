@@ -1,5 +1,6 @@
 import type { MatchDayMode } from "./fixture_types.ts";
 import type { RepresentativeReference } from "./reference_media.ts";
+import { editorialTrustState } from "./editorial_trust.ts";
 
 export interface FrozenBriefingItem {
   position: number;
@@ -55,11 +56,17 @@ export interface MorningBriefingInput {
   blocked_failed: readonly Record<string, unknown>[];
 }
 
-export function selectBriefingCandidates<T extends { grounding_status?: string | null; news_eligible?: boolean }>(
+export function selectBriefingCandidates<T extends { grounding_status?: string | null; news_eligible?: boolean; source_url?: string | null }>(
   candidates: readonly T[],
 ): readonly T[] {
-  const hasGroundingDecisions = candidates.some((candidate) => candidate.grounding_status !== undefined && candidate.grounding_status !== null);
-  return hasGroundingDecisions ? candidates.filter((candidate) => candidate.news_eligible === true) : candidates;
+  return candidates.map((candidate, index) => ({ candidate, index })).sort((left, right) => {
+    const trustOrder = { VERIFIED: 0, REPORTED: 1, DISCOVERY: 2 };
+    const byTrust = trustOrder[editorialTrustState(left.candidate)] - trustOrder[editorialTrustState(right.candidate)];
+    if (byTrust !== 0) return byTrust;
+    const leftRank = typeof (left.candidate as T & { editorial_rank?: unknown }).editorial_rank === "number" ? (left.candidate as T & { editorial_rank: number }).editorial_rank : Number.MAX_SAFE_INTEGER;
+    const rightRank = typeof (right.candidate as T & { editorial_rank?: unknown }).editorial_rank === "number" ? (right.candidate as T & { editorial_rank: number }).editorial_rank : Number.MAX_SAFE_INTEGER;
+    return leftRank - rightRank || left.index - right.index;
+  }).map(({ candidate }) => candidate);
 }
 
 export function buildMorningBriefingSnapshot(input: MorningBriefingInput): MorningBriefingSnapshot {
@@ -85,7 +92,7 @@ export function buildMorningBriefingSnapshot(input: MorningBriefingInput): Morni
       ...(candidate.news_eligible !== undefined ? { news_eligible: candidate.news_eligible } : {}),
       ...(candidate.title !== undefined ? { title: candidate.title } : {}),
       ...(candidate.source_name !== undefined ? { source_name: candidate.source_name } : {}),
-      ...(candidate.source_url !== undefined ? { source_url: candidate.source_url } : {}),
+    ...(candidate.source_url !== undefined ? { source_url: candidate.source_url } : {}),
     })),
     blocked_failed: input.blocked_failed.map((item) => structuredClone(item)),
   };

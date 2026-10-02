@@ -56,7 +56,7 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
   });
   const types: EditorialJobType[] = [
     "COLLECT_INSTAGRAM", "ANALYZE_CONTENT", "RUN_INTELLIGENCE", "DISCOVER_SOURCES", "DISCOVER_TRENDS", "PROMOTE_DISCOVERY", "GROUND_CLAIMS", "RANK_EDITORIAL", "GENERATE_PRIORITY", "SYNC_NOTION", "PROJECT_NOTION",
-    "POLL_SELECTED", "DISPATCH_ALERTS", "FIXTURE_SYNC", "MORNING_BRIEF",
+    "POLL_SELECTED", "DISPATCH_ALERTS", "FIXTURE_SYNC", "MORNING_BRIEF", "EDITORIAL_DIGEST",
   ];
   for (const jobType of types) {
     await invoker.invoke(
@@ -69,6 +69,8 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
         ? { mode: "FORCE" }
         : jobType === "PROJECT_NOTION"
         ? { creative_brief_id: "brief-1" }
+        : jobType === "EDITORIAL_DIGEST"
+        ? { window_start: "2026-10-02T04:00:00Z", window_end: "2026-10-02T05:00:00Z" }
         : {},
     );
   }
@@ -89,10 +91,11 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
     "https://supabase.test/functions/v1/telegram-alerts",
     "https://supabase.test/functions/v1/fixture-sync",
     "https://supabase.test/functions/v1/telegram-morning-brief",
+    "https://supabase.test/functions/v1/telegram-alerts",
   ]);
   assert.deepEqual(calls.map((call) => call.authorization), [
     "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret", "Bearer collector-secret",
-    "Bearer telegram-secret", "Bearer telegram-secret", "Bearer telegram-secret",
+    "Bearer telegram-secret", "Bearer telegram-secret", "Bearer telegram-secret", "Bearer telegram-secret",
   ]);
   assert.deepEqual(calls[1]?.body, { as_of: "2026-09-26T00:00:00Z" });
   assert.equal(calls[0]?.body, null);
@@ -103,6 +106,7 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
   assert.deepEqual(calls[6]?.body, { as_of: "2026-09-26T00:00:00Z" });
   assert.deepEqual(calls[10]?.body, { creative_brief_id: "brief-1" });
   assert.deepEqual(calls[13]?.body, { mode: "FORCE" });
+  assert.deepEqual(calls[15]?.body, { mode: "HOURLY_DIGEST", window_start: "2026-10-02T04:00:00Z", window_end: "2026-10-02T05:00:00Z", timezone: "Asia/Seoul" });
   assert.equal(JSON.stringify(calls).includes("service-role"), false);
 });
 

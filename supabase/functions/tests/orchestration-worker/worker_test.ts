@@ -511,6 +511,21 @@ Deno.test("morning brief remains a terminal worker stage", async () => {
   assert.deepEqual(queue.completed, ["brief-1"]);
 });
 
+Deno.test("hourly editorial digest invokes the bounded Telegram digest boundary and is terminal", async () => {
+  const queue = queueWith([job("digest-1", "EDITORIAL_DIGEST", { payload: { window_start: "2026-10-02T04:00:00Z", window_end: "2026-10-02T05:00:00Z" } })]);
+  const calls: Array<{ type: EditorialJobType; payload: Record<string, unknown> }> = [];
+  const worker = createOrchestrationWorker({
+    queue,
+    invoker: { invoke: async (type, payload) => { calls.push({ type, payload }); return { status: 200, body: { status: "EMPTY" } }; } },
+    workerId: "worker-1",
+    now: () => now,
+  });
+  const result = await worker.processBatch();
+  assert.equal(result.succeeded, 1);
+  assert.equal(result.downstream_enqueued, 0);
+  assert.deepEqual(calls, [{ type: "EDITORIAL_DIGEST", payload: { window_start: "2026-10-02T04:00:00Z", window_end: "2026-10-02T05:00:00Z" } }]);
+});
+
 Deno.test("promotion invocation carries its durable queue job ID for retry recovery", async () => {
   const promotionJobId = "99999999-9999-4999-8999-999999999999";
   const queue = queueWith([job(promotionJobId, "PROMOTE_DISCOVERY")]);

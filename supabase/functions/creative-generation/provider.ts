@@ -9,6 +9,8 @@ export interface ProviderPromptInput {
   readonly content_mode: ContentMode;
   readonly match_phase: MatchPhase | null;
   readonly evidence_snapshot: unknown;
+  readonly trust_state?: "VERIFIED" | "REPORTED" | "DISCOVERY";
+  readonly slide_count?: number;
 }
 
 export interface CreativeGenerationProvider {
@@ -263,10 +265,10 @@ export function createOpenAIProvider(options: OpenAIProviderOptions) {
       return await request<AiClassification>(requestBody(config.model, config.reasoning, classifierPrompt(text), "content_classification", CLASSIFIER_SCHEMA, 500));
     },
     async generate(input: ProviderPromptInput): Promise<CreativeBriefOutput> {
-      return await request<CreativeBriefOutput>(requestBody(model, reasoning, generationPrompt(input.content_mode, input.match_phase, input.evidence_snapshot), "creative_brief", CREATIVE_SCHEMA, maxOutputTokens));
+      return await request<CreativeBriefOutput>(requestBody(model, reasoning, generationPrompt(input.content_mode, input.match_phase, input.evidence_snapshot, input.trust_state, input.slide_count), "creative_brief", CREATIVE_SCHEMA, maxOutputTokens));
     },
     async repair(input: ProviderPromptInput, output: CreativeBriefOutput, errors: readonly string[]): Promise<CreativeBriefOutput> {
-      return await request<CreativeBriefOutput>(requestBody(model, reasoning, repairPrompt(input.content_mode, input.match_phase, input.evidence_snapshot, output, errors), "creative_brief_repair", CREATIVE_SCHEMA, maxOutputTokens));
+      return await request<CreativeBriefOutput>(requestBody(model, reasoning, repairPrompt(input.content_mode, input.match_phase, input.evidence_snapshot, output, errors, input.trust_state, input.slide_count), "creative_brief_repair", CREATIVE_SCHEMA, maxOutputTokens));
     },
   };
 }

@@ -1,4 +1,5 @@
 import type { MorningBriefingSnapshot, FrozenBriefingItem } from "./briefing.ts";
+import { editorialTrustLabel, editorialTrustState } from "./editorial_trust.ts";
 
 export interface PhrasedCandidateNote {
   position: number;
@@ -126,7 +127,8 @@ function canonicalCandidateText(item: FrozenBriefingItem, note: string): string 
   const score = item.priority_score === null ? "Priority —" : `Priority ${item.priority_score}`;
   const flagText = flags(item);
   const title = item.title?.trim() || "콘텐츠 후보";
-  const lines = [`${item.position}️⃣ ${title}`, [score, flagText].filter(Boolean).join(" · "), `Creative Brief: ${item.creative_status}`, "", note];
+  const trust = editorialTrustLabel(editorialTrustState(item));
+  const lines = [`${item.position}️⃣ ${title} ${trust}`, [score, flagText].filter(Boolean).join(" · "), `Creative Brief: ${item.creative_status}`, "", note];
   if (item.source_name) lines.push(`Source: ${item.source_name}`);
   if (item.reference_username) lines.push(`Reference: @${item.reference_username}`);
   const sourceUrl = item.source_url ?? item.reference_permalink;

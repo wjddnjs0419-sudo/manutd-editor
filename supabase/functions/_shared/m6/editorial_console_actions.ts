@@ -12,6 +12,7 @@ import {
   type StoryPage,
 } from "./editorial_console.ts";
 import type { ManutdEditorCarouselDraft } from "../editorial-style/types.ts";
+import { editorialTrustLabel, editorialTrustState, type EditorialTrustState } from "./editorial_trust.ts";
 
 export type ConsoleAction =
   | { type: "OPEN_RECOMMENDED"; page: number }
@@ -23,7 +24,7 @@ export type ConsoleAction =
   | { type: "OPEN_STORY"; token: string }
   | { type: "OPEN_EVIDENCE"; token: string }
   | { type: "SKIP_STORY"; token: string }
-  | { type: "GENERATE_CAROUSEL"; token: string | null }
+  | { type: "GENERATE_CAROUSEL"; token: string | null; slide_count?: 3 | 4 }
   | { type: "OPEN_REEL"; token: string }
   | { type: "SELECT_DRAFT"; token: string }
   | { type: "SHOW_ALTERNATE_HOOKS"; token: string }
@@ -60,7 +61,7 @@ export interface ConsoleActionDependencies {
   refreshDiscovery?: () => Promise<{ status: string; run_id?: string; new_story_count?: number; provider_failures?: number }>;
   getStoryByToken: (token: string) => Promise<CanonicalStory | null>;
   skipStory: (story: CanonicalStory) => Promise<void>;
-  generateCarousel: (story: CanonicalStory) => Promise<ManutdEditorCarouselDraft>;
+  generateCarousel: (story: CanonicalStory, options?: { trust_state: EditorialTrustState; slide_count?: number }) => Promise<ManutdEditorCarouselDraft>;
   selectDraft: (briefId: string) => Promise<void>;
 }
 
@@ -158,7 +159,7 @@ async function listResult(mode: "recommended" | "all" | "trending", page: number
   return {
     view: mode === "recommended" ? renderRecommendedList(result, "recommended") : mode === "all" ? renderAllStoryList(result) : renderTrendingList(result),
     next_state: listState(state, mode, result.page),
-    event: { action, status: "COMPLETED", metadata: { page: result.page, total: result.total, mode } },
+    event: { action, status: "COMPLETED", metadata: { page: result.page, total: result.total, mode, presented_stories: result.items.map((story) => ({ story_id: story.id, title: story.title })) } },
   };
 }
 
@@ -211,22 +212,20 @@ export async function dispatchEditorialConsoleAction(action: ConsoleAction, stat
     let story = await dependencies.getStoryByToken(token);
     if (!story && state.story_id && state.story_id !== token) story = await dependencies.getStoryByToken(state.story_id);
     if (!story || !story.candidate_id) return safeError("최신 canonical 소재를 찾지 못했습니다.", state, "CREATIVE_GENERATION_FAILED");
-    if (!story.news_eligible) {
-      const hasLinkedUrl = story.evidence.some((item) => Boolean(item.canonical_url));
-      const message = hasLinkedUrl
-        ? "출처 링크는 연결돼 있지만, 아직 카드뉴스용 팩트 검증 기준을 통과하지 못했습니다. URL이 있다는 것만으로는 사실 근거로 사용할 수 없습니다."
-        : "아직 카드뉴스용으로 검증된 팩트 근거가 없습니다. 소재에 출처 이름이 보여도 원문 연결과 팩트 검증이 끝나지 않았을 수 있습니다.";
-      return safeError(`${message}\n🔎 근거 보기에서 연결 상태를 확인해 주세요.`, state, "CREATIVE_GENERATION_BLOCKED");
-    }
-    if (story.evidence.length === 0) {
-      return safeError("카드뉴스에 연결할 검증 근거를 찾지 못했습니다.\n🔎 근거 보기에서 출처 연결을 확인해 주세요.", state, "CREATIVE_GENERATION_BLOCKED");
+    const trustState = editorialTrustState(story);
+    const usableEvidence = story.evidence.some((item) =>
+      (item.status === "SUPPORTED" || item.status === "REPORTED") &&
+      (trustState === "VERIFIED" || Boolean(item.canonical_url))
+    );
+    if (!usableEvidence) {
+      return safeError("연결된 원문 근거가 없어 초안을 만들 수 없습니다. 출처를 확인한 뒤 다시 시도해 주세요.", state, "CREATIVE_GENERATION_BLOCKED");
     }
     if (story.information_gap_score <= 0 && story.hook_strength <= 0) {
       return safeError("이 소재는 카드뉴스로 구성할 편집 포인트가 부족합니다.\n다른 소재를 선택해 주세요.", state, "CREATIVE_GENERATION_BLOCKED");
     }
     try {
-      const draft = await dependencies.generateCarousel(story);
-      return { view: renderCarouselDraft(draft, story.title), next_state: { ...state, view: "DRAFT", story_id: story.id, story_fingerprint: story.story_fingerprint, brief_id: draft.creative_brief_id, state_version: state.state_version + 1 }, event: { action: "CREATIVE_GENERATION_COMPLETED", status: "COMPLETED", metadata: { story_id: story.id, candidate_id: story.candidate_id, brief_id: draft.creative_brief_id } } };
+      const draft = await dependencies.generateCarousel(story, { trust_state: trustState, ...(action.slide_count ? { slide_count: action.slide_count } : {}) });
+      return { view: renderCarouselDraft(draft, story.title, trustState, story.evidence), next_state: { ...state, view: "DRAFT", story_id: story.id, story_fingerprint: story.story_fingerprint, brief_id: draft.creative_brief_id, state_version: state.state_version + 1 }, event: { action: "CREATIVE_GENERATION_COMPLETED", status: "COMPLETED", metadata: { story_id: story.id, candidate_id: story.candidate_id, brief_id: draft.creative_brief_id, trust_state: trustState } } };
     } catch {
       return safeError("canonical 카드뉴스 생성을 완료하지 못했습니다.", state, "CREATIVE_GENERATION_FAILED");
     }

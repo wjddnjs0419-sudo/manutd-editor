@@ -10,6 +10,8 @@ import type { ContentMode, CreativeBriefOutput, EvidenceSnapshot } from "./types
 export interface GenerationTrigger {
   readonly candidate_id: string;
   readonly trigger_type: TriggerType;
+  readonly trust_state?: "VERIFIED" | "REPORTED" | "DISCOVERY";
+  readonly slide_count?: number;
 }
 
 export type GenerationStatus = "READY" | "NOOP" | "CONCURRENT" | "NOT_ELIGIBLE" | "BLOCKED_EVIDENCE" | "CLASSIFICATION_UNCERTAIN" | "FAILED_VALIDATION" | "FAILED_PROVIDER";
@@ -50,8 +52,14 @@ function strictNewsEvidence(snapshot: EvidenceSnapshot): boolean {
   return snapshot.sources.some((source) => (source.reliability_score ?? 0) >= 8);
 }
 
-function uncertainFingerprint(candidateId: string, snapshot: EvidenceSnapshot, config: GenerationConfig): Promise<string> {
-  return sha256(canonicalJson({ candidate_id: candidateId, evidence_snapshot: snapshot, generation_config_version: config.version, classification: "uncertain" }));
+function trustedLinkedSource(snapshot: EvidenceSnapshot, trustState: GenerationTrigger["trust_state"]): boolean {
+  if (trustState === "REPORTED") return snapshot.sources.some((source) => (source.editorial_role === "FACT_PRIMARY" || source.editorial_role === "FACT_INDEPENDENT") && Boolean(source.canonical_url));
+  if (trustState === "DISCOVERY") return snapshot.sources.some((source) => source.editorial_role?.startsWith("DISCOVERY_") && Boolean(source.canonical_url));
+  return false;
+}
+
+function uncertainFingerprint(candidateId: string, snapshot: EvidenceSnapshot, config: GenerationConfig, trigger: GenerationTrigger): Promise<string> {
+  return sha256(canonicalJson({ candidate_id: candidateId, evidence_snapshot: snapshot, generation_config_version: config.version, classification: "uncertain", trust_state: trigger.trust_state ?? "VERIFIED", slide_count: trigger.slide_count ?? null }));
 }
 
 function jobInput(job: Omit<GenerationJob, "id">, now: Date): Omit<GenerationJob, "id"> {
@@ -61,7 +69,7 @@ function jobInput(job: Omit<GenerationJob, "id">, now: Date): Omit<GenerationJob
 export async function runCreativeGeneration(trigger: GenerationTrigger, dependencies: GenerationDependencies): Promise<GenerationResult> {
   const now = dependencies.now ?? (() => new Date());
   const runAt = now();
-  const evidenceInput = await dependencies.repository.getCandidateEvidence(trigger.candidate_id);
+  const evidenceInput = await dependencies.repository.getCandidateEvidence(trigger.candidate_id, trigger.trust_state);
   if (!evidenceInput) return { status: "FAILED_PROVIDER", candidate_id: trigger.candidate_id, error_codes: ["CANDIDATE_NOT_FOUND"] };
   if (trigger.trigger_type === "AUTO_PRIORITY" && !evidenceInput.candidate.first_mover_flag && !evidenceInput.candidate.must_cover_flag) {
     return { status: "NOT_ELIGIBLE", candidate_id: trigger.candidate_id };
@@ -70,9 +78,12 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
   const config = validateGenerationConfig(rawConfig);
   dependencies.provider.configure?.(config);
   const snapshot = buildEvidenceSnapshot(evidenceInput);
+  if (trigger.trust_state && trigger.trust_state !== "VERIFIED" && !trustedLinkedSource(snapshot, trigger.trust_state)) {
+    return { status: "BLOCKED_EVIDENCE", candidate_id: trigger.candidate_id, error_codes: [trigger.trust_state === "REPORTED" ? "REPORTED_SOURCE_MISSING" : "DISCOVERY_SOURCE_MISSING"] };
+  }
   const classification = await classifyWithFallback(evidenceText(snapshot), config.classifier_config, dependencies.provider);
   if (classification.source === "UNCERTAIN" || !classification.content_mode) {
-    const fingerprint = await uncertainFingerprint(trigger.candidate_id, snapshot, config);
+    const fingerprint = await uncertainFingerprint(trigger.candidate_id, snapshot, config, trigger);
     const existing = await dependencies.repository.findReadyBrief(trigger.candidate_id, fingerprint);
     if (existing) return { status: "NOOP", candidate_id: trigger.candidate_id, input_fingerprint: fingerprint };
     const job = await dependencies.repository.insertJob(jobInput({ candidate_id: trigger.candidate_id, input_fingerprint: fingerprint, trigger_type: trigger.trigger_type, status: "CLASSIFICATION_UNCERTAIN", lease_owner: null, lease_expires_at: null, attempt_count: 0, repair_attempted: false, creative_brief_id: null, last_error_category: "CLASSIFICATION_UNCERTAIN", created_at: "", updated_at: "", completed_at: runAt.toISOString() }, runAt));
@@ -80,13 +91,13 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
     return { status: "CLASSIFICATION_UNCERTAIN", candidate_id: trigger.candidate_id, input_fingerprint: fingerprint };
   }
   const mode = classification.content_mode as ContentMode;
-  if (mode === "NEWS_UPDATE" && !strictNewsEvidence(snapshot)) {
-    const fingerprint = await hashGenerationInput({ candidate_id: trigger.candidate_id, evidence_snapshot: snapshot, content_mode: mode, match_phase: classification.match_phase, generation_config_version: config.version, classifier_config_version: config.classifier_config.version, generator_model_config: config.generation_config });
+  if (mode === "NEWS_UPDATE" && !strictNewsEvidence(snapshot) && !trustedLinkedSource(snapshot, trigger.trust_state)) {
+    const fingerprint = await hashGenerationInput({ candidate_id: trigger.candidate_id, evidence_snapshot: snapshot, content_mode: mode, match_phase: classification.match_phase, generation_config_version: config.version, classifier_config_version: config.classifier_config.version, generator_model_config: config.generation_config, trust_state: trigger.trust_state ?? "VERIFIED", slide_count: trigger.slide_count ?? null });
     const job = await dependencies.repository.insertJob(jobInput({ candidate_id: trigger.candidate_id, input_fingerprint: fingerprint, trigger_type: trigger.trigger_type, status: "BLOCKED_EVIDENCE", lease_owner: null, lease_expires_at: null, attempt_count: 0, repair_attempted: false, creative_brief_id: null, last_error_category: "BLOCKED_EVIDENCE", created_at: "", updated_at: "", completed_at: runAt.toISOString() }, runAt));
     await dependencies.repository.updateJob(job.id, { status: "BLOCKED_EVIDENCE", completed_at: runAt.toISOString(), last_error_category: "BLOCKED_EVIDENCE" });
     return { status: "BLOCKED_EVIDENCE", candidate_id: trigger.candidate_id, input_fingerprint: fingerprint };
   }
-  const fingerprint = await hashGenerationInput({ candidate_id: trigger.candidate_id, evidence_snapshot: snapshot, content_mode: mode, match_phase: classification.match_phase, generation_config_version: config.version, classifier_config_version: config.classifier_config.version, generator_model_config: config.generation_config });
+  const fingerprint = await hashGenerationInput({ candidate_id: trigger.candidate_id, evidence_snapshot: snapshot, content_mode: mode, match_phase: classification.match_phase, generation_config_version: config.version, classifier_config_version: config.classifier_config.version, generator_model_config: config.generation_config, trust_state: trigger.trust_state ?? "VERIFIED", slide_count: trigger.slide_count ?? null });
   const ready = await dependencies.repository.findReadyBrief(trigger.candidate_id, fingerprint);
   if (ready) {
     return { status: "NOOP", candidate_id: trigger.candidate_id, creative_brief_id: ready.id, revision: ready.version, input_fingerprint: fingerprint };
@@ -96,13 +107,14 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
   if (!(await dependencies.repository.acquireLease(job.id, dependencies.workerId, runAt, leaseUntil))) return { status: "CONCURRENT", candidate_id: trigger.candidate_id, input_fingerprint: fingerprint };
   await dependencies.repository.updateJob(job.id, { status: "GENERATING", attempt_count: job.attempt_count + 1, lease_owner: dependencies.workerId, lease_expires_at: leaseUntil.toISOString() });
   let generated: CreativeBriefOutput;
+  const promptInput = { content_mode: mode, match_phase: classification.match_phase, evidence_snapshot: snapshot, ...(trigger.trust_state ? { trust_state: trigger.trust_state } : {}), ...(trigger.slide_count ? { slide_count: trigger.slide_count } : {}) };
   try {
-    generated = await dependencies.provider.generate({ content_mode: mode, match_phase: classification.match_phase, evidence_snapshot: snapshot });
+    generated = await dependencies.provider.generate(promptInput);
   } catch {
     await dependencies.repository.updateJob(job.id, { status: "FAILED_PROVIDER", last_error_category: "FAILED_PROVIDER", completed_at: runAt.toISOString(), lease_owner: null, lease_expires_at: null });
     return { status: "FAILED_PROVIDER", candidate_id: trigger.candidate_id, input_fingerprint: fingerprint, error_codes: ["FAILED_PROVIDER"] };
   }
-  const checked = await generateWithOneRepair(dependencies.provider, generated, { content_mode: mode, match_phase: classification.match_phase, evidence_snapshot: snapshot }, snapshot, qualityConfig(config));
+  const checked = await generateWithOneRepair(dependencies.provider, generated, promptInput, snapshot, { ...qualityConfig(config), ...(trigger.slide_count ? { min_slides: trigger.slide_count, max_slides: trigger.slide_count } : {}), trust_state: trigger.trust_state, requested_slide_count: trigger.slide_count });
   if (!checked.ok || !checked.output) {
     await dependencies.repository.updateJob(job.id, { status: "FAILED_VALIDATION", repair_attempted: checked.repair_attempted, last_error_category: "FAILED_VALIDATION", completed_at: runAt.toISOString(), lease_owner: null, lease_expires_at: null });
     return { status: "FAILED_VALIDATION", candidate_id: trigger.candidate_id, input_fingerprint: fingerprint, error_codes: checked.validation.errors.map((entry) => entry.code) };
@@ -111,7 +123,7 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
   const revision = await dependencies.repository.nextRevision(trigger.candidate_id);
   const brief = await dependencies.repository.insertCreativeBrief({
     candidate_id: trigger.candidate_id, version: revision, headline: output.hooks[0]?.text ?? output.angle, angle: output.angle, format: "INSTAGRAM_CAROUSEL", slide_count: output.slides.length,
-    slides_json: { slides: output.slides, key_takeaway: output.key_takeaway, editor_warning: output.editor_warning ?? null, internal_grounding: output.internal_grounding ?? null }, design_json: { slides: output.slides.map((slide) => ({ slide_number: slide.slide_number, visual_direction: slide.visual_direction })) }, caption_draft: output.caption.body, cta: output.caption.cta, status: "READY", content_mode: output.content_mode, match_phase: output.match_phase, generation_config_id: config.id, input_fingerprint: fingerprint, evidence_snapshot: snapshot, hooks_json: output.hooks, grounding_json: { claims: output.slides.flatMap((slide) => slide.claims), internal_grounding: output.internal_grounding ?? null }, generation_metadata: { config_version: config.version, classifier_config_version: config.classifier_config.version, classification_source: classification.source, trigger_type: trigger.trigger_type }, generation_quality: output.generation_quality, model_name: String(config.generation_config.model), generated_at: runAt.toISOString(),
+    slides_json: { slides: output.slides, key_takeaway: output.key_takeaway, editor_warning: output.editor_warning ?? null, internal_grounding: output.internal_grounding ?? null }, design_json: { slides: output.slides.map((slide) => ({ slide_number: slide.slide_number, visual_direction: slide.visual_direction })) }, caption_draft: output.caption.body, cta: output.caption.cta, status: "READY", content_mode: output.content_mode, match_phase: output.match_phase, generation_config_id: config.id, input_fingerprint: fingerprint, evidence_snapshot: snapshot, hooks_json: output.hooks, grounding_json: { claims: output.slides.flatMap((slide) => slide.claims), internal_grounding: output.internal_grounding ?? null }, generation_metadata: { config_version: config.version, classifier_config_version: config.classifier_config.version, classification_source: classification.source, trigger_type: trigger.trigger_type, trust_state: trigger.trust_state ?? "VERIFIED", requested_slide_count: trigger.slide_count ?? null }, generation_quality: output.generation_quality, model_name: String(config.generation_config.model), generated_at: runAt.toISOString(),
     style_profile: output.style_profile ?? (qualityConfig(config).style_profile === "manutd_editor" ? "manutd_editor" : undefined), style_version: output.style_version ?? qualityConfig(config).style_version,
   });
   await dependencies.repository.updateJob(job.id, { status: "READY", creative_brief_id: brief.id, repair_attempted: checked.repair_attempted, completed_at: runAt.toISOString(), lease_owner: null, lease_expires_at: null });

@@ -14,7 +14,7 @@ import { canHandleStaleConsoleCallback, dispatchEditorialConsoleAction, parseCon
 import { invokeCanonicalCarousel } from "../_shared/m6/console_generation.ts";
 import { createEditorialJobQueue } from "../orchestration-worker/queue_client.ts";
 import { createTelegramAgentHandler } from "./handler.ts";
-import { answerNaturalLanguage, canonicalStoryFromReplyContext, parseReplyMessageId, replyConsoleIntent, resolveReplyContext, resolveReplyReference, type CanonicalConversationContext, type ReplyContext } from "./conversation.ts";
+import { answerNaturalLanguage, canonicalStoryFromReplyContext, parseEditorialIntent, parseReplyMessageId, replyConsoleIntent, resolvePresentedStoryPosition, resolveReplyContext, resolveReplyReference, type CanonicalConversationContext, type ReplyContext } from "./conversation.ts";
 import { enqueueManualDiscovery, type ManualDiscoveryPayload } from "./manual_discovery.ts";
 import type { StoredCreativeBrief } from "../creative-generation/repository.ts";
 import type { CreativeBriefSlide } from "../creative-generation/types.ts";
@@ -314,6 +314,15 @@ async function loadConsoleState(threadId: string): Promise<ConsoleState> {
   return Array.isArray(created) && isObject(created[0]) ? consoleStateFromRow(created[0]) : emptyConsoleState();
 }
 
+async function latestPresentedStories(threadId: string): Promise<Array<{ story_id: string; title: string }>> {
+  const rows = await rest(`/rest/v1/telegram_messages?select=metadata&thread_id=eq.${encodeURIComponent(threadId)}&role=eq.ASSISTANT&order=created_at.desc&limit=30`, {}, "app_private").catch(() => []);
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!isObject(row) || !isObject(row.metadata) || !Array.isArray(row.metadata.story_positions)) continue;
+    return row.metadata.story_positions.slice(0, 5).flatMap((value) => isObject(value) && typeof value.story_id === "string" && typeof value.title === "string" ? [{ story_id: value.story_id, title: value.title }] : []);
+  }
+  return [];
+}
+
 async function saveConsoleState(threadId: string, state: ConsoleState): Promise<void> {
   const viewName = state.view === "LIST" ? state.mode === "all" ? "ALL" : state.mode === "trending" ? "TRENDING" : "RECOMMENDED" : state.view;
   await rest(`/rest/v1/telegram_console_state?thread_id=eq.${encodeURIComponent(threadId)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ view_name: viewName, page: state.page, story_cluster_id: state.story_id, brief_id: state.brief_id, telegram_message_id: state.telegram_message_id, state_version: state.state_version, state_json: { mode: state.mode, story_fingerprint: state.story_fingerprint } }) }, "app_private");
@@ -361,7 +370,8 @@ function storedBriefToManutdDraft(row: Record<string, unknown>, story: Canonical
     const claims = Array.isArray(slide.claims) ? slide.claims.filter(isObject) : [];
     const evidenceIds = claims.flatMap((claim) => Array.isArray(claim.evidence_ids) ? claim.evidence_ids.filter((value): value is string => typeof value === "string") : []);
     const role: EditorialSlideRole = slide.role === "HOOK" || slide.role === "CONTEXT" || slide.role === "KEY_FACT" || slide.role === "IMPLICATION" ? slide.role : index === 0 ? "HOOK" : index === 1 ? "CONTEXT" : index === 2 ? "KEY_FACT" : "IMPLICATION";
-    return { index: typeof slide.index === "number" ? slide.index : index + 1, role, headline: typeof slide.headline === "string" && slide.headline.trim() ? slide.headline : story.title, highlight: typeof slide.highlight === "string" ? slide.highlight : null, body: role === "HOOK" ? null : body, closing_line: typeof slide.closing_line === "string" ? slide.closing_line : null, evidence_ids: [...new Set(evidenceIds)] };
+    const visual = isObject(slide.visual_direction) ? slide.visual_direction : null;
+    return { index: typeof slide.index === "number" ? slide.index : index + 1, role, headline: typeof slide.headline === "string" && slide.headline.trim() ? slide.headline : story.title, highlight: typeof slide.highlight === "string" ? slide.highlight : null, body: role === "HOOK" ? null : body, closing_line: typeof slide.closing_line === "string" ? slide.closing_line : null, evidence_ids: [...new Set(evidenceIds)], ...(visual && typeof visual.subject === "string" && typeof visual.image_type === "string" && typeof visual.layout_intent === "string" ? { visual_direction: { subject: visual.subject, image_type: visual.image_type, layout_intent: visual.layout_intent, stat_emphasis: typeof visual.stat_emphasis === "string" ? visual.stat_emphasis : null } } : {}) };
   });
   const caption = typeof row.caption_draft === "string" ? row.caption_draft : "";
   const groundingJson = isObject(row.grounding_json) ? row.grounding_json : {};
@@ -379,7 +389,7 @@ function storedBriefToManutdDraft(row: Record<string, unknown>, story: Canonical
   };
 }
 
-async function generateCanonicalCarousel(story: CanonicalStory): Promise<ManutdEditorCarouselDraft> {
+async function generateCanonicalCarousel(story: CanonicalStory, options: { trust_state?: "VERIFIED" | "REPORTED" | "DISCOVERY"; slide_count?: number } = {}): Promise<ManutdEditorCarouselDraft> {
   if (!story.candidate_id) throw new Error("CANDIDATE_NOT_FOUND");
   const secret = Deno.env.get("COLLECTOR_INVOKE_SECRET") ?? "";
   if (!secret) throw new Error("COLLECTOR_INVOKE_SECRET_MISSING");
@@ -390,7 +400,7 @@ async function generateCanonicalCarousel(story: CanonicalStory): Promise<ManutdE
       return response.ok ? result : { status: "FAILED_PROVIDER" };
     },
     loadBrief: async (id) => await rowById(`/rest/v1/creative_briefs?select=*&id=eq.${encodeURIComponent(id)}&limit=1`),
-  }, story.id);
+  }, story.id, options);
   return storedBriefToManutdDraft(brief, story);
 }
 
@@ -415,12 +425,12 @@ function consoleDependencies(thread: ThreadRow, replyContext: ReplyContext | nul
       return await resolveConsoleStory(thread, token);
     },
     skipStory: async (story: CanonicalStory) => await skipCanonicalStory(thread, story),
-    generateCarousel: async (story: CanonicalStory) => await generateCanonicalCarousel(story),
+    generateCarousel: async (story: CanonicalStory, options?: { trust_state: "VERIFIED" | "REPORTED" | "DISCOVERY"; slide_count?: number }) => await generateCanonicalCarousel(story, options),
     selectDraft: async (token: string) => await selectCanonicalDraft(thread, token),
   };
 }
 
-async function sendConsoleView(thread: ThreadRow, incoming: TelegramUpdate, state: ConsoleState, view: ConsoleView): Promise<ConsoleState> {
+async function sendConsoleView(thread: ThreadRow, incoming: TelegramUpdate, state: ConsoleState, view: ConsoleView, metadata: Record<string, unknown> = {}): Promise<ConsoleState> {
   const client = createTelegramClient({ token: botToken });
   const chatId = telegramChatId(incoming) ?? "";
   const messageId = callbackMessageId(incoming);
@@ -434,7 +444,7 @@ async function sendConsoleView(thread: ThreadRow, incoming: TelegramUpdate, stat
   }
   const next = { ...state, telegram_message_id: sentMessageId };
   await saveConsoleState(thread.id, next);
-  await rest("/rest/v1/telegram_messages", { method: "POST", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ thread_id: thread.id, telegram_message_id: sentMessageId, telegram_update_id: null, role: "ASSISTANT", message_type: "CONSOLE", content: view.text, metadata: { in_reply_to_update_id: incoming.update_id ?? null } }) }, "app_private");
+  await rest("/rest/v1/telegram_messages", { method: "POST", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ thread_id: thread.id, telegram_message_id: sentMessageId, telegram_update_id: null, role: "ASSISTANT", message_type: "CONSOLE", content: view.text, metadata: { in_reply_to_update_id: incoming.update_id ?? null, ...(Array.isArray(metadata.presented_stories) ? { story_positions: metadata.presented_stories } : {}) } }) }, "app_private");
   return next;
 }
 
@@ -454,7 +464,15 @@ async function runConsoleAction(thread: ThreadRow, incoming: TelegramUpdate, act
   const result = await dispatchEditorialConsoleAction(action, { ...targetState, telegram_message_id: incomingMessageId ?? state.telegram_message_id }, consoleDependencies(thread, replyContext));
   if (action.type === "GENERATE_CAROUSEL" && repliedStoryId && result.event.status !== "COMPLETED") result.next_state = state;
   await recordConsoleEvent(thread.id, incoming, result.event);
-  await sendConsoleView(thread, incoming, result.next_state, result.view);
+  await sendConsoleView(thread, incoming, result.next_state, result.view, result.event.metadata ?? {});
+  if (result.event.status === "COMPLETED" && action.type === "GENERATE_CAROUSEL" && result.next_state.story_id && result.next_state.brief_id) {
+    const story = await consoleDependencies(thread, replyContext).getStoryByToken(result.next_state.story_id);
+    if (story?.candidate_id) await rest(`/rest/v1/telegram_threads?id=eq.${encodeURIComponent(thread.id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ active_candidate_id: story.candidate_id, active_source_observation_id: null, active_brief_id: result.next_state.brief_id }) }, "app_private");
+  }
+  if (result.event.status === "COMPLETED" && (action.type === "OPEN_STORY" || action.type === "OPEN_EVIDENCE") && result.next_state.story_id) {
+    const story = await consoleDependencies(thread, replyContext).getStoryByToken(result.next_state.story_id);
+    if (story?.candidate_id) await rest(`/rest/v1/telegram_threads?id=eq.${encodeURIComponent(thread.id)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ active_candidate_id: story.candidate_id, active_source_observation_id: null }) }, "app_private");
+  }
   return { status: result.event.status, reply: result.view.text };
 }
 
@@ -602,6 +620,40 @@ async function runAgent(value: unknown): Promise<{ status: string; reply: string
   const command = parseCommand(text);
   const config = await loadAgentConfig();
   const provider = Deno.env.get("OPENAI_API_KEY") ? createOpenAIGenerator({ apiKey: Deno.env.get("OPENAI_API_KEY") ?? "", model: typeof config.model_config.conversation_model === "string" ? config.model_config.conversation_model : undefined }) : undefined;
+  if (!command && provider) {
+    const consoleState = await loadConsoleState(thread.id);
+    const presented = await latestPresentedStories(thread.id);
+    const intent = await parseEditorialIntent(text, { generate: provider, presented_titles: presented.map((item) => item.title), has_active_story: Boolean(replied?.storyId || consoleState.story_id), has_active_draft: Boolean(thread.active_brief_id || consoleState.brief_id) });
+    let action: ConsoleAction | null = null;
+    if (intent.intent === "OPEN_RECOMMENDED") action = { type: "OPEN_RECOMMENDED", page: 1 };
+    if (intent.intent === "OPEN_TRENDING") action = { type: "OPEN_TRENDING", page: 1 };
+    if (intent.intent === "DISCOVER_MORE") action = { type: "DISCOVER_MORE" };
+    if (intent.intent === "OPEN_STORY" || intent.intent === "GENERATE_CAROUSEL" || intent.intent === "SHOW_SOURCES") {
+      const selected = intent.story_position ? resolvePresentedStoryPosition(presented, intent.story_position) : null;
+      const activeStory = replied?.storyId ?? consoleState.story_id;
+      if (intent.story_position && !selected) {
+        const reply = "최근에 보여드린 목록에서 그 번호를 찾지 못했습니다. 최신 목록을 다시 열어 주세요.";
+        await sendAndPersist(thread, incoming, reply);
+        return { status: "STORY_POSITION_NOT_FOUND", reply };
+      }
+      const token = selected?.story_id ?? activeStory ?? null;
+      if (!token) {
+        const reply = "먼저 소재 목록을 보여드릴까요? '오늘 뭐 있어?'라고 말씀해 주세요.";
+        await sendAndPersist(thread, incoming, reply);
+        return { status: "ACTIVE_STORY_REQUIRED", reply };
+      }
+      action = intent.intent === "OPEN_STORY" ? { type: "OPEN_STORY", token }
+        : intent.intent === "SHOW_SOURCES" ? { type: "OPEN_EVIDENCE", token }
+        : { type: "GENERATE_CAROUSEL", token, ...(intent.slide_count ? { slide_count: intent.slide_count } : {}) };
+    }
+    if (intent.intent === "EDIT_DRAFT" && intent.edit_target && intent.instruction) {
+      const revisionCommand: ParsedCommand = intent.edit_target === "caption" ? { type: "CAPTION", instruction: intent.instruction } : { type: "SLIDE", slide: Number(intent.edit_target.slice("slide_".length)), instruction: intent.instruction };
+      const revised = await revisionForCommand(revisionCommand, thread);
+      await sendAndPersist(thread, incoming, revised.reply);
+      return { status: revised.revision ? "REVISION_SAVED" : "REVISION_NOT_SAVED", reply: revised.reply };
+    }
+    if (action) return await runConsoleAction(thread, incoming, action, replied?.storyId ?? null, replied?.context ?? null);
+  }
   const reply = command ? await commandReply(command, thread) : await answerNaturalLanguage(thread.id, text, {
     getThread: async () => memoryThread(thread),
     listMessages: async (threadId) => listMessages(threadId, config.recent_message_limit),

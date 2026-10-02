@@ -1,6 +1,8 @@
 export interface CanonicalGenerationInvocation {
   readonly candidate_id: string;
   readonly trigger_type: "MANUAL";
+  readonly trust_state?: "VERIFIED" | "REPORTED" | "DISCOVERY";
+  readonly slide_count?: number;
 }
 
 export interface CanonicalGenerationResult {
@@ -21,9 +23,10 @@ export async function invokeCanonicalCarousel(
   candidateId: string,
   dependencies: CanonicalGenerationDependencies,
   expectedStoryClusterId?: string,
+  options: { trust_state?: "VERIFIED" | "REPORTED" | "DISCOVERY"; slide_count?: number } = {},
 ): Promise<Record<string, unknown>> {
   if (!candidateId.trim()) throw new Error("CANDIDATE_NOT_FOUND");
-  const value = await dependencies.invoke({ candidate_id: candidateId, trigger_type: "MANUAL" });
+  const value = await dependencies.invoke({ candidate_id: candidateId, trigger_type: "MANUAL", ...options });
   if (!object(value) || (value.status !== "READY" && value.status !== "NOOP") || typeof value.creative_brief_id !== "string") {
     throw new Error("CREATIVE_GENERATION_FAILED");
   }

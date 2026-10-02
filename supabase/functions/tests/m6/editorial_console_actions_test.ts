@@ -36,7 +36,7 @@ const draft: ManutdEditorCarouselDraft = {
   story_id: story.id,
   creative_brief_id: "brief-1",
   slides: [
-    { index: 1, role: "HOOK", headline: "3개월째 소속팀 없는 산초", highlight: "10부 리그에서 개인 훈련 중", body: null, closing_line: null, evidence_ids: ["claim:1"] },
+    { index: 1, role: "HOOK", headline: "3개월째 소속팀 없는 산초", highlight: "10부 리그에서 개인 훈련 중", body: null, closing_line: null, evidence_ids: ["claim:1"], visual_direction: { subject: "산초 훈련 사진", image_type: "training photo", layout_intent: "큰 헤드라인 왼쪽 정렬", stat_emphasis: "3개월" } },
     { index: 2, role: "CONTEXT", headline: "자유 계약만 3개월째", highlight: null, body: "새 팀을 찾고 있다.", closing_line: null, evidence_ids: ["claim:1"] },
     { index: 3, role: "KEY_FACT", headline: "10부리그 훈련장", highlight: null, body: "몸 상태를 유지하는 중이다.", closing_line: null, evidence_ids: ["claim:1"] },
   ],
@@ -174,6 +174,38 @@ Deno.test("natural-language generation can reuse the story currently open in the
   assert(result.view.text.includes("📱 카드뉴스 초안"));
 });
 
+Deno.test("generation keeps VERIFIED, REPORTED, and DISCOVERY trust visible without changing canonical eligibility", async () => {
+  const cases = [
+    { trust: "VERIFIED", candidate: story },
+    {
+      trust: "REPORTED",
+      candidate: { ...story, grounding_status: "INSUFFICIENT", news_eligible: false, evidence: [{ ...story.evidence[0]!, status: "REPORTED" as const, editorial_role: "FACT_PRIMARY", canonical_url: "https://bbc.test/sancho" }] },
+    },
+    {
+      trust: "DISCOVERY",
+      candidate: { ...story, grounding_status: "DISCOVERY_ONLY", news_eligible: false, evidence: [{ ...story.evidence[0]!, status: "REPORTED" as const, editorial_role: "DISCOVERY_COMPETITOR", canonical_url: "https://social.test/rumor" }] },
+    },
+  ] as Array<{ trust: string; candidate: CanonicalStory }>;
+
+  for (const entry of cases) {
+    let generationCalls = 0;
+    const result = await dispatchEditorialConsoleAction(
+      { type: "GENERATE_CAROUSEL", token: story.id },
+      state({ view: "DETAIL", story_id: story.id }),
+      dependencies({
+        getStoryByToken: async () => entry.candidate,
+        generateCarousel: async () => { generationCalls += 1; return draft; },
+      }),
+    );
+    assertEquals(result.event.status, "COMPLETED");
+    assertEquals(generationCalls, 1);
+    assert(result.view.text.includes(entry.trust === "VERIFIED" ? "🟢 확인됨" : entry.trust === "REPORTED" ? "🟡 보도됨" : "🔴 미확인"));
+    if (entry.trust !== "VERIFIED") assert(result.view.text.includes(entry.candidate.evidence[0]?.canonical_url ?? ""));
+    assert(result.view.text.includes("산초 훈련 사진"));
+    assertEquals(entry.candidate.news_eligible, entry.trust === "VERIFIED");
+  }
+});
+
 Deno.test("card generation falls back to the console-selected story when the agent candidate is stale", async () => {
   let calls = 0;
   const result = await dispatchEditorialConsoleAction(
@@ -197,11 +229,11 @@ Deno.test("card generation blocks candidates without verified public evidence", 
     dependencies({ getStoryByToken: async () => unsupported, generateCarousel: async () => { calls += 1; return draft; } }),
   );
   assertEquals(calls, 0);
-  assert(result.view.text.includes("검증된 팩트 근거"));
+  assert(result.view.text.includes("연결된 원문 근거"));
   assertEquals(result.event.action, "CREATIVE_GENERATION_BLOCKED");
 });
 
-Deno.test("card generation explains when a linked URL has not passed the news grounding gate", async () => {
+Deno.test("card generation allows a linked discovery source but labels it unconfirmed", async () => {
   let calls = 0;
   const linkedButIneligible = { ...story, news_eligible: false, evidence: [{ ...story.evidence[0]!, editorial_role: "DISCOVERY_COMMUNITY", canonical_url: "https://example.test/source" }] };
   const result = await dispatchEditorialConsoleAction(
@@ -209,9 +241,9 @@ Deno.test("card generation explains when a linked URL has not passed the news gr
     state({ view: "DETAIL", story_id: story.id }),
     dependencies({ getStoryByToken: async () => linkedButIneligible, generateCarousel: async () => { calls += 1; return draft; } }),
   );
-  assertEquals(calls, 0);
-  assert(result.view.text.includes("링크는 연결돼 있지만"));
-  assert(result.view.text.includes("팩트 검증 기준"));
+  assertEquals(calls, 1);
+  assert(result.view.text.includes("🔴 미확인"));
+  assert(result.view.text.includes("https://example.test/source"));
 });
 
 Deno.test("back navigation returns from evidence and draft to the current story list safely", async () => {

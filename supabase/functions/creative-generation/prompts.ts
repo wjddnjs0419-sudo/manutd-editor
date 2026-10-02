@@ -1,4 +1,5 @@
 import type { ContentMode, MatchPhase } from "./types.ts";
+import { editorialTrustInstruction } from "../_shared/m6/editorial_trust.ts";
 import { MANUTD_EDITOR_STYLE_INSTRUCTIONS } from "../_shared/editorial-style/manutd_editor.ts";
 
 const modePrompts: Record<ContentMode, string> = {
@@ -15,13 +16,15 @@ export function classifierPrompt(text: string): string {
   ].join("\n\n");
 }
 
-export function generationPrompt(mode: ContentMode, phase: MatchPhase | null, evidence: unknown): string {
+export function generationPrompt(mode: ContentMode, phase: MatchPhase | null, evidence: unknown, trustState: "VERIFIED" | "REPORTED" | "DISCOVERY" = "VERIFIED", slideCount?: number): string {
   return [
     "You are a grounded Creative Director, not a reporter.",
     MANUTD_EDITOR_STYLE_INSTRUCTIONS,
     modePrompts[mode],
     `Content mode: ${mode}`,
     `Match phase: ${phase ?? "none"}`,
+    `Editorial trust: ${trustState}. ${editorialTrustInstruction(trustState)}`,
+    ...(slideCount ? [`Create exactly ${slideCount} slides.`] : []),
     "Use only this frozen internal evidence. Every claim must cite an evidence_id from it. Do not import facts from examples or general football knowledge.",
     `Frozen evidence:\n${JSON.stringify(evidence)}`,
   ].join("\n\n");
@@ -33,9 +36,11 @@ export function repairPrompt(
   evidence: unknown,
   output: unknown,
   errors: readonly string[],
+  trustState: "VERIFIED" | "REPORTED" | "DISCOVERY" = "VERIFIED",
+  slideCount?: number,
 ): string {
   return [
-    generationPrompt(mode, phase, evidence),
+    generationPrompt(mode, phase, evidence, trustState, slideCount),
     "Repair the original output only for the listed deterministic validation errors.",
     "Do not add facts, sources, or evidence IDs. Preserve all valid content.",
     `Validation errors: ${JSON.stringify(errors)}`,

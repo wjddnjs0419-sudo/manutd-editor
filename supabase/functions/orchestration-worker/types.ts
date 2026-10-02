@@ -14,6 +14,7 @@ export const EDITORIAL_JOB_TYPES = [
   "DISPATCH_ALERTS",
   "FIXTURE_SYNC",
   "MORNING_BRIEF",
+  "EDITORIAL_DIGEST",
 ] as const;
 
 export type EditorialJobType = typeof EDITORIAL_JOB_TYPES[number];

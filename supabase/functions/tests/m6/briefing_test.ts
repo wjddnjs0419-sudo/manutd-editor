@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1.0.8";
 import { buildMorningBriefingSnapshot, resolveBriefingPosition, selectBriefingCandidates } from "../../_shared/m6/briefing.ts";
+import { renderMorningBrief } from "../../_shared/m6/openai.ts";
 
 Deno.test("freezes exact candidate and representative identity for /open", () => {
   const saved = buildMorningBriefingSnapshot({
@@ -44,13 +45,25 @@ Deno.test("freezes editorial grounding state when the same-date ranking is avail
   assertEquals(saved.items[0]?.news_eligible, false);
 });
 
-Deno.test("excludes unverified candidates when editorial grounding is available", () => {
+Deno.test("keeps all trust states and ranks VERIFIED before REPORTED before DISCOVERY", () => {
   const selected = selectBriefingCandidates([
-    { candidate_id: "verified", grounding_status: "VERIFIED", news_eligible: true },
     { candidate_id: "discovery", grounding_status: "DISCOVERY_ONLY", news_eligible: false },
-    { candidate_id: "insufficient", grounding_status: "INSUFFICIENT", news_eligible: false },
+    { candidate_id: "reported", grounding_status: "INSUFFICIENT", news_eligible: false, source_name: "BBC Sport", source_url: "https://bbc.test/report" },
+    { candidate_id: "verified", grounding_status: "VERIFIED", news_eligible: true },
   ]);
-  assertEquals(selected.map((candidate) => candidate.candidate_id), ["verified"]);
+  assertEquals(selected.map((candidate) => candidate.candidate_id), ["verified", "reported", "discovery"]);
+  assertEquals(selected[1]?.source_url, "https://bbc.test/report");
+});
+
+Deno.test("briefing renderer labels a single-source report and preserves its original URL", () => {
+  const saved = buildMorningBriefingSnapshot({
+    briefing_date: "2026-10-02", timezone: "Asia/Seoul", match_day_mode: "NORMAL_DAY", match_context: {}, overnight_counts: {},
+    candidates: [{ candidate_id: "reported", priority_score: 55, first_mover_flag: false, must_cover_flag: false, creative_status: "NOT_REQUESTED", representative: null, grounding_status: "INSUFFICIENT", news_eligible: false, source_name: "BBC Sport", source_url: "https://bbc.test/report" }],
+    blocked_failed: [],
+  });
+  const messages = renderMorningBrief(saved, { intro: "오늘의 업데이트", candidate_notes: [{ position: 1, note: "원문 확인" }], issue_note: null });
+  assertEquals(messages[1]?.text.includes("🟡 보도됨"), true);
+  assertEquals(messages[1]?.text.includes("https://bbc.test/report"), true);
 });
 
 Deno.test("preserves the legacy candidate fallback when no grounding decision exists", () => {
@@ -61,12 +74,12 @@ Deno.test("preserves the legacy candidate fallback when no grounding decision ex
   assertEquals(selected.map((candidate) => candidate.candidate_id), ["legacy-a", "legacy-b"]);
 });
 
-Deno.test("keeps a verified standalone fact source when social candidates are unverified", () => {
+Deno.test("keeps verified standalone facts and useful unverified social candidates visible", () => {
   const selected = selectBriefingCandidates([
     { candidate_id: "social", candidate_type: "SOCIAL", grounding_status: "INSUFFICIENT", news_eligible: false },
     { candidate_id: "fact-source", candidate_type: "FACT_SOURCE", grounding_status: "VERIFIED", news_eligible: true },
   ]);
-  assertEquals(selected.map((candidate) => candidate.candidate_id), ["fact-source"]);
+  assertEquals(selected.map((candidate) => candidate.candidate_id), ["fact-source", "social"]);
 });
 
 Deno.test("freezes standalone fact source metadata for Telegram rendering", () => {

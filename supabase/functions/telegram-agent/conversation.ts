@@ -191,6 +191,51 @@ export function replyConsoleIntent(text: string, activeCandidateId: string | nul
   return intent?.type === "GENERATE_CAROUSEL" && repliedStoryId ? { ...intent, token: repliedStoryId } : intent;
 }
 
+export interface EditorialIntentResult {
+  intent: "OPEN_RECOMMENDED" | "OPEN_TRENDING" | "DISCOVER_MORE" | "OPEN_STORY" | "GENERATE_CAROUSEL" | "SHOW_SOURCES" | "EDIT_DRAFT" | "UNKNOWN";
+  story_position: number | null;
+  slide_count: 3 | 4 | null;
+  edit_target: "slide_1" | "slide_2" | "slide_3" | "slide_4" | "caption" | null;
+  instruction: string | null;
+}
+
+export function resolvePresentedStoryPosition<T>(stories: readonly T[], position: number): T | null {
+  return Number.isInteger(position) && position >= 1 && position <= 5 ? stories[position - 1] ?? null : null;
+}
+
+export async function parseEditorialIntent(
+  message: string,
+  dependencies: { generate: (payload: unknown) => Promise<unknown>; presented_titles?: readonly string[]; has_active_story?: boolean; has_active_draft?: boolean },
+): Promise<EditorialIntentResult> {
+  const empty: EditorialIntentResult = { intent: "UNKNOWN", story_position: null, slide_count: null, edit_target: null, instruction: null };
+  try {
+    const value = await dependencies.generate({
+      task: "classify_telegram_editorial_intent",
+      user_message: message,
+      context: { presented_story_titles: (dependencies.presented_titles ?? []).slice(0, 5), has_active_story: dependencies.has_active_story === true, has_active_draft: dependencies.has_active_draft === true },
+      rules: ["Classify only; never perform actions or invent story identifiers.", "Return exactly JSON keys intent, story_position, slide_count, edit_target, instruction.", "OPEN_RECOMMENDED means today's candidates; OPEN_TRENDING means current hot stories; DISCOVER_MORE means run a fresh search.", "OPEN_STORY means explain/open the explicit numbered item; GENERATE_CAROUSEL means create a draft from the active or explicit numbered story; SHOW_SOURCES means show its evidence and original URLs; EDIT_DRAFT means revise only the active draft.", "Korean examples: '2번 가자. 3페이지로' => GENERATE_CAROUSEL position 2 slide_count 3; '2번 자세히' => OPEN_STORY position 2; '첫 장 좀 세게' => EDIT_DRAFT slide_1; '2페이지 줄여' => EDIT_DRAFT slide_2; '캡션 좀 더 짧게' => EDIT_DRAFT caption; '출처 보여줘' => SHOW_SOURCES; '다른 기사 더 찾아봐' => DISCOVER_MORE.", "story_position must be 1..5 and only when explicitly referenced.", "slide_count may only be 3 or 4.", "edit_target may only be slide_1..slide_4 or caption.", "For ambiguous/unknown requests use UNKNOWN and null fields."],
+      schema: { intent: ["OPEN_RECOMMENDED", "OPEN_TRENDING", "DISCOVER_MORE", "OPEN_STORY", "GENERATE_CAROUSEL", "SHOW_SOURCES", "EDIT_DRAFT", "UNKNOWN"], story_position: "integer 1..5 or null", slide_count: "3, 4, or null", edit_target: "slide_1..slide_4, caption, or null", instruction: "short Korean edit instruction or null" },
+    });
+    if (!object(value)) return empty;
+    const keys = ["intent", "story_position", "slide_count", "edit_target", "instruction"];
+    if (Object.keys(value).some((key) => !keys.includes(key)) || keys.some((key) => !(key in value))) return empty;
+    const intents = ["OPEN_RECOMMENDED", "OPEN_TRENDING", "DISCOVER_MORE", "OPEN_STORY", "GENERATE_CAROUSEL", "SHOW_SOURCES", "EDIT_DRAFT", "UNKNOWN"];
+    if (!intents.includes(String(value.intent))) return empty;
+    const position = value.story_position === null ? null : Number.isInteger(value.story_position) && Number(value.story_position) >= 1 && Number(value.story_position) <= 5 ? Number(value.story_position) : -1;
+    const slideCount = value.slide_count === null ? null : value.slide_count === 3 || value.slide_count === 4 ? value.slide_count : -1;
+    const target = value.edit_target === null ? null : ["slide_1", "slide_2", "slide_3", "slide_4", "caption"].includes(String(value.edit_target)) ? value.edit_target as EditorialIntentResult["edit_target"] : "invalid";
+    const instruction = value.instruction === null ? null : typeof value.instruction === "string" && value.instruction.trim().length <= 200 ? value.instruction.trim() : "invalid";
+    if (position === -1 || slideCount === -1 || target === "invalid" || instruction === "invalid") return empty;
+    const intent = value.intent as EditorialIntentResult["intent"];
+    if (intent === "OPEN_STORY" && position === null) return empty;
+    if (intent === "EDIT_DRAFT" && (!target || !instruction || !dependencies.has_active_draft)) return empty;
+    if (intent === "GENERATE_CAROUSEL" && position === null && !dependencies.has_active_story) return empty;
+    return { intent, story_position: position, slide_count: slideCount, edit_target: target, instruction };
+  } catch {
+    return empty;
+  }
+}
+
 const LEAKED_RULES = [
   MEMORY_SYSTEM_RULES,
   "Natural-language conversation is read-only.",

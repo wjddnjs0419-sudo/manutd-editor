@@ -17,6 +17,8 @@ export interface QualityGateConfig {
   readonly style_profile?: string;
   readonly style_version?: string;
   readonly enable_style_validator?: boolean;
+  readonly trust_state?: "VERIFIED" | "REPORTED" | "DISCOVERY";
+  readonly requested_slide_count?: number;
 }
 
 export interface ValidationError {
@@ -110,7 +112,8 @@ export function validateCreativeBrief(
     });
   }
 
-  if (!Array.isArray(output.slides) || output.slides.length < config.min_slides || output.slides.length > config.max_slides) {
+  const expectedSlides = config.requested_slide_count;
+  if (!Array.isArray(output.slides) || (expectedSlides ? output.slides.length !== expectedSlides : output.slides.length < config.min_slides || output.slides.length > config.max_slides)) {
     errors.push(error("SLIDE_COUNT", "slides"));
   }
 
@@ -163,7 +166,20 @@ export function validateCreativeBrief(
 
   if (mode === "NEWS_UPDATE") {
     const reliableSource = evidence.sources.some((source) => (source.reliability_score ?? 0) >= 8);
-    if (!reliableSource || !Array.isArray(output.sources) || output.sources.length === 0) errors.push(error("NEWS_EVIDENCE_BLOCKED", "sources"));
+    const linkedReported = evidence.sources.some((source) => (source.editorial_role === "FACT_PRIMARY" || source.editorial_role === "FACT_INDEPENDENT") && Boolean(source.canonical_url));
+    const linkedDiscovery = evidence.sources.some((source) => source.editorial_role?.startsWith("DISCOVERY_") && Boolean(source.canonical_url));
+    const policySatisfied = config.trust_state === "REPORTED" ? linkedReported : config.trust_state === "DISCOVERY" ? linkedDiscovery : reliableSource;
+    if (!policySatisfied || !Array.isArray(output.sources) || output.sources.length === 0) errors.push(error("NEWS_EVIDENCE_BLOCKED", "sources"));
+  }
+
+  if (config.trust_state === "REPORTED" || config.trust_state === "DISCOVERY") {
+    const trustedSource = config.trust_state === "REPORTED"
+      ? evidence.sources.some((source) => (source.editorial_role === "FACT_PRIMARY" || source.editorial_role === "FACT_INDEPENDENT") && Boolean(source.canonical_url))
+      : evidence.sources.some((source) => source.editorial_role?.startsWith("DISCOVERY_") && Boolean(source.canonical_url));
+    if (!trustedSource) errors.push(error(config.trust_state === "REPORTED" ? "REPORTED_SOURCE_MISSING" : "DISCOVERY_SOURCE_MISSING", "sources"));
+    const copy = Array.isArray(output.slides) ? output.slides.map((slide) => object(slide) ? [slide.headline, slide.body, slide.highlight, slide.closing_line].filter(nonblank).join(" ") : "").join(" ") + (object(output.caption) ? ` ${String(output.caption.body ?? "")}` : "") : "";
+    const attribution = config.trust_state === "REPORTED" ? /보도에 따르면|보도에 의하면|~로 전해졌|라는 보도|보도가 나왔|according to|reportedly/iu : /미확인|확인되지 않은|이적설|주장|루머|unconfirmed|rumou?r/iu;
+    if (!attribution.test(copy)) errors.push(error(config.trust_state === "REPORTED" ? "REPORTED_ATTRIBUTION_MISSING" : "DISCOVERY_UNCONFIRMED_LABEL_MISSING", "slides"));
   }
 
   if (config.enable_style_validator === true) {

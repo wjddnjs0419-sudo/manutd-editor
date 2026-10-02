@@ -134,6 +134,37 @@ Deno.test("blocks strict NEWS_UPDATE without reliable evidence", async () => {
   assertEquals(result.status, "BLOCKED_EVIDENCE");
 });
 
+Deno.test("permits a linked single-source REPORTED draft without changing automatic grounding gates", async () => {
+  const repository = new MemoryRepository();
+  repository.candidate = evidence({ sources: [{ source_id: "m8-observation:observation-1", canonical_name: "BBC Sport", entity_type: "NEWS", reliability_score: 7, evidence_text: "BBC reports a transfer development", first_cited_post_id: null, citation_count: 1, editorial_role: "FACT_PRIMARY", canonical_url: "https://bbc.test/story" }] });
+  const newsOutput: CreativeBriefOutput = {
+    ...output,
+    content_mode: "NEWS_UPDATE",
+    slides: output.slides.slice(0, 3).map((slide, index) => ({ ...slide, slide_number: index + 1 })),
+    caption: { body: "보도에 따르면 다음 단계가 논의되고 있다.", cta: "어떻게 보시나요?" },
+    sources: [{ evidence_id: "source:m8-observation:observation-1", label: "BBC Sport" }],
+  };
+  const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", trust_state: "REPORTED", slide_count: 3 }, dependencies(repository, { provider: { ...dependencies(repository).provider, classify: async () => ({ content_mode: "NEWS_UPDATE", match_phase: null, confidence: 0.96, reason_code: "NEWS" }), generate: async () => newsOutput } }));
+  assertEquals(result.status, "READY");
+  assertEquals((repository.briefs[0]?.evidence_snapshot as EvidenceSnapshot).sources[0]?.canonical_url, "https://bbc.test/story");
+  assertEquals((repository.briefs[0]?.generation_metadata as Record<string, unknown>).trust_state, "REPORTED");
+  assertEquals(repository.briefs[0]?.slide_count, 3);
+});
+
+Deno.test("permits DISCOVERY copy only with linked discovery context and explicit unconfirmed language", async () => {
+  const repository = new MemoryRepository();
+  repository.candidate = evidence({ sources: [{ source_id: "m8-observation:observation-2", canonical_name: "경쟁 계정", entity_type: "SOCIAL", reliability_score: 2, evidence_text: "Rumor signal", first_cited_post_id: null, citation_count: 1, editorial_role: "DISCOVERY_COMPETITOR", canonical_url: "https://social.test/rumor" }] });
+  const discoveryOutput: CreativeBriefOutput = {
+    ...output,
+    content_mode: "NEWS_UPDATE",
+    caption: { body: "확인되지 않은 이적설입니다. 원문 보도가 나오지 않았습니다.", cta: "어떻게 보시나요?" },
+    sources: [{ evidence_id: "source:m8-observation:observation-2", label: "경쟁 계정" }],
+  };
+  const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", trust_state: "DISCOVERY" }, dependencies(repository, { provider: { ...dependencies(repository).provider, classify: async () => ({ content_mode: "NEWS_UPDATE", match_phase: null, confidence: 0.96, reason_code: "NEWS" }), generate: async () => discoveryOutput } }));
+  assertEquals(result.status, "READY");
+  assertEquals((repository.briefs[0]?.evidence_snapshot as EvidenceSnapshot).sources[0]?.canonical_url, "https://social.test/rumor");
+});
+
 Deno.test("returns CLASSIFICATION_UNCERTAIN when fallback is below threshold", async () => {
   const repository = new MemoryRepository();
   repository.candidate = evidence({ story: { ...repository.candidate.story, canonical_title: "Big Manchester update" }, posts: [{ ...repository.candidate.posts[0]!, caption: "Big Manchester update" }] });
