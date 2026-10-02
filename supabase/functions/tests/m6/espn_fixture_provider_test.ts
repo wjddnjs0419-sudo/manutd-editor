@@ -75,6 +75,17 @@ Deno.test("normalizes a finished fixture and preserves zero scores", () => {
   assertEquals(result.is_home, false);
 });
 
+Deno.test("treats ESPN zero placeholders as unknown for scheduled fixtures", () => {
+  const scheduled = event({ competitions: [{ ...(event().competitions as JsonObject[])[0], competitors: [
+    { id: ESPN_MANCHESTER_UNITED_TEAM_ID, homeAway: "home", score: "0", team: { displayName: "Manchester United" } },
+    { id: "42", homeAway: "away", score: "0", team: { displayName: "Arsenal" } },
+  ] }] });
+  const result = normalized(scheduled);
+  assertEquals(result.status, "SCHEDULED");
+  assertEquals(result.home_score, null);
+  assertEquals(result.away_score, null);
+});
+
 Deno.test("maps postponed and cancelled ESPN statuses", () => {
   const competition = (name: string) => [{ ...(event().competitions as JsonObject[])[0], status: { type: { name, state: "post", completed: false } } }];
   assertEquals(normalized(event({ competitions: competition("STATUS_POSTPONED") })).status, "POSTPONED");

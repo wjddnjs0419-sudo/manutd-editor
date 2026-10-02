@@ -147,6 +147,8 @@ export function normalizeEspnFixture(
   if (!isHome && awayId !== configuredTeamId) throw new EspnFixtureProviderError("ESPN_SCHEMA_MISMATCH");
   const venue = object(eventCompetitionValue.venue) ? optionalString(eventCompetitionValue.venue.fullName) : null;
   const updatedAt = providerUpdatedAt === null ? null : dateString(providerUpdatedAt);
+  const status = statusFor(requiredObject(eventCompetitionValue.status));
+  const hasRealScore = status === "LIVE" || status === "FINISHED";
 
   return {
     provider: "espn",
@@ -159,9 +161,9 @@ export function normalizeEspnFixture(
     is_home: isHome,
     kickoff_at: dateString(event.date),
     venue,
-    status: statusFor(requiredObject(eventCompetitionValue.status)),
-    home_score: optionalScore(home.score),
-    away_score: optionalScore(away.score),
+    status,
+    home_score: hasRealScore ? optionalScore(home.score) : null,
+    away_score: hasRealScore ? optionalScore(away.score) : null,
     provider_payload: event,
     provider_updated_at: updatedAt,
   };
