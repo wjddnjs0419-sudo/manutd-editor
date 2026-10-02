@@ -3,6 +3,7 @@ import { runCreativeGeneration, type GenerationDependencies } from "../../creati
 import type { GenerationRepository, GenerationJob, StoredCreativeBrief, CreativeBriefInsert } from "../../creative-generation/repository.ts";
 import type { CandidateEvidenceInput, CreativeBriefOutput, EvidenceSnapshot } from "../../creative-generation/types.ts";
 import type { GenerationConfig } from "../../creative-generation/config.ts";
+import { ProviderError } from "../../creative-generation/provider.ts";
 
 const config = {
   id: "config-1",
@@ -200,8 +201,34 @@ Deno.test("returns FAILED_VALIDATION and FAILED_PROVIDER safely", async () => {
   const invalidOutput = { ...output, hooks: [] };
   const invalid = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" }, dependencies(repository, { provider: { ...dependencies(repository).provider, generate: async () => invalidOutput, repair: async () => invalidOutput } }));
   assertEquals(invalid.status, "FAILED_VALIDATION");
-  const providerFailure = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" }, dependencies(new MemoryRepository(), { provider: { ...dependencies(repository).provider, generate: async () => { throw new Error("provider detail"); } } }));
+  const providerFailure = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" }, dependencies(new MemoryRepository(), { log: () => {}, provider: { ...dependencies(repository).provider, generate: async () => { throw new Error("provider detail"); } } }));
   assertEquals(providerFailure.status, "FAILED_PROVIDER");
+});
+
+Deno.test("preserves safe provider status categories in the generation result, job, and log", async () => {
+  const cases = [
+    { failure: new ProviderError("FAILED_PROVIDER", 429), expected: "PROVIDER_HTTP_429" },
+    { failure: new ProviderError("FAILED_PROVIDER", 503), expected: "PROVIDER_HTTP_503" },
+    { failure: new ProviderError("PROVIDER_TIMEOUT"), expected: "PROVIDER_TIMEOUT" },
+    { failure: new ProviderError("MALFORMED_PROVIDER_RESPONSE"), expected: "PROVIDER_MALFORMED_RESPONSE" },
+  ];
+
+  for (const entry of cases) {
+    const repository = new MemoryRepository();
+    const logs: Record<string, unknown>[] = [];
+    const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL" }, dependencies(repository, {
+      log: (logEntry) => logs.push(logEntry),
+      provider: {
+        ...dependencies(repository).provider,
+        generate: async () => { throw entry.failure; },
+      },
+    }));
+
+    assertEquals(result.status, "FAILED_PROVIDER");
+    assertEquals(result.error_codes, [entry.expected]);
+    assertEquals(repository.jobs[0]?.last_error_category, entry.expected);
+    assertEquals(logs, [{ event: "creative_generation_provider_failed", error_code: entry.expected, model: "gpt-5.6-terra" }]);
+  }
 });
 
 Deno.test("stores the ManUtd Editor style identity on a canonical brief", async () => {

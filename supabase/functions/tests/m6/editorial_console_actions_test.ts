@@ -161,6 +161,18 @@ Deno.test("card generation action calls the injected canonical service exactly o
   assert(result.view.text.includes(story.title));
 });
 
+Deno.test("card generation tells the editor when the provider is rate limited", async () => {
+  const result = await dispatchEditorialConsoleAction(
+    { type: "GENERATE_CAROUSEL", token: story.id },
+    state({ view: "DETAIL", story_id: story.id }),
+    dependencies({ generateCarousel: async () => { throw new Error("PROVIDER_HTTP_429"); } }),
+  );
+
+  assert(result.view.text.includes("요청 한도"));
+  assertEquals(result.event.action, "CREATIVE_GENERATION_FAILED");
+  assertEquals(result.event.metadata?.error_code, "PROVIDER_HTTP_429");
+});
+
 Deno.test("card generation without a selected story never invokes the canonical generator", async () => {
   let calls = 0;
   const result = await dispatchEditorialConsoleAction({ type: "GENERATE_CAROUSEL", token: null }, state(), dependencies({ generateCarousel: async () => { calls += 1; return draft; } }));

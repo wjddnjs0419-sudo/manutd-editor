@@ -24,7 +24,18 @@ Deno.test("console card generation rejects a failed or stale canonical response"
   await assertRejects(
     () => invokeCanonicalCarousel("candidate-1", { invoke: async () => ({ status: "FAILED_PROVIDER" }), loadBrief: async () => null }),
     Error,
-    "CREATIVE_GENERATION_FAILED",
+    "FAILED_PROVIDER",
+  );
+});
+
+Deno.test("console card generation preserves safe provider failure codes from canonical generation", async () => {
+  await assertRejects(
+    () => invokeCanonicalCarousel("candidate-1", {
+      invoke: async () => ({ status: "FAILED_PROVIDER", error_codes: ["PROVIDER_HTTP_429"] }),
+      loadBrief: async () => null,
+    }),
+    Error,
+    "PROVIDER_HTTP_429",
   );
 });
 

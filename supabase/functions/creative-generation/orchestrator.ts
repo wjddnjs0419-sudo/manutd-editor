@@ -31,6 +31,18 @@ export interface GenerationDependencies {
   readonly workerId: string;
   readonly now?: () => Date;
   readonly leaseSeconds?: number;
+  readonly log?: (entry: Record<string, unknown>) => void;
+}
+
+function providerFailureCode(error: unknown): string {
+  if (!error || typeof error !== "object") return "PROVIDER_REQUEST_FAILED";
+  const value = error as { category?: unknown; status?: unknown };
+  if (value.category === "PROVIDER_TIMEOUT") return "PROVIDER_TIMEOUT";
+  if (value.category === "MALFORMED_PROVIDER_RESPONSE") return "PROVIDER_MALFORMED_RESPONSE";
+  if (value.category === "FAILED_PROVIDER" && typeof value.status === "number" && Number.isInteger(value.status) && value.status >= 400 && value.status <= 599) {
+    return `PROVIDER_HTTP_${value.status}`;
+  }
+  return "PROVIDER_REQUEST_FAILED";
 }
 
 function evidenceText(snapshot: EvidenceSnapshot): string {
@@ -113,9 +125,12 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
   const promptInput = { content_mode: mode, match_phase: classification.match_phase, evidence_snapshot: snapshot, ...(trigger.trust_state ? { trust_state: trigger.trust_state } : {}), ...(trigger.slide_count ? { slide_count: trigger.slide_count } : {}) };
   try {
     generated = await dependencies.provider.generate(promptInput);
-  } catch {
-    await dependencies.repository.updateJob(job.id, { status: "FAILED_PROVIDER", last_error_category: "FAILED_PROVIDER", completed_at: runAt.toISOString(), lease_owner: null, lease_expires_at: null });
-    return { status: "FAILED_PROVIDER", candidate_id: trigger.candidate_id, input_fingerprint: fingerprint, error_codes: ["FAILED_PROVIDER"] };
+  } catch (error) {
+    const errorCode = providerFailureCode(error);
+    const log = dependencies.log ?? ((entry: Record<string, unknown>) => console.error(JSON.stringify(entry)));
+    log({ event: "creative_generation_provider_failed", error_code: errorCode, model: config.generation_config.model });
+    await dependencies.repository.updateJob(job.id, { status: "FAILED_PROVIDER", last_error_category: errorCode, completed_at: runAt.toISOString(), lease_owner: null, lease_expires_at: null });
+    return { status: "FAILED_PROVIDER", candidate_id: trigger.candidate_id, input_fingerprint: fingerprint, error_codes: [errorCode] };
   }
   const checked = await generateWithOneRepair(dependencies.provider, generated, promptInput, snapshot, { ...qualityConfig(config), ...(trigger.slide_count ? { min_slides: trigger.slide_count, max_slides: trigger.slide_count } : {}), trust_state: trigger.trust_state, requested_slide_count: trigger.slide_count });
   if (!checked.ok || !checked.output) {

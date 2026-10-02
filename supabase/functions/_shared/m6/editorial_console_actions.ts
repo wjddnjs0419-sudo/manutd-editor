@@ -146,8 +146,25 @@ export function parseConsoleIntent(value: string, activeStoryToken?: string | nu
   return null;
 }
 
-function safeError(message: string, state: ConsoleState, action: string): ConsoleActionResult {
-  return { view: { text: `⚠️ ${message}`, inline_keyboard: [[{ text: "◀ 돌아가기", callback_data: "idea:back:list" }]] }, next_state: state, event: { action, status: "FAILED" } };
+function safeError(message: string, state: ConsoleState, action: string, metadata?: Record<string, unknown>): ConsoleActionResult {
+  return { view: { text: `⚠️ ${message}`, inline_keyboard: [[{ text: "◀ 돌아가기", callback_data: "idea:back:list" }]] }, next_state: state, event: { action, status: "FAILED", ...(metadata ? { metadata } : {}) } };
+}
+
+function generationFailure(error: unknown): { code: string; message: string } {
+  const raw = error instanceof Error ? error.message : "";
+  const code = raw === "PROVIDER_TIMEOUT" || raw === "PROVIDER_MALFORMED_RESPONSE" || raw === "PROVIDER_REQUEST_FAILED" || /^PROVIDER_HTTP_[45][0-9]{2}$/u.test(raw) || raw === "CLASSIFICATION_UNCERTAIN" || raw === "BLOCKED_EVIDENCE" || raw === "FAILED_VALIDATION" || raw === "FAILED_PROVIDER"
+    ? raw
+    : "CREATIVE_GENERATION_FAILED";
+  if (code === "PROVIDER_TIMEOUT") return { code, message: "생성 서비스 응답 시간이 초과되어 초안을 만들지 못했습니다. 잠시 뒤 다시 시도해 주세요." };
+  if (code === "PROVIDER_MALFORMED_RESPONSE") return { code, message: "생성 서비스의 응답 형식이 올바르지 않아 초안을 만들지 못했습니다." };
+  if (code === "PROVIDER_HTTP_429") return { code, message: "생성 서비스가 요청 한도를 반환했습니다(429). 잠시 뒤 다시 시도해 주세요." };
+  if (/^PROVIDER_HTTP_5[0-9]{2}$/u.test(code)) return { code, message: `생성 서비스 오류(${code.slice(-3)})로 초안을 만들지 못했습니다. 잠시 뒤 다시 시도해 주세요.` };
+  if (/^PROVIDER_HTTP_[45][0-9]{2}$/u.test(code)) return { code, message: `생성 서비스 요청이 거부되었습니다(${code.slice(-3)}). 관리자 확인이 필요합니다.` };
+  if (code === "PROVIDER_REQUEST_FAILED" || code === "FAILED_PROVIDER") return { code, message: "생성 서비스 요청에 실패했습니다. 잠시 뒤 다시 시도해 주세요." };
+  if (code === "CLASSIFICATION_UNCERTAIN") return { code, message: "소재 유형을 판별하지 못해 초안을 만들지 못했습니다." };
+  if (code === "BLOCKED_EVIDENCE") return { code, message: "연결된 원문 근거가 부족해 초안을 만들지 못했습니다." };
+  if (code === "FAILED_VALIDATION") return { code, message: "생성된 초안이 검수 기준을 통과하지 못했습니다." };
+  return { code, message: "canonical 카드뉴스 생성을 완료하지 못했습니다." };
 }
 
 function listState(state: ConsoleState, mode: "recommended" | "all" | "trending", page: number): ConsoleState {
@@ -224,8 +241,9 @@ export async function dispatchEditorialConsoleAction(action: ConsoleAction, stat
     try {
       const draft = await dependencies.generateCarousel(story, { trust_state: trustState, ...(action.slide_count ? { slide_count: action.slide_count } : {}) });
       return { view: renderCarouselDraft(draft, story.title, trustState, story.evidence), next_state: { ...state, view: "DRAFT", story_id: story.id, story_fingerprint: story.story_fingerprint, brief_id: draft.creative_brief_id, state_version: state.state_version + 1 }, event: { action: "CREATIVE_GENERATION_COMPLETED", status: "COMPLETED", metadata: { story_id: story.id, candidate_id: story.candidate_id, brief_id: draft.creative_brief_id, trust_state: trustState } } };
-    } catch {
-      return safeError("canonical 카드뉴스 생성을 완료하지 못했습니다.", state, "CREATIVE_GENERATION_FAILED");
+    } catch (error) {
+      const failure = generationFailure(error);
+      return safeError(failure.message, state, "CREATIVE_GENERATION_FAILED", { story_id: story.id, candidate_id: story.candidate_id, error_code: failure.code });
     }
   }
   if (action.type === "SELECT_DRAFT") {

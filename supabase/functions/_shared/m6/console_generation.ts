@@ -10,6 +10,14 @@ export interface CanonicalGenerationResult {
   readonly creative_brief_id: string;
 }
 
+function canonicalGenerationFailure(value: Record<string, unknown>): string {
+  const candidateCodes = Array.isArray(value.error_codes) ? value.error_codes : [];
+  const errorCode = candidateCodes.find((candidate): candidate is string => typeof candidate === "string" && /^[A-Z0-9_]{1,64}$/u.test(candidate));
+  if (errorCode && (errorCode === "PROVIDER_TIMEOUT" || errorCode === "PROVIDER_MALFORMED_RESPONSE" || errorCode === "PROVIDER_REQUEST_FAILED" || /^PROVIDER_HTTP_[45][0-9]{2}$/u.test(errorCode))) return errorCode;
+  if (value.status === "CLASSIFICATION_UNCERTAIN" || value.status === "BLOCKED_EVIDENCE" || value.status === "FAILED_VALIDATION" || value.status === "FAILED_PROVIDER" || value.status === "NOT_ELIGIBLE") return value.status;
+  return "CREATIVE_GENERATION_FAILED";
+}
+
 export interface CanonicalGenerationDependencies {
   invoke(input: CanonicalGenerationInvocation): Promise<unknown>;
   loadBrief(id: string): Promise<Record<string, unknown> | null>;
@@ -27,8 +35,9 @@ export async function invokeCanonicalCarousel(
 ): Promise<Record<string, unknown>> {
   if (!candidateId.trim()) throw new Error("CANDIDATE_NOT_FOUND");
   const value = await dependencies.invoke({ candidate_id: candidateId, trigger_type: "MANUAL", ...options });
-  if (!object(value) || (value.status !== "READY" && value.status !== "NOOP") || typeof value.creative_brief_id !== "string") {
-    throw new Error("CREATIVE_GENERATION_FAILED");
+  if (!object(value)) throw new Error("CREATIVE_GENERATION_FAILED");
+  if ((value.status !== "READY" && value.status !== "NOOP") || typeof value.creative_brief_id !== "string") {
+    throw new Error(canonicalGenerationFailure(value));
   }
   const result = value as unknown as CanonicalGenerationResult;
   const brief = await dependencies.loadBrief(result.creative_brief_id);
