@@ -26,7 +26,7 @@ export function editorialTrustState(story: TrustStory): EditorialTrustState {
 }
 
 export function editorialTrustLabel(state: EditorialTrustState): string {
-  return state === "VERIFIED" ? "🟢 확인됨" : state === "REPORTED" ? "🟡 보도됨" : "🔴 미확인";
+  return state === "VERIFIED" ? "🟢 근거 매칭됨" : state === "REPORTED" ? "🟡 보도됨" : "🔴 미확인";
 }
 
 export function editorialTrustInstruction(state: EditorialTrustState): string {

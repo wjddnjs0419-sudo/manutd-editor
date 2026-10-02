@@ -201,7 +201,7 @@ Deno.test("generation keeps VERIFIED, REPORTED, and DISCOVERY trust visible with
     );
     assertEquals(result.event.status, "COMPLETED");
     assertEquals(generationCalls, 1);
-    assert(result.view.text.includes(entry.trust === "VERIFIED" ? "🟢 확인됨" : entry.trust === "REPORTED" ? "🟡 보도됨" : "🔴 미확인"));
+    assert(result.view.text.includes(entry.trust === "VERIFIED" ? "🟢 근거 매칭됨" : entry.trust === "REPORTED" ? "🟡 보도됨" : "🔴 미확인"));
     if (entry.trust !== "VERIFIED") assert(result.view.text.includes(entry.candidate.evidence[0]?.canonical_url ?? ""));
     assert(result.view.text.includes("산초 훈련 사진"));
     assertEquals(entry.candidate.news_eligible, entry.trust === "VERIFIED");

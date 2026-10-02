@@ -296,9 +296,16 @@ export function renderStoryDetail(story: CanonicalStory): ConsoleView {
     : "매체 신뢰도: 미등록";
   const hasVerifiedLink = linkedSources.size > 0;
   const linkConfirmationLine = `출처 링크 확인 ${hasVerifiedLink ? "10.0/10" : "링크 없음"}`;
+  const groundingLine = story.grounding_status === "VERIFIED"
+    ? "검증 근거: 지원 근거 매칭됨 · 다중 출처 교차검증 아님"
+    : story.grounding_status === "DISCOVERY_ONLY"
+    ? "검증 근거: 발견 링크만 있음"
+    : story.grounding_status === "CONTRADICTED"
+    ? "검증 근거: 상충 근거 있음"
+    : `검증 근거: ${hasVerifiedLink ? "보도 링크만 있음" : "근거 없음"}`;
   const format = story.news_eligible ? "카드뉴스 초안" : "카드뉴스 초안 · 확인 수준 표시";
   return {
-    text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n${editorialTrustLabel(editorialTrustState(story))}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${story.trend_state ?? "STABLE"} · ${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼\n\n정보격차 ${score10(story.information_gap_score)}\n훅 ${score10(story.hook_strength)}\n공유성 ${score10(story.shareability)}\n사실 검증 ${score10(story.source_confidence)}/10\n${linkConfirmationLine}\n${reliabilityLine}\n\n추천 포맷:\n${format}\n\n${sourceLine}`,
+    text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n${editorialTrustLabel(editorialTrustState(story))}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${story.trend_state ?? "STABLE"} · ${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼\n\n정보격차 ${score10(story.information_gap_score)}\n훅 ${score10(story.hook_strength)}\n공유성 ${score10(story.shareability)}\n${groundingLine}\n${linkConfirmationLine}\n${reliabilityLine}\n\n추천 포맷:\n${format}\n\n${sourceLine}`,
     inline_keyboard: [
       [
         { text: "📰 원문/출처", callback_data: callbackData("idea:evidence", story.id) },

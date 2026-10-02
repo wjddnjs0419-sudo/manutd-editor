@@ -118,7 +118,8 @@ Deno.test("discovery-only detail labels unverified facts separately from the Goo
   const detail = renderStoryDetail(discoveryStory);
   const evidence = renderEvidenceView(discoveryStory);
 
-  assert(detail.text.includes("사실 검증 0.0/10"));
+  assert(detail.text.includes("검증 근거: 발견 링크만 있음"));
+  assertFalse(detail.text.includes("사실 검증"));
   assert(detail.text.includes("출처 링크 확인 10.0/10"));
   assert(detail.text.includes("발견 경로: Goal.com"));
   assert(detail.text.includes("매체 신뢰도: Goal.com 10.0/10 (링크 있음)"));
@@ -126,7 +127,7 @@ Deno.test("discovery-only detail labels unverified facts separately from the Goo
   assert(evidence.text.includes("https://news.google.com/rss/articles/example"));
 });
 
-Deno.test("an evidence URL passes link confirmation without changing the factual grounding score", () => {
+Deno.test("an evidence URL passes link confirmation but is not presented as factual verification", () => {
   const story = buildCanonicalStories([{
     ...secondStory,
     fact_grounding_score: 0,
@@ -134,7 +135,8 @@ Deno.test("an evidence URL passes link confirmation without changing the factual
     evidence: [{ evidence_id: "discovery:link", source_name: "Goal.com", claim_text: "기사 후보", status: "REPORTED", canonical_url: "https://goal.com/story", editorial_role: "DISCOVERY_COMMUNITY" }],
   }])[0]!;
   const detail = renderStoryDetail(story);
-  assert(detail.text.includes("사실 검증 0.0/10"));
+  assert(detail.text.includes("검증 근거: 발견 링크만 있음"));
+  assertFalse(detail.text.includes("사실 검증"));
   assert(detail.text.includes("출처 링크 확인 10.0/10"));
 });
 
@@ -160,8 +162,15 @@ Deno.test("editorial detail shows curated outlet reliability separately from fac
     evidence: [{ evidence_id: "discovery:2", source_name: "BBC Sport", claim_text: "기사 후보", status: "REPORTED", canonical_url: "https://bbc.com/story", editorial_role: "DISCOVERY_COMMUNITY", source_reliability_score: 8 }],
   }])[0]!;
   const detail = renderStoryDetail(story);
-  assert(detail.text.includes("사실 검증 0.0/10"));
+  assert(detail.text.includes("검증 근거: 발견 링크만 있음"));
   assert(detail.text.includes("매체 신뢰도: BBC Sport 8.0/10"));
+});
+
+Deno.test("verified means a supporting evidence match, not multi-source cross-checking", () => {
+  const detail = renderStoryDetail(buildCanonicalStories([firstStory])[0]!);
+  assert(detail.text.includes("검증 근거: 지원 근거 매칭됨 · 다중 출처 교차검증 아님"));
+  assert(detail.text.includes("🟢 근거 매칭됨"));
+  assertFalse(detail.text.includes("사실 검증"));
 });
 
 Deno.test("trending renderer exposes trend/editorial scores, state, and platform diversity", () => {
