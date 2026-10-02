@@ -206,6 +206,23 @@ export function createRestGenerationRepository(options: RestRepositoryOptions): 
     return Array.isArray(value) && value.length > 0 ? object(value[0]) : null;
   }
 
+  async function requestAll(path: string, schema?: string): Promise<unknown[]> {
+    const pageSize = 500;
+    const rows: unknown[] = [];
+    for (let offset = 0; ; offset += pageSize) {
+      const page = await request(`${path}&limit=${pageSize}&offset=${offset}`, {
+        headers: { "range-unit": "items", range: `${offset}-${offset + pageSize - 1}` },
+      }, schema);
+      if (!Array.isArray(page)) throw new Error("DATABASE_RESPONSE_FAILED");
+      rows.push(...page);
+      if (page.length < pageSize) return rows;
+    }
+  }
+
+  function inFilter(values: readonly string[]): string {
+    return `in.(${values.map((value) => `"${value.replaceAll('"', '\\"')}"`).join(",")})`;
+  }
+
   return {
     async getCandidateEvidence(candidateId, trustState) {
       const candidateRow = await getOne(`/content_candidates?select=*&id=eq.${encodeURIComponent(candidateId)}&limit=1`);
@@ -213,14 +230,44 @@ export function createRestGenerationRepository(options: RestRepositoryOptions): 
       const candidate = candidateFromRow(candidateRow);
       const clusterRow = await getOne(`/story_clusters?select=id,canonical_title,status,first_seen_at,last_seen_at&id=eq.${encodeURIComponent(candidate.story_cluster_id)}&limit=1`);
       if (!clusterRow) return null;
-      const [postRows, sourceRows, m8Claims, m8Evidence, m8Observations, m8InformationSources] = await Promise.all([
+      const [postRows, sourceRows, m8Claims] = await Promise.all([
         request(`/story_cluster_posts?select=raw_post_id,raw_posts(id,source_account_id,caption,permalink,published_at,media_type,source_accounts(username,region))&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&order=raw_post_id.asc`),
         request(`/story_cluster_sources?select=information_source_id,first_cited_post_id,citation_count,evidence_text,information_sources(canonical_name,entity_type,reliability_score)&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&order=information_source_id.asc`),
-        request(`/story_claims?select=id,grounding_status&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&limit=2000`, {}, "app_private"),
-        request("/claim_evidence?select=claim_id,source_observation_id,editorial_role,relation,is_grounding&limit=5000", {}, "app_private"),
-        request("/source_observations?select=id,information_source_id,editorial_role,canonical_url,title,excerpt&limit=5000", {}, "app_private"),
-        request("/information_sources?select=id,canonical_name,entity_type,reliability_score&limit=500", {}),
+        requestAll(`/story_claims?select=id,grounding_status,discovery_observation_id&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}`, "app_private"),
       ]);
+      const claimIds = Array.isArray(m8Claims) ? m8Claims.flatMap((row) => {
+        const value = object(row);
+        return typeof value.id === "string" ? [value.id] : [];
+      }) : [];
+      const m8Evidence: unknown[] = [];
+      for (let offset = 0; offset < claimIds.length; offset += 100) {
+        const chunk = claimIds.slice(offset, offset + 100);
+        m8Evidence.push(...await requestAll(`/claim_evidence?select=claim_id,source_observation_id,editorial_role,relation,is_grounding&claim_id=${encodeURIComponent(inFilter(chunk))}`, "app_private"));
+      }
+      const observationIds = [...new Set([
+        ...(Array.isArray(m8Claims) ? m8Claims.flatMap((row) => {
+          const value = object(row);
+          return typeof value.discovery_observation_id === "string" ? [value.discovery_observation_id] : [];
+        }) : []),
+        ...m8Evidence.flatMap((row) => {
+          const value = object(row);
+          return typeof value.source_observation_id === "string" ? [value.source_observation_id] : [];
+        }),
+      ])];
+      const m8Observations: unknown[] = [];
+      for (let offset = 0; offset < observationIds.length; offset += 100) {
+        const chunk = observationIds.slice(offset, offset + 100);
+        m8Observations.push(...await requestAll(`/source_observations?select=id,information_source_id,editorial_role,canonical_url,title,excerpt&id=${encodeURIComponent(inFilter(chunk))}`, "app_private"));
+      }
+      const informationSourceIds = [...new Set(m8Observations.flatMap((row) => {
+        const value = object(row);
+        return typeof value.information_source_id === "string" ? [value.information_source_id] : [];
+      }))];
+      const m8InformationSources: unknown[] = [];
+      for (let offset = 0; offset < informationSourceIds.length; offset += 100) {
+        const chunk = informationSourceIds.slice(offset, offset + 100);
+        m8InformationSources.push(...await requestAll(`/information_sources?select=id,canonical_name,entity_type,reliability_score&id=${encodeURIComponent(inFilter(chunk))}`));
+      }
       const posts = Array.isArray(postRows) ? postRows.map((row) => {
         const value = object(row); const post = object(value.raw_posts); const account = object(post.source_accounts);
         return { raw_post_id: string(post.id || value.raw_post_id), source_account_id: string(post.source_account_id), account_username: string(account.username), region: string(account.region), caption: typeof post.caption === "string" ? post.caption : null, permalink: typeof post.permalink === "string" ? post.permalink : null, published_at: string(post.published_at), media_type: string(post.media_type) };

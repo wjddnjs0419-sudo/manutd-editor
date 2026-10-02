@@ -54,3 +54,34 @@ Deno.test("generation evidence includes M8 grounded fact sources", async () => {
     canonical_url: "https://bbc.test/article/1",
   }]);
 });
+
+Deno.test("generation evidence scopes discovery-source reads to the selected story claims", async () => {
+  const requested: URL[] = [];
+  const repository = createRestGenerationRepository({
+    supabaseUrl: "https://example.supabase.co",
+    serviceKey: "service-role",
+    request: async (input) => {
+      const url = new URL(String(input));
+      requested.push(url);
+      if (url.pathname.endsWith("/content_candidates")) return new Response(JSON.stringify([{ id: candidateId, story_cluster_id: clusterId, score_inputs: {} }]));
+      if (url.pathname.endsWith("/story_clusters")) return new Response(JSON.stringify([{ id: clusterId, canonical_title: "United transfer report", status: "OPEN" }]));
+      if (url.pathname.endsWith("/story_cluster_posts") || url.pathname.endsWith("/story_cluster_sources")) return new Response(JSON.stringify([]));
+      if (url.pathname.endsWith("/story_claims")) return new Response(JSON.stringify([{ id: "claim-1", grounding_status: "DISCOVERY_ONLY", discovery_observation_id: "observation-1" }]));
+      if (url.pathname.endsWith("/claim_evidence")) return new Response(JSON.stringify([{ claim_id: "claim-1", source_observation_id: "observation-1", editorial_role: "DISCOVERY_COMMUNITY", relation: "SUPPORTS", is_grounding: false }]));
+      if (url.pathname.endsWith("/source_observations")) return new Response(JSON.stringify([{ id: "observation-1", information_source_id: "source-f365", canonical_url: "https://news.google.com/rss/articles/example", title: "United transfer report", excerpt: null, editorial_role: "DISCOVERY_COMMUNITY" }]));
+      if (url.pathname.endsWith("/information_sources")) return new Response(JSON.stringify([{ id: "source-f365", canonical_name: "Football365", entity_type: "MEDIA_OUTLET", reliability_score: 8 }]));
+      throw new Error(`Unexpected request: ${url}`);
+    },
+  });
+
+  const evidence = await repository.getCandidateEvidence(candidateId, "DISCOVERY");
+  const claimEvidenceQuery = requested.find((url) => url.pathname.endsWith("/claim_evidence"));
+  const observationQuery = requested.find((url) => url.pathname.endsWith("/source_observations"));
+  const informationSourceQuery = requested.find((url) => url.pathname.endsWith("/information_sources"));
+
+  assertEquals(evidence?.sources.length, 1);
+  assertEquals(evidence?.sources[0]?.canonical_url, "https://news.google.com/rss/articles/example");
+  assertEquals(claimEvidenceQuery?.searchParams.get("claim_id"), 'in.("claim-1")');
+  assertEquals(observationQuery?.searchParams.get("id"), 'in.("observation-1")');
+  assertEquals(informationSourceQuery?.searchParams.get("id"), 'in.("source-f365")');
+});
