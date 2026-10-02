@@ -32,7 +32,7 @@ export interface OpenAIProviderOptions {
   readonly sleep?: (milliseconds: number) => Promise<void>;
 }
 
-export type ProviderErrorCategory = "FAILED_PROVIDER" | "PROVIDER_TIMEOUT" | "MALFORMED_PROVIDER_RESPONSE";
+export type ProviderErrorCategory = "FAILED_PROVIDER" | "PROVIDER_TIMEOUT" | "MALFORMED_PROVIDER_RESPONSE" | "PROVIDER_QUOTA_EXCEEDED" | "PROVIDER_RATE_LIMIT";
 
 export class ProviderError extends Error {
   readonly category: ProviderErrorCategory;
@@ -191,6 +191,20 @@ function retryAfterMilliseconds(headers: Headers): number {
   return Number.isFinite(seconds) ? Math.max(0, Math.min(seconds * 1000, 30_000)) : 0;
 }
 
+function rateLimitCategory(body: unknown): ProviderErrorCategory {
+  if (!body || typeof body !== "object") return "FAILED_PROVIDER";
+  const error = (body as Record<string, unknown>).error;
+  if (!error || typeof error !== "object") return "FAILED_PROVIDER";
+  const details = error as Record<string, unknown>;
+  const code = typeof details.code === "string" ? details.code.toLowerCase() : "";
+  const type = typeof details.type === "string" ? details.type.toLowerCase() : "";
+  if (["insufficient_quota", "billing_hard_limit_reached", "organization_usage_limit_exceeded"].includes(code) || type === "insufficient_quota") {
+    return "PROVIDER_QUOTA_EXCEEDED";
+  }
+  if (["rate_limit_exceeded", "slow_down"].includes(code) || type === "rate_limit_error") return "PROVIDER_RATE_LIMIT";
+  return "FAILED_PROVIDER";
+}
+
 function requestBody(
   model: string,
   reasoning: string,
@@ -240,8 +254,18 @@ export function createOpenAIProvider(options: OpenAIProviderOptions) {
           }
           return parseOutput<T>(parsed);
         }
+        let category: ProviderErrorCategory = "FAILED_PROVIDER";
+        if (response.status === 429) {
+          try {
+            category = rateLimitCategory(await response.json());
+          } catch {
+            // Keep the status-only failure when the provider returns a non-JSON error body.
+          }
+        }
         const retryable = response.status === 429 || response.status >= 500;
-        if (!retryable || attempt === maxRetries) throw new ProviderError("FAILED_PROVIDER", response.status);
+        if (!retryable || attempt === maxRetries || category === "PROVIDER_QUOTA_EXCEEDED") {
+          throw new ProviderError(category, response.status);
+        }
         await sleep(retryAfterMilliseconds(response.headers) || Math.min(1000 * (2 ** attempt), 5000));
       } catch (error) {
         if (error instanceof ProviderError) throw error;

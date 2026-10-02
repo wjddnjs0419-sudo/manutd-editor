@@ -13,7 +13,7 @@ export interface CanonicalGenerationResult {
 function canonicalGenerationFailure(value: Record<string, unknown>): string {
   const candidateCodes = Array.isArray(value.error_codes) ? value.error_codes : [];
   const errorCode = candidateCodes.find((candidate): candidate is string => typeof candidate === "string" && /^[A-Z0-9_]{1,64}$/u.test(candidate));
-  if (errorCode && (errorCode === "PROVIDER_TIMEOUT" || errorCode === "PROVIDER_MALFORMED_RESPONSE" || errorCode === "PROVIDER_REQUEST_FAILED" || /^PROVIDER_HTTP_[45][0-9]{2}$/u.test(errorCode))) return errorCode;
+  if (errorCode && (errorCode === "PROVIDER_TIMEOUT" || errorCode === "PROVIDER_MALFORMED_RESPONSE" || errorCode === "PROVIDER_REQUEST_FAILED" || errorCode === "PROVIDER_QUOTA_EXCEEDED" || errorCode === "PROVIDER_RATE_LIMIT" || /^PROVIDER_HTTP_[45][0-9]{2}$/u.test(errorCode))) return errorCode;
   if (value.status === "CLASSIFICATION_UNCERTAIN" || value.status === "BLOCKED_EVIDENCE" || value.status === "FAILED_VALIDATION" || value.status === "FAILED_PROVIDER" || value.status === "NOT_ELIGIBLE") return value.status;
   return "CREATIVE_GENERATION_FAILED";
 }

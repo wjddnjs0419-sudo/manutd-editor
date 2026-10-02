@@ -208,6 +208,8 @@ Deno.test("returns FAILED_VALIDATION and FAILED_PROVIDER safely", async () => {
 Deno.test("preserves safe provider status categories in the generation result, job, and log", async () => {
   const cases = [
     { failure: new ProviderError("FAILED_PROVIDER", 429), expected: "PROVIDER_HTTP_429" },
+    { failure: new ProviderError("PROVIDER_QUOTA_EXCEEDED", 429), expected: "PROVIDER_QUOTA_EXCEEDED" },
+    { failure: new ProviderError("PROVIDER_RATE_LIMIT", 429), expected: "PROVIDER_RATE_LIMIT" },
     { failure: new ProviderError("FAILED_PROVIDER", 503), expected: "PROVIDER_HTTP_503" },
     { failure: new ProviderError("PROVIDER_TIMEOUT"), expected: "PROVIDER_TIMEOUT" },
     { failure: new ProviderError("MALFORMED_PROVIDER_RESPONSE"), expected: "PROVIDER_MALFORMED_RESPONSE" },

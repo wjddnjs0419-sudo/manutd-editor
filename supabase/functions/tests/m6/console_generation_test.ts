@@ -39,6 +39,17 @@ Deno.test("console card generation preserves safe provider failure codes from ca
   );
 });
 
+Deno.test("console card generation preserves the provider quota category", async () => {
+  await assertRejects(
+    () => invokeCanonicalCarousel("candidate-1", {
+      invoke: async () => ({ status: "FAILED_PROVIDER", error_codes: ["PROVIDER_QUOTA_EXCEEDED"] }),
+      loadBrief: async () => null,
+    }),
+    Error,
+    "PROVIDER_QUOTA_EXCEEDED",
+  );
+});
+
 Deno.test("console card generation refuses a brief belonging to a different candidate", async () => {
   await assertRejects(
     () => invokeCanonicalCarousel("candidate-selected", {

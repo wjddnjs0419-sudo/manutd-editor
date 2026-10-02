@@ -37,6 +37,7 @@ export interface GenerationDependencies {
 function providerFailureCode(error: unknown): string {
   if (!error || typeof error !== "object") return "PROVIDER_REQUEST_FAILED";
   const value = error as { category?: unknown; status?: unknown };
+  if (value.category === "PROVIDER_QUOTA_EXCEEDED" || value.category === "PROVIDER_RATE_LIMIT") return value.category;
   if (value.category === "PROVIDER_TIMEOUT") return "PROVIDER_TIMEOUT";
   if (value.category === "MALFORMED_PROVIDER_RESPONSE") return "PROVIDER_MALFORMED_RESPONSE";
   if (value.category === "FAILED_PROVIDER" && typeof value.status === "number" && Number.isInteger(value.status) && value.status >= 400 && value.status <= 599) {

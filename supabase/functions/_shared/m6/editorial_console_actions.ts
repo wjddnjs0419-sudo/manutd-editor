@@ -152,11 +152,13 @@ function safeError(message: string, state: ConsoleState, action: string, metadat
 
 function generationFailure(error: unknown): { code: string; message: string } {
   const raw = error instanceof Error ? error.message : "";
-  const code = raw === "PROVIDER_TIMEOUT" || raw === "PROVIDER_MALFORMED_RESPONSE" || raw === "PROVIDER_REQUEST_FAILED" || /^PROVIDER_HTTP_[45][0-9]{2}$/u.test(raw) || raw === "CLASSIFICATION_UNCERTAIN" || raw === "BLOCKED_EVIDENCE" || raw === "FAILED_VALIDATION" || raw === "FAILED_PROVIDER"
+  const code = raw === "PROVIDER_TIMEOUT" || raw === "PROVIDER_MALFORMED_RESPONSE" || raw === "PROVIDER_REQUEST_FAILED" || raw === "PROVIDER_QUOTA_EXCEEDED" || raw === "PROVIDER_RATE_LIMIT" || /^PROVIDER_HTTP_[45][0-9]{2}$/u.test(raw) || raw === "CLASSIFICATION_UNCERTAIN" || raw === "BLOCKED_EVIDENCE" || raw === "FAILED_VALIDATION" || raw === "FAILED_PROVIDER"
     ? raw
     : "CREATIVE_GENERATION_FAILED";
   if (code === "PROVIDER_TIMEOUT") return { code, message: "생성 서비스 응답 시간이 초과되어 초안을 만들지 못했습니다. 잠시 뒤 다시 시도해 주세요." };
   if (code === "PROVIDER_MALFORMED_RESPONSE") return { code, message: "생성 서비스의 응답 형식이 올바르지 않아 초안을 만들지 못했습니다." };
+  if (code === "PROVIDER_QUOTA_EXCEEDED") return { code, message: "생성 서비스 계정 사용 한도를 초과했습니다. 관리자에게 API 결제·사용 한도 확인이 필요합니다." };
+  if (code === "PROVIDER_RATE_LIMIT") return { code, message: "생성 요청이 일시적으로 몰려 제한됐습니다. 잠시 기다린 뒤 다시 시도해 주세요." };
   if (code === "PROVIDER_HTTP_429") return { code, message: "생성 서비스가 요청 한도를 반환했습니다(429). 잠시 뒤 다시 시도해 주세요." };
   if (/^PROVIDER_HTTP_5[0-9]{2}$/u.test(code)) return { code, message: `생성 서비스 오류(${code.slice(-3)})로 초안을 만들지 못했습니다. 잠시 뒤 다시 시도해 주세요.` };
   if (/^PROVIDER_HTTP_[45][0-9]{2}$/u.test(code)) return { code, message: `생성 서비스 요청이 거부되었습니다(${code.slice(-3)}). 관리자 확인이 필요합니다.` };

@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects, assert } from "jsr:@std/assert@1.0.8";
-import { createOpenAIProvider, type ProviderPromptInput } from "../../creative-generation/provider.ts";
+import { createOpenAIProvider, ProviderError, type ProviderPromptInput } from "../../creative-generation/provider.ts";
 import type { CreativeBriefOutput } from "../../creative-generation/types.ts";
 
 const output: CreativeBriefOutput = {
@@ -93,6 +93,31 @@ Deno.test("retries a 429 then succeeds without logging provider body", async () 
   const result = await provider.generate(input);
   assertEquals(result.generation_quality, "FULL");
   assertEquals(attempts, 2);
+});
+
+Deno.test("does not retry quota-exhausted 429 responses and exposes only a safe category", async () => {
+  let attempts = 0;
+  const provider = createOpenAIProvider({
+    apiKey: "test-key",
+    sleep: async () => {},
+    fetchImpl: async () => {
+      attempts += 1;
+      return response({ error: { message: "private billing detail", type: "insufficient_quota", code: "insufficient_quota" } }, 429);
+    },
+  });
+
+  let failure: unknown;
+  try {
+    await provider.generate(input);
+  } catch (error) {
+    failure = error;
+  }
+
+  assert(failure instanceof ProviderError);
+  assertEquals(failure.category, "PROVIDER_QUOTA_EXCEEDED");
+  assertEquals(failure.status, 429);
+  assertEquals(failure.message, "PROVIDER_QUOTA_EXCEEDED");
+  assertEquals(attempts, 1);
 });
 
 Deno.test("does not retry permanent authorization failures", async () => {
