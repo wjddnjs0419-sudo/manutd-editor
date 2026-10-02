@@ -108,6 +108,22 @@ Deno.test("rendered list and detail use compact editorial copy and short callbac
   assertFalse(detail.text.includes("grounding_json"));
 });
 
+Deno.test("discovery-only detail labels unverified facts separately from the Google News discovery link", () => {
+  const discoveryStory = buildCanonicalStories([{
+    ...secondStory,
+    fact_grounding_score: 0,
+    source_names: ["Google News"],
+    evidence: [{ evidence_id: "discovery:1", source_name: "Google News", claim_text: "기사 후보", status: "REPORTED", canonical_url: "https://news.google.com/rss/articles/example", editorial_role: "DISCOVERY_COMMUNITY" }],
+  }])[0]!;
+  const detail = renderStoryDetail(discoveryStory);
+  const evidence = renderEvidenceView(discoveryStory);
+
+  assert(detail.text.includes("사실 검증 0.0/10"));
+  assert(detail.text.includes("발견 경로: Google News"));
+  assertFalse(detail.text.includes("출처신뢰"));
+  assert(evidence.text.includes("https://news.google.com/rss/articles/example"));
+});
+
 Deno.test("trending renderer exposes trend/editorial scores, state, and platform diversity", () => {
   const stories = buildCanonicalStories([{ ...firstStory, trend_score: 94, trend_state: "RISING", platform_count: 3, opportunity_labels: ["🔥 빠르게 뜨는 중"] }]);
   const view = renderTrendingList(paginateStories(stories, 1));

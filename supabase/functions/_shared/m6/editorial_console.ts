@@ -259,10 +259,16 @@ export function renderTrendingList(page: StoryPage): ConsoleView {
 export function renderStoryDetail(story: CanonicalStory): ConsoleView {
   const evidenceSources = unique(story.evidence.map((item) => item.source_name));
   const sourceNames = story.sources.length > 0 ? story.sources : evidenceSources;
-  const sourceLine = sourceNames.length > 0 ? sourceNames.join(" / ") : "확인 중";
+  const factSources = unique(story.evidence.filter((item) => item.editorial_role === "FACT_PRIMARY" || item.editorial_role === "FACT_INDEPENDENT").map((item) => item.source_name));
+  const discoverySources = unique(story.evidence.filter((item) => item.editorial_role?.startsWith("DISCOVERY_") === true).map((item) => item.source_name));
+  const sourceLine = factSources.length > 0
+    ? `주요 출처: ${factSources.join(" / ")}`
+    : story.grounding_status === "DISCOVERY_ONLY" && discoverySources.length > 0
+    ? `발견 경로: ${discoverySources.join(" / ")}`
+    : `주요 출처: ${sourceNames.length > 0 ? sourceNames.join(" / ") : "확인 중"}`;
   const format = story.news_eligible ? "카드뉴스 초안" : "카드뉴스 초안 · 확인 수준 표시";
   return {
-    text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n${editorialTrustLabel(editorialTrustState(story))}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${story.trend_state ?? "STABLE"} · ${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼\n\n정보격차 ${score10(story.information_gap_score)}\n훅 ${score10(story.hook_strength)}\n공유성 ${score10(story.shareability)}\n출처신뢰 ${score10(story.source_confidence)}\n\n추천 포맷:\n${format}\n\n주요 출처: ${sourceLine}`,
+    text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n${editorialTrustLabel(editorialTrustState(story))}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${story.trend_state ?? "STABLE"} · ${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼\n\n정보격차 ${score10(story.information_gap_score)}\n훅 ${score10(story.hook_strength)}\n공유성 ${score10(story.shareability)}\n사실 검증 ${score10(story.source_confidence)}/10\n\n추천 포맷:\n${format}\n\n${sourceLine}`,
     inline_keyboard: [
       [
         { text: "📰 원문/출처", callback_data: callbackData("idea:evidence", story.id) },
