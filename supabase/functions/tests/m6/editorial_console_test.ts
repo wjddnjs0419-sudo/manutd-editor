@@ -119,10 +119,34 @@ Deno.test("discovery-only detail labels unverified facts separately from the Goo
   const evidence = renderEvidenceView(discoveryStory);
 
   assert(detail.text.includes("사실 검증 0.0/10"));
+  assert(detail.text.includes("출처 링크 확인 10.0/10"));
   assert(detail.text.includes("발견 경로: Goal.com"));
   assert(detail.text.includes("매체 신뢰도: Goal.com 미등록"));
   assertFalse(detail.text.includes("매체 신뢰도: Goal.com 0.0/10"));
   assert(evidence.text.includes("https://news.google.com/rss/articles/example"));
+});
+
+Deno.test("an evidence URL passes link confirmation without changing the factual grounding score", () => {
+  const story = buildCanonicalStories([{
+    ...secondStory,
+    fact_grounding_score: 0,
+    source_names: ["Goal.com"],
+    evidence: [{ evidence_id: "discovery:link", source_name: "Goal.com", claim_text: "기사 후보", status: "REPORTED", canonical_url: "https://goal.com/story", editorial_role: "DISCOVERY_COMMUNITY" }],
+  }])[0]!;
+  const detail = renderStoryDetail(story);
+  assert(detail.text.includes("사실 검증 0.0/10"));
+  assert(detail.text.includes("출처 링크 확인 10.0/10"));
+});
+
+Deno.test("missing or unsafe evidence URLs do not pass link confirmation", () => {
+  const story = buildCanonicalStories([{
+    ...secondStory,
+    fact_grounding_score: 0,
+    source_names: ["Unknown"],
+    evidence: [{ evidence_id: "discovery:bad-link", source_name: "Unknown", claim_text: "기사 후보", status: "REPORTED", canonical_url: "http://unsafe.test/story", editorial_role: "DISCOVERY_COMMUNITY" }],
+  }])[0]!;
+  const detail = renderStoryDetail(story);
+  assert(detail.text.includes("출처 링크 확인 링크 없음"));
 });
 
 Deno.test("editorial detail shows curated outlet reliability separately from fact verification", () => {

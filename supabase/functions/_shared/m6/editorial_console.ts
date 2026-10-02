@@ -278,9 +278,19 @@ export function renderStoryDetail(story: CanonicalStory): ConsoleView {
       return `${name} ${typeof score !== "number" || score <= 0 ? "미등록" : `${score.toFixed(1)}/10`}`;
     }).join(" · ")}`
     : "매체 신뢰도: 미등록";
+  const hasVerifiedLink = story.evidence.some((evidence) => {
+    if (!evidence.canonical_url) return false;
+    try {
+      const url = new URL(evidence.canonical_url);
+      return url.protocol === "https:" && Boolean(url.hostname) && !url.username && !url.password;
+    } catch {
+      return false;
+    }
+  });
+  const linkConfirmationLine = `출처 링크 확인 ${hasVerifiedLink ? "10.0/10" : "링크 없음"}`;
   const format = story.news_eligible ? "카드뉴스 초안" : "카드뉴스 초안 · 확인 수준 표시";
   return {
-    text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n${editorialTrustLabel(editorialTrustState(story))}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${story.trend_state ?? "STABLE"} · ${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼\n\n정보격차 ${score10(story.information_gap_score)}\n훅 ${score10(story.hook_strength)}\n공유성 ${score10(story.shareability)}\n사실 검증 ${score10(story.source_confidence)}/10\n${reliabilityLine}\n\n추천 포맷:\n${format}\n\n${sourceLine}`,
+    text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n${editorialTrustLabel(editorialTrustState(story))}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${story.trend_state ?? "STABLE"} · ${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼\n\n정보격차 ${score10(story.information_gap_score)}\n훅 ${score10(story.hook_strength)}\n공유성 ${score10(story.shareability)}\n사실 검증 ${score10(story.source_confidence)}/10\n${linkConfirmationLine}\n${reliabilityLine}\n\n추천 포맷:\n${format}\n\n${sourceLine}`,
     inline_keyboard: [
       [
         { text: "📰 원문/출처", callback_data: callbackData("idea:evidence", story.id) },
