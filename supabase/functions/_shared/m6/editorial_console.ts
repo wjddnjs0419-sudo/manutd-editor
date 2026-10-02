@@ -127,6 +127,16 @@ function score10(value: number): string {
   return (value / 10).toFixed(1);
 }
 
+function hasSafeHttpsUrl(value: string | null): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && Boolean(url.hostname) && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
 export function shortCallbackToken(value: string): string {
   return value.replaceAll("-", "").slice(0, 12);
 }
@@ -268,25 +278,23 @@ export function renderStoryDetail(story: CanonicalStory): ConsoleView {
     ? `발견 경로: ${discoverySources.join(" / ")}`
     : `주요 출처: ${sourceNames.length > 0 ? sourceNames.join(" / ") : "확인 중"}`;
   const reliabilityBySource = new Map<string, number | null>();
+  const linkedSources = new Set<string>();
   for (const evidence of story.evidence) {
-    reliabilityBySource.set(evidence.source_name, typeof evidence.source_reliability_score === "number" && evidence.source_reliability_score > 0 ? evidence.source_reliability_score : null);
+    const score = evidence.source_reliability_score;
+    if (typeof score === "number" && score > 0) reliabilityBySource.set(evidence.source_name, score);
+    else if (!reliabilityBySource.has(evidence.source_name)) reliabilityBySource.set(evidence.source_name, null);
+    if (hasSafeHttpsUrl(evidence.canonical_url)) linkedSources.add(evidence.source_name);
   }
   const ratedSources = unique([...reliabilityBySource.keys()]);
   const reliabilityLine = ratedSources.length > 0
     ? `매체 신뢰도: ${ratedSources.map((name) => {
-      const score = reliabilityBySource.get(name);
-      return `${name} ${typeof score !== "number" || score <= 0 ? "미등록" : `${score.toFixed(1)}/10`}`;
+      const curatedScore = reliabilityBySource.get(name);
+      const linkFallback = !(typeof curatedScore === "number" && curatedScore > 0) && linkedSources.has(name);
+      const score = linkFallback ? 10 : curatedScore;
+      return `${name} ${typeof score !== "number" || score <= 0 ? "미등록" : `${score.toFixed(1)}/10${linkFallback ? " (링크 있음)" : ""}`}`;
     }).join(" · ")}`
     : "매체 신뢰도: 미등록";
-  const hasVerifiedLink = story.evidence.some((evidence) => {
-    if (!evidence.canonical_url) return false;
-    try {
-      const url = new URL(evidence.canonical_url);
-      return url.protocol === "https:" && Boolean(url.hostname) && !url.username && !url.password;
-    } catch {
-      return false;
-    }
-  });
+  const hasVerifiedLink = linkedSources.size > 0;
   const linkConfirmationLine = `출처 링크 확인 ${hasVerifiedLink ? "10.0/10" : "링크 없음"}`;
   const format = story.news_eligible ? "카드뉴스 초안" : "카드뉴스 초안 · 확인 수준 표시";
   return {

@@ -121,8 +121,8 @@ Deno.test("discovery-only detail labels unverified facts separately from the Goo
   assert(detail.text.includes("사실 검증 0.0/10"));
   assert(detail.text.includes("출처 링크 확인 10.0/10"));
   assert(detail.text.includes("발견 경로: Goal.com"));
-  assert(detail.text.includes("매체 신뢰도: Goal.com 미등록"));
-  assertFalse(detail.text.includes("매체 신뢰도: Goal.com 0.0/10"));
+  assert(detail.text.includes("매체 신뢰도: Goal.com 10.0/10 (링크 있음)"));
+  assertFalse(detail.text.includes("매체 신뢰도: Goal.com 미등록"));
   assert(evidence.text.includes("https://news.google.com/rss/articles/example"));
 });
 
@@ -147,6 +147,7 @@ Deno.test("missing or unsafe evidence URLs do not pass link confirmation", () =>
   }])[0]!;
   const detail = renderStoryDetail(story);
   assert(detail.text.includes("출처 링크 확인 링크 없음"));
+  assert(detail.text.includes("매체 신뢰도: Unknown 미등록"));
 });
 
 Deno.test("editorial detail shows curated outlet reliability separately from fact verification", () => {
