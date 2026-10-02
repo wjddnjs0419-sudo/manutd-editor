@@ -165,6 +165,29 @@ Deno.test("permits DISCOVERY copy only with linked discovery context and explici
   assertEquals((repository.briefs[0]?.evidence_snapshot as EvidenceSnapshot).sources[0]?.canonical_url, "https://social.test/rumor");
 });
 
+Deno.test("manual linked discovery source falls back to a cautious news draft when classifier is uncertain", async () => {
+  const repository = new MemoryRepository();
+  repository.candidate = evidence({
+    story: { ...repository.candidate.story, canonical_title: "Big Manchester update" },
+    sources: [{ source_id: "m8-observation:observation-3", canonical_name: "LiveScore", entity_type: "NEWS", reliability_score: null, evidence_text: "A report says Manchester United are considering a transfer.", first_cited_post_id: null, citation_count: 1, editorial_role: "DISCOVERY_COMMUNITY", canonical_url: "https://livescore.test/story" }],
+  });
+  const cautiousOutput: CreativeBriefOutput = {
+    ...output,
+    content_mode: "NEWS_UPDATE",
+    slides: output.slides.map((slide, index) => ({ ...slide, headline: index === 0 ? "미확인 이적설" : slide.headline })),
+    caption: { body: "LiveScore 보도에 따르면 이적 가능성이 제기됐습니다. 구단의 공식 확인은 아직 없습니다.", cta: "어떻게 보시나요?" },
+    sources: [{ evidence_id: "source:m8-observation:observation-3", label: "LiveScore" }],
+  };
+  const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", trust_state: "DISCOVERY" }, dependencies(repository, {
+    provider: {
+      ...dependencies(repository).provider,
+      classify: async () => ({ content_mode: "NEWS_UPDATE", match_phase: null, confidence: 0.2, reason_code: "WEAK" }),
+      generate: async () => cautiousOutput,
+    },
+  }));
+  assertEquals(result.status, "READY");
+});
+
 Deno.test("returns CLASSIFICATION_UNCERTAIN when fallback is below threshold", async () => {
   const repository = new MemoryRepository();
   repository.candidate = evidence({ story: { ...repository.candidate.story, canonical_title: "Big Manchester update" }, posts: [{ ...repository.candidate.posts[0]!, caption: "Big Manchester update" }] });

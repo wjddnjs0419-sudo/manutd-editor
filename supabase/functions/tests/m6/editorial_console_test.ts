@@ -10,6 +10,7 @@ import {
   renderTextReel,
   renderCarouselDraft,
   renderTrendingList,
+  verifiedRecommendations,
   type EditorialStoryInput,
 } from "../../_shared/m6/editorial_console.ts";
 import type { ManutdEditorCarouselDraft } from "../../_shared/editorial-style/types.ts";
@@ -29,7 +30,7 @@ const firstStory: EditorialStoryInput = {
   grounding_status: "VERIFIED",
   news_eligible: true,
   source_names: ["BBC Sport", "Sky Sports"],
-  evidence: [{ evidence_id: "claim:1", source_name: "BBC Sport", claim_text: "산초가 새 팀을 찾고 있다.", status: "SUPPORTED", canonical_url: "https://example.test/bbc" }],
+  evidence: [{ evidence_id: "claim:1", source_name: "BBC Sport", claim_text: "산초가 새 팀을 찾고 있다.", status: "SUPPORTED", canonical_url: "https://example.test/bbc", editorial_role: "FACT_PRIMARY" }, { evidence_id: "claim:1:2", source_name: "Sky Sports", claim_text: "산초가 새 팀을 찾고 있다.", status: "SUPPORTED", canonical_url: "https://example.test/sky", editorial_role: "FACT_INDEPENDENT" }],
   story_fingerprint: "story:111:m8-v1",
   latest_brief_id: null,
 };
@@ -54,8 +55,8 @@ Deno.test("canonical story builder collapses duplicate source posts into one sto
 
 Deno.test("canonical stories show linked evidence sources when the legacy source relation is empty", () => {
   const stories = buildCanonicalStories([{ ...firstStory, source_names: [] }]);
-  assertEquals(stories[0]?.sources, ["BBC Sport"]);
-  assertEquals(stories[0]?.source_count, 1);
+  assertEquals(stories[0]?.sources, ["BBC Sport", "Sky Sports"]);
+  assertEquals(stories[0]?.source_count, 2);
 });
 
 Deno.test("canonical story renderer hides internal entity-token titles", () => {
@@ -68,6 +69,15 @@ Deno.test("all stories retains lower-ranked discovery-only canonical stories", (
   assertEquals(stories.length, 2);
   assertEquals(stories[1]?.grounding_status, "DISCOVERY_ONLY");
   assertEquals(stories[1]?.news_eligible, false);
+});
+
+Deno.test("recommended stories contain only eligible items with linked primary or independent evidence", () => {
+  const stories = buildCanonicalStories([
+    firstStory,
+    { ...firstStory, story_cluster_id: "13333333-3333-4333-8333-333333333333", candidate_id: null, rank: 2, story_fingerprint: "story:133:m8-v1", grounding_status: "VERIFIED", evidence: [{ ...firstStory.evidence[0]!, editorial_role: "FACT_PRIMARY", canonical_url: null }] },
+    { ...secondStory, story_cluster_id: "14444444-4444-4444-8444-444444444444", rank: 3, story_fingerprint: "story:144:m8-v1" },
+  ]);
+  assertEquals(verifiedRecommendations(stories).map((story) => story.title), ["산초, 3개월째 FA"]);
 });
 
 Deno.test("canonical story resolver accepts the visible list rank as a natural-language selection token", () => {
@@ -152,6 +162,14 @@ Deno.test("missing or unsafe evidence URLs do not pass link confirmation", () =>
   assert(detail.text.includes("매체 신뢰도: Unknown 미등록"));
 });
 
+Deno.test("unverified zero metrics render as unavailable instead of real zero scores", () => {
+  const story = buildCanonicalStories([{ ...secondStory, information_gap_score: 0, discovery_audience_signal_score: 0, fact_grounding_score: 0, evidence: [] }])[0]!;
+  const detail = renderStoryDetail(story);
+  assert(detail.text.includes("정보격차 미산출"));
+  assert(detail.text.includes("훅 미산출"));
+  assert(detail.text.includes("공유성 미산출"));
+});
+
 Deno.test("editorial detail shows curated outlet reliability separately from fact verification", () => {
   const story = buildCanonicalStories([{
     ...firstStory,
@@ -223,18 +241,22 @@ Deno.test("carousel renderer keeps editor warning outside public slides", () => 
   assert(view.inline_keyboard.flat().some((button) => button.callback_data.startsWith("draft:approve:")));
 });
 
-Deno.test("repository recovers trend scores from pre-promotion snapshots by content fingerprint", async () => {
+Deno.test("repository paginates M8 evidence and recovers trend scores from pre-promotion snapshots", async () => {
   const repository = createEditorialConsoleRepository({
     supabaseUrl: "https://example.supabase.co",
     serviceRoleKey: "service-role",
-    fetch: async (input) => {
+    fetch: async (input, init) => {
       const url = String(input);
       if (url.includes("editorial_rankings")) return new Response(JSON.stringify([{ story_cluster_id: firstStory.story_cluster_id, ranking_date: firstStory.ranking_date, ranking_version: firstStory.ranking_version, rank: 1, editorial_score: 91.2, information_gap_score: 94, fact_grounding_score: 87, discovery_audience_signal_score: 88, grounding_status: "VERIFIED", news_eligible: true }]));
       if (url.includes("story_clusters")) return new Response(JSON.stringify([{ id: firstStory.story_cluster_id, canonical_title: firstStory.canonical_title, summary: firstStory.summary, signature_json: { content_fingerprints: ["fingerprint-1"] } }]));
       if (url.includes("content_candidates")) return new Response(JSON.stringify([{ id: firstStory.candidate_id, story_cluster_id: firstStory.story_cluster_id }]));
       if (url.includes("story_cluster_sources")) return new Response(JSON.stringify([{ story_cluster_id: firstStory.story_cluster_id, information_source_id: "source-1", information_sources: { canonical_name: "BBC Sport" } }]));
       if (url.includes("story_claims")) return new Response(JSON.stringify([{ id: "claim-1", story_cluster_id: firstStory.story_cluster_id, claim_text: "산초가 새 팀을 찾고 있다.", grounding_status: "VERIFIED" }]));
-      if (url.includes("claim_evidence")) return new Response(JSON.stringify([{ claim_id: "claim-1", source_observation_id: "observation-1", evidence_text: "BBC confirms the status.", is_grounding: true }]));
+      if (url.includes("claim_evidence")) {
+        const range = new Headers(init?.headers).get("range") ?? "0-499";
+        if (range.startsWith("500-")) return new Response(JSON.stringify([{ claim_id: "claim-1", source_observation_id: "observation-1", evidence_text: "BBC confirms the status.", is_grounding: true }]));
+        return new Response(JSON.stringify(Array.from({ length: 500 }, (_, index) => ({ claim_id: `unrelated-${index}`, source_observation_id: "observation-1", is_grounding: false }))));
+      }
       if (url.includes("source_observations")) return new Response(JSON.stringify([{ id: "observation-1", information_source_id: "source-1", canonical_url: "https://example.test/bbc", title: "BBC Sport", editorial_role: "FACT_PRIMARY" }]));
       if (url.includes("information_sources?")) return new Response(JSON.stringify([{ id: "source-1", canonical_name: "BBC Sport", reliability_score: 8, reliability_rationale: "Curated primary outlet." }]));
       if (url.includes("trend_snapshots")) {

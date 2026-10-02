@@ -221,9 +221,6 @@ export async function dispatchEditorialConsoleAction(action: ConsoleAction, stat
     if (!usableEvidence) {
       return safeError("연결된 원문 근거가 없어 초안을 만들 수 없습니다. 출처를 확인한 뒤 다시 시도해 주세요.", state, "CREATIVE_GENERATION_BLOCKED");
     }
-    if (story.information_gap_score <= 0 && story.hook_strength <= 0) {
-      return safeError("이 소재는 카드뉴스로 구성할 편집 포인트가 부족합니다.\n다른 소재를 선택해 주세요.", state, "CREATIVE_GENERATION_BLOCKED");
-    }
     try {
       const draft = await dependencies.generateCarousel(story, { trust_state: trustState, ...(action.slide_count ? { slide_count: action.slide_count } : {}) });
       return { view: renderCarouselDraft(draft, story.title, trustState, story.evidence), next_state: { ...state, view: "DRAFT", story_id: story.id, story_fingerprint: story.story_fingerprint, brief_id: draft.creative_brief_id, state_version: state.state_version + 1 }, event: { action: "CREATIVE_GENERATION_COMPLETED", status: "COMPLETED", metadata: { story_id: story.id, candidate_id: story.candidate_id, brief_id: draft.creative_brief_id, trust_state: trustState } } };

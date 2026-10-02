@@ -34,7 +34,7 @@ export interface GenerationDependencies {
 }
 
 function evidenceText(snapshot: EvidenceSnapshot): string {
-  return [snapshot.story.canonical_title ?? "", ...snapshot.posts.map((post) => post.caption ?? "")].filter(Boolean).join("\n");
+  return [snapshot.story.canonical_title ?? "", ...snapshot.posts.map((post) => post.caption ?? ""), ...snapshot.sources.map((source) => source.evidence_text ?? "")].filter(Boolean).join("\n");
 }
 
 function qualityConfig(config: GenerationConfig) {
@@ -81,7 +81,10 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
   if (trigger.trust_state && trigger.trust_state !== "VERIFIED" && !trustedLinkedSource(snapshot, trigger.trust_state)) {
     return { status: "BLOCKED_EVIDENCE", candidate_id: trigger.candidate_id, error_codes: [trigger.trust_state === "REPORTED" ? "REPORTED_SOURCE_MISSING" : "DISCOVERY_SOURCE_MISSING"] };
   }
-  const classification = await classifyWithFallback(evidenceText(snapshot), config.classifier_config, dependencies.provider);
+  let classification = await classifyWithFallback(evidenceText(snapshot), config.classifier_config, dependencies.provider);
+  if (classification.source === "UNCERTAIN" && trigger.trigger_type === "MANUAL" && trigger.trust_state && trustedLinkedSource(snapshot, trigger.trust_state)) {
+    classification = { source: "DETERMINISTIC", content_mode: "NEWS_UPDATE", match_phase: null, confidence: 0.8, reason_code: "MANUAL_LINKED_SOURCE_DEFAULT" };
+  }
   if (classification.source === "UNCERTAIN" || !classification.content_mode) {
     const fingerprint = await uncertainFingerprint(trigger.candidate_id, snapshot, config, trigger);
     const existing = await dependencies.repository.findReadyBrief(trigger.candidate_id, fingerprint);

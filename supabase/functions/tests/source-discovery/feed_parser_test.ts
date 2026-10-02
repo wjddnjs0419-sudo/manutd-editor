@@ -38,6 +38,22 @@ Deno.test("parseFeedDocument preserves the publisher from an RSS source element"
   assert.equal(result[0].metadata.publisher_url, "https://www.goal.com/en");
 });
 
+Deno.test("parseFeedDocument removes entity-escaped HTML anchors from Google News headlines and excerpts", async () => {
+  const result = await parseFeedDocument(`<rss><channel>
+    <item><guid>google-html-1</guid>
+      <title>&amp;lt;a href=&amp;quot;https://news.google.com/rss/articles/example&amp;quot;&amp;gt;Man Utd agree a new contract&amp;lt;/a&amp;gt;</title>
+      <link>https://news.google.com/rss/articles/example</link>
+      <description>&amp;lt;a href=&amp;quot;https://news.google.com/rss/articles/example&amp;quot;&amp;gt;Man Utd agree a new contract with an important academy player this January&amp;lt;/a&amp;gt;</description>
+      <source url="https://www.livescore.com">LiveScore</source>
+    </item>
+  </channel></rss>`, { ...feed, canonicalName: "Google News", editorialRole: "DISCOVERY_COMMUNITY" }, { maxItems: 5, maxExcerptChars: 200 });
+
+  assert.equal(result[0].title, "Man Utd agree a new contract");
+  assert.equal(result[0].excerpt, "Man Utd agree a new contract with an important academy player this January");
+  assert(!result[0].title.includes("<a href"));
+  assert(!result[0].excerpt?.includes("<a href"));
+});
+
 Deno.test("parseFeedDocument limits broad feeds to configured Manchester United terms", async () => {
   const result = await parseFeedDocument(`<rss><channel>
     <item><guid>mu-1</guid><title>Manchester United team news</title><link>https://example.test/mu</link></item>

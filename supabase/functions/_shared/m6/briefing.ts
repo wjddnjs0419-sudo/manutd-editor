@@ -1,6 +1,6 @@
 import type { MatchDayMode } from "./fixture_types.ts";
 import type { RepresentativeReference } from "./reference_media.ts";
-import { editorialTrustState } from "./editorial_trust.ts";
+import { editorialTrustState, type TrustEvidence } from "./editorial_trust.ts";
 
 export interface FrozenBriefingItem {
   position: number;
@@ -19,6 +19,7 @@ export interface FrozenBriefingItem {
   title?: string | null;
   source_name?: string | null;
   source_url?: string | null;
+  evidence?: readonly TrustEvidence[];
   /** Ephemeral signed URL; never persist this field in the briefing snapshot. */
   reference_media_url?: string | null;
 }
@@ -52,11 +53,12 @@ export interface MorningBriefingInput {
     title?: string | null;
     source_name?: string | null;
     source_url?: string | null;
+    evidence?: readonly TrustEvidence[];
   }[];
   blocked_failed: readonly Record<string, unknown>[];
 }
 
-export function selectBriefingCandidates<T extends { grounding_status?: string | null; news_eligible?: boolean; source_url?: string | null }>(
+export function selectBriefingCandidates<T extends { grounding_status?: string | null; news_eligible?: boolean; source_url?: string | null; evidence?: readonly TrustEvidence[] }>(
   candidates: readonly T[],
 ): readonly T[] {
   return candidates.map((candidate, index) => ({ candidate, index })).sort((left, right) => {
@@ -92,7 +94,8 @@ export function buildMorningBriefingSnapshot(input: MorningBriefingInput): Morni
       ...(candidate.news_eligible !== undefined ? { news_eligible: candidate.news_eligible } : {}),
       ...(candidate.title !== undefined ? { title: candidate.title } : {}),
       ...(candidate.source_name !== undefined ? { source_name: candidate.source_name } : {}),
-    ...(candidate.source_url !== undefined ? { source_url: candidate.source_url } : {}),
+      ...(candidate.source_url !== undefined ? { source_url: candidate.source_url } : {}),
+      ...(candidate.evidence !== undefined ? { evidence: candidate.evidence.map((item) => ({ ...item })) } : {}),
     })),
     blocked_failed: input.blocked_failed.map((item) => structuredClone(item)),
   };

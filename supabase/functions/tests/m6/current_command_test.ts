@@ -8,7 +8,7 @@ Deno.test("current command reports live candidate state and positions", () => {
     candidateCount: 17,
     items: [
       { position: 1, candidateId: "candidate-1", priorityScore: 20, username: "utdreport" },
-      { position: 2, candidateId: "candidate-2", priorityScore: 18, username: "utddistrict" },
+      { position: 2, candidateId: "candidate-2", priorityScore: 18, username: "utddistrict", groundingStatus: "DISCOVERY_ONLY", newsEligible: false, sourceName: "Google News", sourceUrl: "https://news.google.com/rss/articles/story" },
     ],
   });
 
@@ -16,6 +16,8 @@ Deno.test("current command reports live candidate state and positions", () => {
   assert(result.includes("현재 후보 17건"));
   assert(result.includes("/open 1"));
   assert(result.includes("@utdreport"));
+  assert(result.includes("🔴 미확인"));
+  assert(result.includes("🔎 발견 링크: https://news.google.com/rss/articles/story"));
 });
 
 Deno.test("current command reports readiness blockers without pretending candidates exist", () => {

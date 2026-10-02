@@ -87,6 +87,7 @@ function requestBody(jobType: EditorialJobType, payload: Record<string, unknown>
   if (jobType === "FIXTURE_SYNC") {
     return { mode: payload.mode === "FORCE" ? "FORCE" : "AUTO" };
   }
+  if (jobType === "DISPATCH_ALERTS") return undefined;
   if (jobType === "EDITORIAL_DIGEST") {
     if (typeof payload.window_start !== "string" || typeof payload.window_end !== "string" || Date.parse(payload.window_start) >= Date.parse(payload.window_end)) throw new Error("EDITORIAL_DIGEST_WINDOW_INVALID");
     return { mode: "HOURLY_DIGEST", window_start: payload.window_start, window_end: payload.window_end, timezone: "Asia/Seoul" };
@@ -101,16 +102,14 @@ export function createBoundaryInvoker(options: BoundaryClientOptions): BoundaryI
     async invoke(jobType, payload) {
       const boundary = BOUNDARIES[jobType];
       const secret = boundary.secret === "collector" ? options.collectorSecret : options.telegramSecret;
+      const body = requestBody(jobType, record(payload));
       const response = await fetchImpl(`${base}/${boundary.path}`, {
         method: "POST",
         headers: {
           authorization: `Bearer ${secret}`,
-          "content-type": "application/json",
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
         },
-        body: (() => {
-          const value = requestBody(jobType, record(payload));
-          return value === undefined ? undefined : JSON.stringify(value);
-        })(),
+        body: body === undefined ? undefined : JSON.stringify(body),
       });
       if (!response.ok) return { status: response.status };
       try {

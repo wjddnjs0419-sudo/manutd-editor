@@ -5,10 +5,8 @@ export interface FeedParserOptions {
   readonly maxExcerptChars: number;
 }
 
-function text(value: string): string {
+function decodeEntities(value: string): string {
   return value
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gu, "$1")
-    .replace(/<[^>]+>/gu, " ")
     .replace(/&amp;/gu, "&")
     .replace(/&lt;/gu, "<")
     .replace(/&gt;/gu, ">")
@@ -17,6 +15,14 @@ function text(value: string): string {
     .replace(/&#x27;/giu, "'")
     .replace(/\s+/gu, " ")
     .trim();
+}
+
+function text(value: string): string {
+  let decoded = value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gu, "$1");
+  // Google News sometimes entity-escapes HTML more than once in RSS fields.
+  // Decode before stripping tags, then decode ordinary text entities again.
+  for (let index = 0; index < 2; index += 1) decoded = decodeEntities(decoded);
+  return decodeEntities(decoded.replace(/<[^>]+>/gu, " "));
 }
 
 function field(block: string, tag: string): string {

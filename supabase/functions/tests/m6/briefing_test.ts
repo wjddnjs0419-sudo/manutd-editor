@@ -49,7 +49,7 @@ Deno.test("keeps all trust states and ranks VERIFIED before REPORTED before DISC
   const selected = selectBriefingCandidates([
     { candidate_id: "discovery", grounding_status: "DISCOVERY_ONLY", news_eligible: false },
     { candidate_id: "reported", grounding_status: "INSUFFICIENT", news_eligible: false, source_name: "BBC Sport", source_url: "https://bbc.test/report" },
-    { candidate_id: "verified", grounding_status: "VERIFIED", news_eligible: true },
+    { candidate_id: "verified", grounding_status: "VERIFIED", news_eligible: true, evidence: [{ editorial_role: "FACT_PRIMARY", canonical_url: "https://manutd.test/source" }] },
   ]);
   assertEquals(selected.map((candidate) => candidate.candidate_id), ["verified", "reported", "discovery"]);
   assertEquals(selected[1]?.source_url, "https://bbc.test/report");
@@ -77,7 +77,7 @@ Deno.test("preserves the legacy candidate fallback when no grounding decision ex
 Deno.test("keeps verified standalone facts and useful unverified social candidates visible", () => {
   const selected = selectBriefingCandidates([
     { candidate_id: "social", candidate_type: "SOCIAL", grounding_status: "INSUFFICIENT", news_eligible: false },
-    { candidate_id: "fact-source", candidate_type: "FACT_SOURCE", grounding_status: "VERIFIED", news_eligible: true },
+    { candidate_id: "fact-source", candidate_type: "FACT_SOURCE", grounding_status: "VERIFIED", news_eligible: true, evidence: [{ editorial_role: "FACT_INDEPENDENT", canonical_url: "https://bbc.test/report" }] },
   ]);
   assertEquals(selected.map((candidate) => candidate.candidate_id), ["fact-source", "social"]);
 });

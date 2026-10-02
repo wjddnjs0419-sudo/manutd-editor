@@ -42,10 +42,10 @@ Deno.test("queue client calls service-role RPCs with exact arguments", async () 
 });
 
 Deno.test("boundary client maps all job types to existing endpoints and secrets", async () => {
-  const calls: Array<{ url: string; authorization: string; body: unknown }> = [];
+  const calls: Array<{ url: string; authorization: string; body: unknown; contentType: string | null }> = [];
   const request = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const headers = new Headers(init?.headers);
-    calls.push({ url: String(input), authorization: headers.get("authorization") ?? "", body: init?.body ? JSON.parse(String(init.body)) : null });
+    calls.push({ url: String(input), authorization: headers.get("authorization") ?? "", body: init?.body ? JSON.parse(String(init.body)) : null, contentType: headers.get("content-type") });
     return response({ status: "completed" });
   };
   const invoker = createBoundaryInvoker({
@@ -99,6 +99,8 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
   ]);
   assert.deepEqual(calls[1]?.body, { as_of: "2026-09-26T00:00:00Z" });
   assert.equal(calls[0]?.body, null);
+  assert.equal(calls[12]?.body, null);
+  assert.equal(calls[12]?.contentType, null);
   assert.deepEqual(calls[2]?.body, { as_of: "2026-09-26T00:00:00Z" });
   assert.deepEqual(calls[3]?.body, { as_of: "2026-09-26T00:00:00Z" });
   assert.deepEqual(calls[4]?.body, { as_of: "2026-09-26T00:00:00Z" });

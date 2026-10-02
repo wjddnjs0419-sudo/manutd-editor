@@ -3,6 +3,7 @@ import type { FixtureAlertEvent, FixtureSyncRepository, FixtureSyncState } from 
 import type { CandidateReferencePost } from "./reference_media.ts";
 import type { IntelligenceReadinessRecord, IntelligenceReadinessStatus } from "./readiness.ts";
 import { isManchesterUnitedRelevant } from "../m8/manchester_united_relevance.ts";
+import type { TrustEvidence } from "./editorial_trust.ts";
 
 export interface M6RepositoryOptions {
   supabaseUrl: string;
@@ -25,6 +26,7 @@ export interface BriefingCandidateRow {
   title?: string | null;
   source_name?: string | null;
   source_url?: string | null;
+  evidence?: readonly TrustEvidence[];
 }
 
 export interface M6Repository extends FixtureSyncRepository {
@@ -121,6 +123,21 @@ export function createM6Repository(options: M6RepositoryOptions): M6Repository {
     }
   }
 
+  async function requestAll(path: string, profile?: string): Promise<unknown[]> {
+    const result: unknown[] = [];
+    for (let offset = 0; ; offset += 500) {
+      const separator = path.includes("?") ? "&" : "?";
+      const page = await request(`${path}${separator}limit=500&offset=${offset}`, { headers: { range: `${offset}-${offset + 499}` } }, profile);
+      if (!Array.isArray(page)) throw new M6RepositoryError("RESPONSE");
+      result.push(...page);
+      if (page.length < 500) return result;
+    }
+  }
+
+  function inFilter(values: readonly string[]): string {
+    return `in.(${values.map((value) => `"${value.replaceAll('"', '\\"')}"`).join(",")})`;
+  }
+
   async function listUpcomingMatches(from: Date, to: Date): Promise<readonly StoredMatch[]> {
     const result = await request(`/rest/v1/matches?select=*&kickoff_at=gte.${encodeURIComponent(from.toISOString())}&kickoff_at=lte.${encodeURIComponent(to.toISOString())}&order=kickoff_at.asc`);
     if (!Array.isArray(result)) throw new M6RepositoryError("RESPONSE");
@@ -169,14 +186,16 @@ export function createM6Repository(options: M6RepositoryOptions): M6Repository {
       const rawCandidates = await request(`/rest/v1/content_candidates?select=id,rank,priority_score,first_mover_flag,must_cover_flag,story_cluster_id,creative_briefs(version,status)&ranking_date=eq.${encodeURIComponent(rankingDate)}${calculatedAtFilter}&order=rank.asc.nullslast,priority_score.desc`);
       if (!Array.isArray(rawCandidates)) throw new M6RepositoryError("RESPONSE");
       const [rawPosts, editorialRankings, factObservations, sources] = await Promise.all([
-        request(`/rest/v1/story_cluster_posts?select=story_cluster_id,raw_post_id,match_confidence,raw_posts(permalink,published_at,media_type,media_product_type,source_accounts(username),media_assets(id,asset_type,carousel_index,storage_path))`),
+        requestAll(`/rest/v1/story_cluster_posts?select=story_cluster_id,raw_post_id,match_confidence,raw_posts(permalink,published_at,media_type,media_product_type,source_accounts(username),media_assets(id,asset_type,carousel_index,storage_path))`),
         request(`/rest/v1/editorial_rankings?select=story_cluster_id,rank,grounding_status,news_eligible&ranking_date=eq.${encodeURIComponent(rankingDate)}&order=rank.asc.nullslast`, {}, "app_private").catch(() => []),
         request(`/rest/v1/source_observations?select=id,information_source_id,editorial_role,title,canonical_url,observed_at&editorial_role=in.(FACT_PRIMARY,FACT_INDEPENDENT)&observed_at=gte.${encodeURIComponent(`${rankingDate}T00:00:00.000Z`)}&observed_at=lt.${encodeURIComponent(`${nextUtcDate(rankingDate)}T00:00:00.000Z`)}&order=observed_at.desc&limit=50`, {}, "app_private").catch(() => []),
-        request("/rest/v1/information_sources?select=id,canonical_name&limit=500").catch(() => []),
+        requestAll("/rest/v1/information_sources?select=id,canonical_name").catch(() => []),
       ]);
       if (!Array.isArray(rawPosts)) throw new M6RepositoryError("RESPONSE");
       const rankingByCluster = new Map<string, { rank: number | null; groundingStatus: string | null; newsEligible: boolean }>();
       if (Array.isArray(editorialRankings)) for (const value of editorialRankings) if (object(value) && typeof value.story_cluster_id === "string") rankingByCluster.set(value.story_cluster_id, { rank: nullableNumber(value.rank), groundingStatus: nullableString(value.grounding_status), newsEligible: value.news_eligible === true });
+      const sourceNames = new Map<string, string>();
+      if (Array.isArray(sources)) for (const source of sources) if (object(source) && typeof source.id === "string" && typeof source.canonical_name === "string") sourceNames.set(source.id, source.canonical_name);
       const postsByCluster = new Map<string, CandidateReferencePost[]>();
       for (const value of rawPosts) {
         if (!object(value) || typeof value.story_cluster_id !== "string" || typeof value.raw_post_id !== "string") continue;
@@ -188,18 +207,70 @@ export function createM6Repository(options: M6RepositoryOptions): M6Repository {
         existing.push({ raw_post_id: value.raw_post_id, username: account.username, permalink: nullableString(rawPost.permalink), published_at: typeof rawPost.published_at === "string" ? rawPost.published_at : "1970-01-01T00:00:00Z", media_type: typeof rawPost.media_type === "string" ? rawPost.media_type : "UNKNOWN", media_product_type: nullableString(rawPost.media_product_type), match_confidence: nullableNumber(value.match_confidence), cited_source_reliability: null, media_assets: assets });
         postsByCluster.set(value.story_cluster_id, existing);
       }
+      const clusterIds = [...new Set(rawCandidates.filter(object).flatMap((candidate) => typeof candidate.story_cluster_id === "string" ? [candidate.story_cluster_id] : []))];
+      const claims = clusterIds.length
+        ? await requestAll(`/rest/v1/story_claims?select=id,story_cluster_id,discovery_observation_id&story_cluster_id=${encodeURIComponent(inFilter(clusterIds))}`, "app_private").catch(() => [])
+        : [];
+      const claimIds = claims.flatMap((claim) => object(claim) && typeof claim.id === "string" ? [claim.id] : []);
+      const evidenceRows: unknown[] = [];
+      for (let offset = 0; offset < claimIds.length; offset += 50) {
+        const chunk = claimIds.slice(offset, offset + 50);
+        evidenceRows.push(...await requestAll(`/rest/v1/claim_evidence?select=claim_id,source_observation_id,editorial_role,is_grounding&claim_id=${encodeURIComponent(inFilter(chunk))}`, "app_private").catch(() => []));
+      }
+      const observationIds = [...new Set([
+        ...evidenceRows.flatMap((entry) => object(entry) && typeof entry.source_observation_id === "string" ? [entry.source_observation_id] : []),
+        ...claims.flatMap((claim) => object(claim) && typeof claim.discovery_observation_id === "string" ? [claim.discovery_observation_id] : []),
+      ])];
+      const observations: unknown[] = [];
+      for (let offset = 0; offset < observationIds.length; offset += 100) {
+        const chunk = observationIds.slice(offset, offset + 100);
+        observations.push(...await requestAll(`/rest/v1/source_observations?select=id,information_source_id,editorial_role,title,canonical_url,observed_at&id=${encodeURIComponent(inFilter(chunk))}`, "app_private").catch(() => []));
+      }
+      const observationById = new Map(observations.filter(object).flatMap((value) => typeof value.id === "string" ? [[value.id, value] as const] : []));
+      const clusterByClaim = new Map(claims.filter(object).flatMap((claim) => typeof claim.id === "string" && typeof claim.story_cluster_id === "string" ? [[claim.id, claim.story_cluster_id] as const] : []));
+      const evidenceByCluster = new Map<string, TrustEvidence[]>();
+      const bestObservationByCluster = new Map<string, JsonObject>();
+      const roleScore = (observation: JsonObject) => {
+        const role = observation.editorial_role;
+        const factuality = role === "FACT_PRIMARY" ? 4 : role === "FACT_INDEPENDENT" ? 3 : typeof role === "string" && role.startsWith("FACT_") ? 2 : 1;
+        const url = nullableString(observation.canonical_url) ?? "";
+        return factuality * 2 + (url.includes("news.google.com/") ? 0 : 1);
+      };
+      const addObservation = (clusterId: string, observation: JsonObject) => {
+        if (typeof observation.editorial_role !== "string") return;
+        const list = evidenceByCluster.get(clusterId) ?? [];
+        list.push({ editorial_role: observation.editorial_role, canonical_url: nullableString(observation.canonical_url) });
+        evidenceByCluster.set(clusterId, list);
+        const previous = bestObservationByCluster.get(clusterId);
+        if (!previous || roleScore(observation) > roleScore(previous)) bestObservationByCluster.set(clusterId, observation);
+      };
+      for (const claim of claims) {
+        if (!object(claim) || typeof claim.story_cluster_id !== "string" || typeof claim.discovery_observation_id !== "string") continue;
+        const observation = observationById.get(claim.discovery_observation_id);
+        if (observation) addObservation(claim.story_cluster_id, observation);
+      }
+      for (const entry of evidenceRows) {
+        if (!object(entry) || typeof entry.claim_id !== "string" || typeof entry.source_observation_id !== "string") continue;
+        const clusterId = clusterByClaim.get(entry.claim_id);
+        const observation = observationById.get(entry.source_observation_id);
+        if (clusterId && observation) addObservation(clusterId, observation);
+      }
+      for (const [clusterId, evidence] of evidenceByCluster) {
+        evidenceByCluster.set(clusterId, [...new Map(evidence.map((item) => [`${item.editorial_role}|${item.canonical_url}`, item])).values()]);
+      }
       const candidates: BriefingCandidateRow[] = rawCandidates.filter(object).map((candidate) => {
         const briefs = Array.isArray(candidate.creative_briefs) ? candidate.creative_briefs.filter(object) : [];
         const latest = briefs.sort((left, right) => (typeof right.version === "number" ? right.version : 0) - (typeof left.version === "number" ? left.version : 0))[0];
         const editorial = typeof candidate.story_cluster_id === "string" ? rankingByCluster.get(candidate.story_cluster_id) : undefined;
-        return { candidate_id: typeof candidate.id === "string" ? candidate.id : "", candidate_type: "SOCIAL" as const, rank: nullableNumber(candidate.rank), priority_score: nullableNumber(candidate.priority_score), first_mover_flag: candidate.first_mover_flag === true, must_cover_flag: candidate.must_cover_flag === true, creative_status: typeof latest?.status === "string" ? latest.status : "NOT_REQUESTED", reference_posts: postsByCluster.get(typeof candidate.story_cluster_id === "string" ? candidate.story_cluster_id : "") ?? [], editorial_rank: editorial?.rank ?? null, grounding_status: editorial?.groundingStatus ?? null, news_eligible: editorial?.newsEligible ?? false };
+        const clusterId = typeof candidate.story_cluster_id === "string" ? candidate.story_cluster_id : "";
+        const sourceObservation = bestObservationByCluster.get(clusterId);
+        const sourceName = sourceObservation && typeof sourceObservation.information_source_id === "string" ? sourceNames.get(sourceObservation.information_source_id) : undefined;
+        return { candidate_id: typeof candidate.id === "string" ? candidate.id : "", candidate_type: "SOCIAL" as const, rank: nullableNumber(candidate.rank), priority_score: nullableNumber(candidate.priority_score), first_mover_flag: candidate.first_mover_flag === true, must_cover_flag: candidate.must_cover_flag === true, creative_status: typeof latest?.status === "string" ? latest.status : "NOT_REQUESTED", reference_posts: postsByCluster.get(clusterId) ?? [], editorial_rank: editorial?.rank ?? null, grounding_status: editorial?.groundingStatus ?? null, news_eligible: editorial?.newsEligible ?? false, source_name: sourceName ?? null, source_url: sourceObservation ? nullableString(sourceObservation.canonical_url) : null, evidence: evidenceByCluster.get(clusterId) ?? [] };
       }).filter((candidate) => candidate.candidate_id !== "");
-      const sourceNames = new Map<string, string>();
-      if (Array.isArray(sources)) for (const source of sources) if (object(source) && typeof source.id === "string" && typeof source.canonical_name === "string") sourceNames.set(source.id, source.canonical_name);
       const sourceCandidates = Array.isArray(factObservations) ? factObservations.filter(object).flatMap((observation) => {
         if (typeof observation.id !== "string" || typeof observation.information_source_id !== "string" || typeof observation.editorial_role !== "string" || !["FACT_PRIMARY", "FACT_INDEPENDENT"].includes(observation.editorial_role) || typeof observation.title !== "string" || typeof observation.canonical_url !== "string") return [];
         if (!isManchesterUnitedRelevant({ canonicalTitle: observation.title })) return [];
-        return [{ candidate_id: `source:${observation.id}`, candidate_type: "FACT_SOURCE" as const, rank: null, priority_score: null, first_mover_flag: false, must_cover_flag: false, creative_status: "NOT_REQUESTED", reference_posts: [], editorial_rank: null, grounding_status: "VERIFIED", news_eligible: true, title: observation.title, source_name: sourceNames.get(observation.information_source_id) ?? "Fact source", source_url: observation.canonical_url }];
+        return [{ candidate_id: `source:${observation.id}`, candidate_type: "FACT_SOURCE" as const, rank: null, priority_score: null, first_mover_flag: false, must_cover_flag: false, creative_status: "NOT_REQUESTED", reference_posts: [], editorial_rank: null, grounding_status: "VERIFIED", news_eligible: true, title: observation.title, source_name: sourceNames.get(observation.information_source_id) ?? "Fact source", source_url: observation.canonical_url, evidence: [{ editorial_role: observation.editorial_role, canonical_url: observation.canonical_url }] }];
       }) : [];
       candidates.push(...sourceCandidates);
       if (candidates.some((candidate) => candidate.editorial_rank !== null)) {

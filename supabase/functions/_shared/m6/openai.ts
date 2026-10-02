@@ -1,5 +1,5 @@
 import type { MorningBriefingSnapshot, FrozenBriefingItem } from "./briefing.ts";
-import { editorialTrustLabel, editorialTrustState } from "./editorial_trust.ts";
+import { editorialLinkLabel, editorialTrustLabel, editorialTrustState } from "./editorial_trust.ts";
 
 export interface PhrasedCandidateNote {
   position: number;
@@ -132,7 +132,7 @@ function canonicalCandidateText(item: FrozenBriefingItem, note: string): string 
   if (item.source_name) lines.push(`Source: ${item.source_name}`);
   if (item.reference_username) lines.push(`Reference: @${item.reference_username}`);
   const sourceUrl = item.source_url ?? item.reference_permalink;
-  if (sourceUrl) lines.push(`🔗 원문: ${sourceUrl}`);
+  if (sourceUrl) lines.push(`${editorialLinkLabel(sourceUrl)}: ${sourceUrl}`);
   lines.push(`/open ${item.position}`);
   return lines.join("\n");
 }

@@ -13,8 +13,11 @@ export interface TrustStory {
 }
 
 export function editorialTrustState(story: TrustStory): EditorialTrustState {
-  if (story.grounding_status === "VERIFIED" && story.news_eligible === true) return "VERIFIED";
-  if (!story.grounding_status && story.news_eligible === true) return "VERIFIED";
+  const linkedVerifiedEvidence = story.evidence?.some((item) =>
+    (item.editorial_role === "FACT_PRIMARY" || item.editorial_role === "FACT_INDEPENDENT") &&
+    typeof item.canonical_url === "string" && item.canonical_url.trim() !== ""
+  ) ?? false;
+  if (story.grounding_status === "VERIFIED" && story.news_eligible === true && linkedVerifiedEvidence) return "VERIFIED";
   const linkedCredibleSource = story.evidence?.some((item) =>
     (item.editorial_role === "FACT_PRIMARY" || item.editorial_role === "FACT_INDEPENDENT") &&
     typeof item.canonical_url === "string" && item.canonical_url.trim() !== ""
@@ -27,6 +30,15 @@ export function editorialTrustState(story: TrustStory): EditorialTrustState {
 
 export function editorialTrustLabel(state: EditorialTrustState): string {
   return state === "VERIFIED" ? "🟢 근거 매칭됨" : state === "REPORTED" ? "🟡 보도됨" : "🔴 미확인";
+}
+
+export function editorialLinkLabel(url: string): string {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === "news.google.com" || host.endsWith(".news.google.com") ? "🔎 발견 링크" : "🔗 원문";
+  } catch {
+    return "🔗 출처 링크";
+  }
 }
 
 export function editorialTrustInstruction(state: EditorialTrustState): string {

@@ -84,6 +84,7 @@ async function runMorningBrief(): Promise<MorningBriefResult> {
     title: row.title ?? null,
     source_name: row.source_name ?? null,
     source_url: row.source_url ?? null,
+    evidence: row.evidence,
     representative: selectRepresentativeReference(row.reference_posts),
   }));
   const snapshot = buildMorningBriefingSnapshot({ briefing_date: briefingDate, timezone, match_day_mode: fixtureResult.match_day_mode, match_context: matchContext, overnight_counts: { candidates: eligibleRows.length, discovered_candidates: rows.length }, candidates, blocked_failed: fixtureResult.status === "FAILED" ? [{ type: "FIXTURE_SYNC", error_category: fixtureResult.error_category ?? "UNKNOWN" }] : [] });

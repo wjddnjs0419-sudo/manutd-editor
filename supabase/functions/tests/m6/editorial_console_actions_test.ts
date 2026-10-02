@@ -25,7 +25,7 @@ const story: CanonicalStory = buildCanonicalStories([{
   grounding_status: "VERIFIED",
   news_eligible: true,
   source_names: ["BBC Sport"],
-  evidence: [{ evidence_id: "claim:1", source_name: "BBC Sport", claim_text: "산초가 새 팀을 찾고 있다.", status: "SUPPORTED", canonical_url: null }],
+  evidence: [{ evidence_id: "claim:1", source_name: "BBC Sport", claim_text: "산초가 새 팀을 찾고 있다.", status: "SUPPORTED", canonical_url: "https://bbc.test/sancho", editorial_role: "FACT_PRIMARY" }],
   story_fingerprint: "fingerprint-1",
   latest_brief_id: null,
 }])[0]!;
@@ -246,6 +246,19 @@ Deno.test("card generation allows a linked discovery source but labels it unconf
   assertEquals(calls, 1);
   assert(result.view.text.includes("🔴 미확인"));
   assert(result.view.text.includes("https://example.test/source"));
+});
+
+Deno.test("linked discovery source can generate a cautious draft even when all editorial scores are zero", async () => {
+  let calls = 0;
+  const linkedButUnscored = { ...story, news_eligible: false, information_gap_score: 0, hook_strength: 0, shareability: 0, evidence: [{ ...story.evidence[0]!, editorial_role: "DISCOVERY_COMMUNITY", canonical_url: "https://example.test/source" }] };
+  const result = await dispatchEditorialConsoleAction(
+    { type: "GENERATE_CAROUSEL", token: story.id },
+    state({ view: "DETAIL", story_id: story.id }),
+    dependencies({ getStoryByToken: async () => linkedButUnscored, generateCarousel: async () => { calls += 1; return draft; } }),
+  );
+  assertEquals(calls, 1);
+  assert(result.view.text.includes("🔴 미확인"));
+  assertEquals(result.event.action, "CREATIVE_GENERATION_COMPLETED");
 });
 
 Deno.test("back navigation returns from evidence and draft to the current story list safely", async () => {

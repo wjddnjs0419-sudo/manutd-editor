@@ -9,7 +9,7 @@ import { retrieveHistoricalContext, type HistoricalContext, type RetrievalThread
 import { reviseCaption, reviseSlide, selectHook } from "../_shared/m6/revisions.ts";
 import { createTelegramClient } from "../_shared/m6/telegram_client.ts";
 import { createM6Repository } from "../_shared/m6/repository.ts";
-import { createEditorialConsoleRepository, findCanonicalStoryByToken, paginateStories, shortCallbackToken, type CanonicalStory, type ConsoleView } from "../_shared/m6/editorial_console.ts";
+import { createEditorialConsoleRepository, findCanonicalStoryByToken, paginateStories, shortCallbackToken, verifiedRecommendations, type CanonicalStory, type ConsoleView } from "../_shared/m6/editorial_console.ts";
 import { canHandleStaleConsoleCallback, dispatchEditorialConsoleAction, parseConsoleCallback, type ConsoleAction, type ConsoleState } from "../_shared/m6/editorial_console_actions.ts";
 import { invokeCanonicalCarousel } from "../_shared/m6/console_generation.ts";
 import { createEditorialJobQueue } from "../orchestration-worker/queue_client.ts";
@@ -338,7 +338,7 @@ async function currentConsoleStories(thread: ThreadRow, mode: "recommended" | "a
   const stories = await consoleRepository.listCanonicalStories(date);
   if (mode === "all") return stories;
   const skipped = await skippedFingerprints(thread.id, date);
-  return stories.filter((story) => story.recommended && !skipped.has(story.story_fingerprint));
+  return verifiedRecommendations(stories).filter((story) => !skipped.has(story.story_fingerprint));
 }
 
 async function currentTrendingStories(): Promise<readonly CanonicalStory[]> {
@@ -556,7 +556,7 @@ async function commandReply(command: ParsedCommand, thread: ThreadRow): Promise<
     const visibleRows = selectBriefingCandidates(rows);
     const snapshot = snapshotCurrentCandidates(briefingDate, visibleRows);
     await saveCurrentSnapshot(thread, snapshot);
-    return formatCurrentReply({ briefingDate, readiness, candidateCount: visibleRows.length, items: snapshot.items.map((item) => ({ position: item.position, candidateId: item.candidate_id, priorityScore: item.priority_score, username: item.reference_username, title: item.title, sourceName: item.source_name })) });
+    return formatCurrentReply({ briefingDate, readiness, candidateCount: visibleRows.length, items: snapshot.items.map((item) => ({ position: item.position, candidateId: item.candidate_id, priorityScore: item.priority_score, username: item.reference_username, title: item.title, sourceName: item.source_name, sourceUrl: item.source_url, groundingStatus: item.grounding_status, newsEligible: item.news_eligible, evidence: item.evidence })) });
   }
   if (command.type === "STATUS") return thread.active_candidate_id ? `현재 후보 ${thread.active_candidate_id}의 최신 상태를 확인하세요.` : thread.active_source_observation_id ? `현재 사실 소스 ${thread.active_source_observation_id}를 확인하세요.` : "활성 후보가 없습니다. /today 또는 /open으로 시작하세요.";
   if (command.type === "BACK") return "이전 작업 맥락으로 돌아갔습니다.";

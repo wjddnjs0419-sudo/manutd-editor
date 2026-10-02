@@ -48,3 +48,49 @@ Deno.test("keeps the original observation when article fetch fails", async () =>
 
   assertEquals(await enrich(original), original);
 });
+
+Deno.test("resolves Google News relay links to the declared publisher article before enrichment", async () => {
+  const calls: string[] = [];
+  const enrich = createArticleEnricher({
+    fetch: (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("news.google.com")) return Promise.resolve(new Response(null, { status: 302, headers: { location: "https://www.goal.com/en/news/article-1" } }));
+      return Promise.resolve(new Response(`<p>Manchester United have agreed a new contract with a first team player after several months of negotiations.</p>`, { headers: { "content-type": "text/html" } }));
+    },
+  });
+
+  const result = await enrich(observation({
+    canonicalUrl: "https://news.google.com/rss/articles/relay-1",
+    metadata: { publisher_url: "https://www.goal.com/en" },
+  }));
+
+  assertEquals(result.canonicalUrl, "https://www.goal.com/en/news/article-1");
+  assertEquals(calls.length, 2);
+  assertStringIncludes(result.excerpt ?? "", "agreed a new contract");
+});
+
+Deno.test("does not follow a news relay to a host outside the declared publisher", async () => {
+  let calls = 0;
+  const original = observation({ canonicalUrl: "https://news.google.com/rss/articles/relay-1", metadata: { publisher_url: "https://www.goal.com" } });
+  const enrich = createArticleEnricher({ fetch: () => {
+    calls += 1;
+    return Promise.resolve(new Response(null, { status: 302, headers: { location: "https://attacker.example/story" } }));
+  } });
+
+  assertEquals(await enrich(original), original);
+  assertEquals(calls, 1);
+});
+
+Deno.test("does not mistake a Google News interstitial for the publisher's canonical article", async () => {
+  let calls = 0;
+  const original = observation({ canonicalUrl: "https://news.google.com/rss/articles/relay-1", metadata: { publisher_url: "https://www.goal.com" } });
+  const enrich = createArticleEnricher({ fetch: (input) => {
+    calls += 1;
+    if (calls === 1) return Promise.resolve(new Response(null, { status: 302, headers: { location: `${String(input)}&hl=en-US` } }));
+    return Promise.resolve(new Response("Google News landing page", { status: 200 }));
+  } });
+
+  assertEquals(await enrich(original), original);
+  assertEquals(calls, 2);
+});

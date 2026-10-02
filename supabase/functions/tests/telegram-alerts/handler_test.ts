@@ -4,8 +4,8 @@ import { createTelegramAlertsHandler } from "../../telegram-alerts/handler.ts";
 function request(body?: unknown): Request {
   return new Request("https://example.test/functions/v1/telegram-alerts", {
     method: "POST",
-    headers: { authorization: "Bearer secret", "content-type": "application/json" },
-    body: JSON.stringify(body ?? {}),
+    headers: { authorization: "Bearer secret", ...(body === undefined ? {} : { "content-type": "application/json" }) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 }
 
@@ -17,4 +17,11 @@ Deno.test("accepts a bounded hourly digest window and rejects malformed windows"
   assert.deepEqual(input, valid);
   assert.equal((await handler(request({ ...valid, window_end: "2026-10-02T03:00:00Z" }))).status, 400);
   assert.equal((await handler(request({ ...valid, mode: "ARBITRARY" }))).status, 400);
+});
+
+Deno.test("accepts unscoped dispatch alerts when no body was supplied", async () => {
+  let input: unknown = "not-called";
+  const handler = createTelegramAlertsHandler({ invokeSecret: "secret", run: async (value) => { input = value; return { attempted: 0, sent: 0, failed: 0 }; } });
+  assert.equal((await handler(request())).status, 200);
+  assert.equal(input, undefined);
 });

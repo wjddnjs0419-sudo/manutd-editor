@@ -209,6 +209,12 @@ export function buildCanonicalStories(
     .sort((left, right) => (left.rank === null ? 1 : right.rank === null ? -1 : left.rank - right.rank) || left.title.localeCompare(right.title, "ko"));
 }
 
+export function verifiedRecommendations(stories: readonly CanonicalStory[]): CanonicalStory[] {
+  return stories.filter((story) => story.grounding_status === "VERIFIED" && story.news_eligible && story.evidence.some((item) =>
+    (item.editorial_role === "FACT_PRIMARY" || item.editorial_role === "FACT_INDEPENDENT") && hasSafeHttpsUrl(item.canonical_url)
+  ));
+}
+
 export function paginateStories(stories: readonly CanonicalStory[], page: number, pageSize = 5): StoryPage {
   const safePageSize = Math.max(1, Math.floor(pageSize));
   const total = stories.length;
@@ -268,6 +274,7 @@ export function renderTrendingList(page: StoryPage): ConsoleView {
 }
 
 export function renderStoryDetail(story: CanonicalStory): ConsoleView {
+  const metric = (value: number) => value === 0 && story.grounding_status !== "VERIFIED" ? "미산출" : score10(value);
   const evidenceSources = unique(story.evidence.map((item) => item.source_name));
   const sourceNames = story.sources.length > 0 ? story.sources : evidenceSources;
   const factSources = unique(story.evidence.filter((item) => item.editorial_role === "FACT_PRIMARY" || item.editorial_role === "FACT_INDEPENDENT").map((item) => item.source_name));
@@ -305,7 +312,7 @@ export function renderStoryDetail(story: CanonicalStory): ConsoleView {
     : `검증 근거: ${hasVerifiedLink ? "보도 링크만 있음" : "근거 없음"}`;
   const format = story.news_eligible ? "카드뉴스 초안" : "카드뉴스 초안 · 확인 수준 표시";
   return {
-    text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n${editorialTrustLabel(editorialTrustState(story))}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${story.trend_state ?? "STABLE"} · ${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼\n\n정보격차 ${score10(story.information_gap_score)}\n훅 ${score10(story.hook_strength)}\n공유성 ${score10(story.shareability)}\n${groundingLine}\n${linkConfirmationLine}\n${reliabilityLine}\n\n추천 포맷:\n${format}\n\n${sourceLine}`,
+    text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n${editorialTrustLabel(editorialTrustState(story))}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${story.trend_state ?? "STABLE"} · ${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼\n\n정보격차 ${metric(story.information_gap_score)}\n훅 ${metric(story.hook_strength)}\n공유성 ${metric(story.shareability)}\n${groundingLine}\n${linkConfirmationLine}\n${reliabilityLine}\n\n추천 포맷:\n${format}\n\n${sourceLine}`,
     inline_keyboard: [
       [
         { text: "📰 원문/출처", callback_data: callbackData("idea:evidence", story.id) },
@@ -375,10 +382,10 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
   const fetchImpl = options.fetch ?? fetch;
   const baseHeaders = { apikey: options.serviceRoleKey, authorization: `Bearer ${options.serviceRoleKey}`, accept: "application/json" };
 
-  async function request(path: string, profile?: string): Promise<unknown> {
+  async function request(path: string, profile?: string, range?: string): Promise<unknown> {
     let response: Response;
     try {
-      response = await fetchImpl(`${baseUrl}${path}`, { headers: { ...baseHeaders, ...(profile ? { "accept-profile": profile, "content-profile": profile } : {}) } });
+      response = await fetchImpl(`${baseUrl}${path}`, { headers: { ...baseHeaders, ...(profile ? { "accept-profile": profile, "content-profile": profile } : {}), ...(range ? { "range-unit": "items", range } : {}) } });
     } catch {
       throw new Error("NETWORK");
     }
@@ -390,19 +397,30 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
     }
   }
 
+  async function requestAll(path: string, profile?: string): Promise<readonly unknown[]> {
+    const pageSize = 500;
+    const rows: unknown[] = [];
+    for (let start = 0; ; start += pageSize) {
+      const page = await request(path, profile, `${start}-${start + pageSize - 1}`);
+      if (!Array.isArray(page)) throw new Error("RESPONSE");
+      rows.push(...page);
+      if (page.length < pageSize) return rows;
+    }
+  }
+
   return {
     async listCanonicalStories(rankingDate) {
       const [rankings, clusters, candidates, clusterSources, claims, claimEvidence, observations, informationSources, briefs, trendSnapshots] = await Promise.all([
-        request(`/rest/v1/editorial_rankings?select=story_cluster_id,ranking_date,ranking_version,rank,editorial_score,information_gap_score,fact_grounding_score,discovery_audience_signal_score,grounding_status,news_eligible&ranking_date=eq.${encodeURIComponent(rankingDate)}&order=rank.asc.nullslast,editorial_score.desc`, "app_private"),
-        request("/rest/v1/story_clusters?select=id,canonical_title,summary,status,signature_json&status=neq.ARCHIVED"),
-        request(`/rest/v1/content_candidates?select=id,story_cluster_id,ranking_date&ranking_date=eq.${encodeURIComponent(rankingDate)}`),
-        request("/rest/v1/story_cluster_sources?select=story_cluster_id,information_source_id,information_sources(canonical_name)"),
-        request("/rest/v1/story_claims?select=id,story_cluster_id,claim_text,grounding_status", "app_private"),
-        request("/rest/v1/claim_evidence?select=claim_id,source_observation_id,evidence_text,is_grounding", "app_private"),
-        request("/rest/v1/source_observations?select=id,information_source_id,canonical_url,title,editorial_role", "app_private"),
-        request("/rest/v1/information_sources?select=id,canonical_name,reliability_score,reliability_rationale&limit=500"),
-        request("/rest/v1/creative_briefs?select=id,candidate_id,version,status&order=version.desc"),
-        request(`/rest/v1/trend_snapshots?select=story_cluster_id,cluster_key,snapshot_at,trend_score,trend_state,source_count,platform_count,opportunity_labels,input_snapshot&snapshot_at=lte.${encodeURIComponent(`${rankingDate}T23:59:59.999Z`)}&order=snapshot_at.desc`, "app_private"),
+        requestAll(`/rest/v1/editorial_rankings?select=story_cluster_id,ranking_date,ranking_version,rank,editorial_score,information_gap_score,fact_grounding_score,discovery_audience_signal_score,grounding_status,news_eligible&ranking_date=eq.${encodeURIComponent(rankingDate)}&order=rank.asc.nullslast,editorial_score.desc`, "app_private"),
+        requestAll("/rest/v1/story_clusters?select=id,canonical_title,summary,status,signature_json&status=neq.ARCHIVED"),
+        requestAll(`/rest/v1/content_candidates?select=id,story_cluster_id,ranking_date&ranking_date=eq.${encodeURIComponent(rankingDate)}`),
+        requestAll("/rest/v1/story_cluster_sources?select=story_cluster_id,information_source_id,information_sources(canonical_name)"),
+        requestAll("/rest/v1/story_claims?select=id,story_cluster_id,claim_text,grounding_status,discovery_observation_id", "app_private"),
+        requestAll("/rest/v1/claim_evidence?select=claim_id,source_observation_id,evidence_text,is_grounding,editorial_role,relation", "app_private"),
+        requestAll("/rest/v1/source_observations?select=id,information_source_id,canonical_url,title,editorial_role", "app_private"),
+        requestAll("/rest/v1/information_sources?select=id,canonical_name,reliability_score,reliability_rationale&limit=500"),
+        requestAll("/rest/v1/creative_briefs?select=id,candidate_id,version,status&order=version.desc"),
+        requestAll(`/rest/v1/trend_snapshots?select=story_cluster_id,cluster_key,snapshot_at,trend_score,trend_state,source_count,platform_count,opportunity_labels,input_snapshot&snapshot_at=lte.${encodeURIComponent(`${rankingDate}T23:59:59.999Z`)}&order=snapshot_at.desc`, "app_private"),
       ]);
 
       const clusterById = new Map(array(clusters).flatMap((value) => typeof value.id === "string" && typeof value.canonical_title === "string" ? [[value.id, value]] as const : []));
@@ -430,18 +448,22 @@ export function createEditorialConsoleRepository(options: EditorialConsoleReposi
         if (typeof claim.id !== "string" || typeof claim.story_cluster_id !== "string" || typeof claim.claim_text !== "string") continue;
         const status = claim.grounding_status === "CONTRADICTED" ? "CONTRADICTED" : claim.grounding_status === "VERIFIED" ? "SUPPORTED" : "REPORTED";
         const related = evidenceByClaim.get(claim.id) ?? [];
-        const source = related.find((item) => item.is_grounding === true) ?? related[0];
-        const observation = source && typeof source.source_observation_id === "string" ? observationById.get(source.source_observation_id) : undefined;
-        const entry: EditorialEvidence = {
-          evidence_id: `claim:${claim.id}`,
-          source_name: observation && typeof observation.information_source_id === "string" ? informationSourceNameById.get(observation.information_source_id) ?? (typeof observation.title === "string" ? observation.title : "M8 근거") : "M8 근거",
-          claim_text: claim.claim_text,
-          status,
-          canonical_url: observation && typeof observation.canonical_url === "string" ? observation.canonical_url : null,
-          editorial_role: observation && typeof observation.editorial_role === "string" ? observation.editorial_role : null,
-          source_reliability_score: observation && typeof observation.information_source_id === "string" ? sourceReliabilityById.get(observation.information_source_id) ?? null : null,
-        };
-        evidenceByCluster.set(claim.story_cluster_id, [...(evidenceByCluster.get(claim.story_cluster_id) ?? []), entry]);
+        const sources = related.filter((item) => typeof item.source_observation_id === "string");
+        if (sources.length === 0 && typeof claim.discovery_observation_id === "string") sources.push({ source_observation_id: claim.discovery_observation_id });
+        for (const source of sources) {
+          const observation = typeof source.source_observation_id === "string" ? observationById.get(source.source_observation_id) : undefined;
+          if (!observation) continue;
+          const entry: EditorialEvidence = {
+            evidence_id: `claim:${claim.id}:observation:${String(observation.id)}`,
+            source_name: typeof observation.information_source_id === "string" ? informationSourceNameById.get(observation.information_source_id) ?? (typeof observation.title === "string" ? observation.title : "M8 근거") : "M8 근거",
+            claim_text: claim.claim_text,
+            status,
+            canonical_url: typeof observation.canonical_url === "string" ? observation.canonical_url : null,
+            editorial_role: typeof observation.editorial_role === "string" ? observation.editorial_role : typeof source.editorial_role === "string" ? source.editorial_role : null,
+            source_reliability_score: typeof observation.information_source_id === "string" ? sourceReliabilityById.get(observation.information_source_id) ?? null : null,
+          };
+          evidenceByCluster.set(claim.story_cluster_id, [...(evidenceByCluster.get(claim.story_cluster_id) ?? []), entry]);
+        }
       }
       const latestBriefByCandidate = new Map<string, string>();
       for (const value of array(briefs)) if (typeof value.candidate_id === "string" && typeof value.id === "string" && !latestBriefByCandidate.has(value.candidate_id)) latestBriefByCandidate.set(value.candidate_id, value.id);
