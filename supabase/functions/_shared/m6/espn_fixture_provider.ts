@@ -281,18 +281,26 @@ export function createEspnFixtureProvider(options: EspnFixtureProviderOptions = 
   }
 
   async function fetchCompetition(competition: EspnCompetition, from: Date, to: Date): Promise<readonly CanonicalFixture[]> {
-    const url = `${baseUrl}/${competition.slug}/teams/${configuredTeamId}/schedule`;
-    const response = await request(url);
-    if (!Array.isArray(response.body.events) || !object(response.body.team) || teamId(response.body.team.id) !== configuredTeamId) {
-      throw new EspnFixtureProviderError("ESPN_SCHEMA_MISMATCH");
+    const months: string[] = [];
+    const cursor = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1));
+    const lastMonth = Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), 1);
+    while (cursor.getTime() <= lastMonth) {
+      months.push(`${cursor.getUTCFullYear()}${String(cursor.getUTCMonth() + 1).padStart(2, "0")}`);
+      cursor.setUTCMonth(cursor.getUTCMonth() + 1);
     }
-    return response.body.events
-      .map(requiredObject)
-      .filter((value) => {
-        const candidateCompetition = eventCompetition(value);
-        return containsTeam(candidateCompetition, configuredTeamId) && rangeContains(requiredString(value.date), from, to);
-      })
-      .map((value) => normalizeEspnFixture(value, competition, configuredTeamId, response.updatedAt));
+    const batches = await Promise.all(months.map(async (month) => {
+      const url = `${baseUrl}/${competition.slug}/scoreboard?dates=${month}`;
+      const response = await request(url);
+      if (!Array.isArray(response.body.events)) throw new EspnFixtureProviderError("ESPN_SCHEMA_MISMATCH");
+      return response.body.events
+        .map(requiredObject)
+        .filter((value) => {
+          const candidateCompetition = eventCompetition(value);
+          return containsTeam(candidateCompetition, configuredTeamId) && rangeContains(requiredString(value.date), from, to);
+        })
+        .map((value) => normalizeEspnFixture(value, competition, configuredTeamId, response.updatedAt));
+    }));
+    return batches.flat();
   }
 
   return {

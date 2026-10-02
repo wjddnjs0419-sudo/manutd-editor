@@ -136,7 +136,8 @@ export async function runFixtureSync(
   dependencies: FixtureSyncDependencies,
 ): Promise<FixtureSyncResult> {
   const providerName = "espn";
-  const from = new Date(request.now.getTime() - 24 * 60 * 60 * 1000);
+  // Keep recently finished canonical matches available for Match Calendar projection.
+  const from = new Date(request.now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const to = new Date(request.now.getTime() + 60 * 24 * 60 * 60 * 1000);
   const existing = await dependencies.repository.listUpcomingMatches(from, to);
   const currentMode = deriveMatchDayMode(existing, request.now, "Asia/Seoul");

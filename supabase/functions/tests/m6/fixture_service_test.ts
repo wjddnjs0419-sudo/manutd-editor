@@ -158,3 +158,26 @@ Deno.test("match assistant or Notion hook failure does not fail canonical fixtur
   assertEquals(result.status, "SYNCED");
   assertEquals(repo.rows.length, 1);
 });
+
+Deno.test("fixture sync fetches recent past matches for the Notion calendar backfill window", async () => {
+  const repo = repository([]);
+  let fetchedFrom = "";
+  const historical = fixture({ external_match_id: "historical-1", kickoff_at: "2026-09-13T15:30:00.000Z", status: "FINISHED" });
+  const result = await runFixtureSync(
+    { mode: "FORCE", now: new Date("2026-10-02T00:00:00.000Z") },
+    {
+      provider: {
+        async fetchFixtures(from) {
+          fetchedFrom = from.toISOString();
+          return [historical];
+        },
+        async fetchMatch() { return historical; },
+      },
+      repository: repo,
+      alertThreadId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    },
+  );
+  assertEquals(result.status, "SYNCED");
+  assertEquals(fetchedFrom, "2026-09-02T00:00:00.000Z");
+  assertEquals(repo.rows.map((row) => row.external_match_id), ["historical-1"]);
+});

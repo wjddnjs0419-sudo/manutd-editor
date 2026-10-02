@@ -31,7 +31,7 @@ function normalized(raw: JsonObject, competition = ESPN_COMPETITIONS.PREMIER_LEA
   return normalizeEspnFixture(raw, competition, ESPN_MANCHESTER_UNITED_TEAM_ID, "2026-09-20T12:00:00Z");
 }
 
-function scheduleResponse(events: readonly JsonObject[], timestamp = "2026-09-20T12:00:00Z"): Response {
+function scoreboardResponse(events: readonly JsonObject[], timestamp = "2026-09-20T12:00:00Z"): Response {
   return new Response(JSON.stringify({
     timestamp,
     team: { id: ESPN_MANCHESTER_UNITED_TEAM_ID, displayName: "Manchester United" },
@@ -91,28 +91,64 @@ Deno.test("rejects malformed ESPN payloads and unknown statuses", () => {
   assertRejects(async () => normalized(event({ competitions: [{ ...(event().competitions as JsonObject[])[0], status: { type: { name: "STATUS_MYSTERY", state: "post", completed: false } } }] })), EspnFixtureProviderError, "UNSUPPORTED_STATUS");
 });
 
-Deno.test("filters non-Manchester United events from competition schedules", async () => {
+Deno.test("filters non-Manchester United events from ESPN scoreboards", async () => {
   const other = event({ id: "402000000", competitions: [{ ...(event().competitions as JsonObject[])[0], competitors: [
     { id: "1", homeAway: "home", team: { displayName: "Liverpool" } },
     { id: "2", homeAway: "away", team: { displayName: "Arsenal" } },
   ] }] });
-  const provider = createEspnFixtureProvider({ fetch: async () => scheduleResponse([other]) });
+  const provider = createEspnFixtureProvider({ fetch: async () => scoreboardResponse([other]) });
   assertEquals(await provider.fetchFixtures(new Date("2026-09-20T00:00:00Z"), new Date("2026-09-21T00:00:00Z")), []);
 });
 
-Deno.test("uses the verified team schedule endpoints for every configured competition", async () => {
+Deno.test("uses calendar-month scoreboards for every configured competition", async () => {
   const requested: string[] = [];
   const provider = createEspnFixtureProvider({
     fetch: async (input) => {
       requested.push(String(input));
-      return scheduleResponse([event()]);
+      return scoreboardResponse([event()]);
     },
   });
   const fixtures = await provider.fetchFixtures(new Date("2026-09-20T00:00:00Z"), new Date("2026-09-21T00:00:00Z"));
   assertEquals(fixtures.length, Object.keys(ESPN_COMPETITIONS).length);
   for (const competition of Object.values(ESPN_COMPETITIONS)) {
-    assertEquals(requested.some((url) => url.includes(`/soccer/${competition.slug}/teams/360/schedule`)), true);
+    assertEquals(requested.some((url) => url.includes(`/soccer/${competition.slug}/scoreboard?dates=202609`)), true);
   }
+});
+
+Deno.test("finds recent past and upcoming fixtures from calendar-month scoreboards", async () => {
+  const recentPast = event({ id: "401999991", date: "2026-09-13T15:30:00Z" });
+  const upcoming = event({ id: "401999992", date: "2026-10-10T15:30:00Z" });
+  const outsideLookback = event({ id: "401999993", date: "2026-08-22T15:30:00Z" });
+  const requested: string[] = [];
+  const provider = createEspnFixtureProvider({
+    fetch: async (input) => {
+      const url = String(input);
+      requested.push(url);
+      const events = url.includes("/eng.1/")
+        ? url.includes("dates=202609") ? [recentPast, outsideLookback]
+        : url.includes("dates=202610") ? [upcoming]
+        : []
+        : [];
+      return scoreboardResponse(events);
+    },
+  });
+  const fixtures = await provider.fetchFixtures(new Date("2026-09-02T00:00:00Z"), new Date("2026-12-01T00:00:00Z"));
+  assertEquals(fixtures.map((item) => item.external_match_id), ["401999991", "401999992"]);
+  assertEquals(requested.length, Object.keys(ESPN_COMPETITIONS).length * 4);
+});
+
+Deno.test("queries every month when fixture window crosses a calendar year", async () => {
+  const requested: string[] = [];
+  const provider = createEspnFixtureProvider({
+    fetch: async (input) => {
+      requested.push(String(input));
+      return scoreboardResponse([]);
+    },
+  });
+  await provider.fetchFixtures(new Date("2026-12-31T00:00:00Z"), new Date("2027-01-01T00:00:00Z"));
+  assertEquals(requested.length, Object.keys(ESPN_COMPETITIONS).length * 2);
+  assertEquals(requested.some((url) => url.includes("dates=202612")), true);
+  assertEquals(requested.some((url) => url.includes("dates=202701")), true);
 });
 
 Deno.test("retries a transient ESPN response with a bounded request", async () => {
@@ -122,7 +158,7 @@ Deno.test("retries a transient ESPN response with a bounded request", async () =
     sleep: async () => {},
     fetch: async () => {
       attempts += 1;
-      return attempts === 1 ? new Response("temporary", { status: 503 }) : scheduleResponse([event()]);
+      return attempts === 1 ? new Response("temporary", { status: 503 }) : scoreboardResponse([event()]);
     },
   });
   await provider.fetchFixtures(new Date("2026-09-20T00:00:00Z"), new Date("2026-09-21T00:00:00Z"));
