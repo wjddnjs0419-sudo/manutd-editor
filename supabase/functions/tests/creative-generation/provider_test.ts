@@ -62,6 +62,10 @@ Deno.test("uses Responses API strict JSON Schema without web search", async () =
   const prompt = ((body.input as Array<{ content?: Array<{ text?: string }> }>)[0]?.content?.[0]?.text) ?? "";
   assert(prompt.includes("manutd_editor"));
   assert(prompt.includes("HOOK"));
+  assert(prompt.includes("two short main-copy lines"));
+  assert(prompt.includes("maximum five hashtags"));
+  assert(prompt.includes("Never strengthen"));
+  assert(prompt.includes("Never invent numbers"));
   assert(!prompt.includes("현재 확보된 자료"));
 });
 

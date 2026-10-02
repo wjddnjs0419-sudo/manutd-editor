@@ -72,6 +72,73 @@ Deno.test("rejects filler-length carousels and overly long caption copy", () => 
   assert(result.errors.some((error) => error.code === "CAPTION_TOO_LONG"));
 });
 
+Deno.test("requires a short two-line hook with no body or closing copy", () => {
+  const oneLine = draft({ slides: [{ ...draft().slides[0]!, highlight: null }, ...draft().slides.slice(1)] });
+  const oneLineResult = validateManutdEditorDraft(oneLine, new Set(["source:bbc"]));
+  assert(oneLineResult.errors.some((error) => (error.code as string) === "HOOK_MAIN_LINES"));
+
+  const body = draft({ slides: [{ ...draft().slides[0]!, body: "설명 문단" }, ...draft().slides.slice(1)] });
+  const bodyResult = validateManutdEditorDraft(body, new Set(["source:bbc"]));
+  assert(bodyResult.errors.some((error) => error.code === "HOOK_BODY_NOT_EMPTY"));
+
+  const longLine = draft({ slides: [{ ...draft().slides[0]!, headline: "가".repeat(41) }, ...draft().slides.slice(1)] });
+  const longLineResult = validateManutdEditorDraft(longLine, new Set(["source:bbc"]));
+  assert(longLineResult.errors.some((error) => (error.code as string) === "HOOK_LINE_TOO_LONG"));
+});
+
+Deno.test("rejects hype language and dense later-slide bodies", () => {
+  const hype = draft({ slides: [{ ...draft().slides[0]!, headline: "역대급 영입" }, ...draft().slides.slice(1)] });
+  const hypeResult = validateManutdEditorDraft(hype, new Set(["source:bbc"]));
+  assert(hypeResult.errors.some((error) => (error.code as string) === "HYPE_COPY"));
+
+  const dense = draft({ slides: [draft().slides[0]!, { ...draft().slides[1]!, body: "하나\n둘\n셋\n넷\n다섯\n여섯" }, draft().slides[2]!] });
+  const denseResult = validateManutdEditorDraft(dense, new Set(["source:bbc"]));
+  assert(denseResult.errors.some((error) => (error.code as string) === "BODY_TOO_MANY_LINES"));
+});
+
+Deno.test("keeps caption engagement natural and bounded", () => {
+  const validCaption = draft({ caption: { body: "이 선수 맨유에 필요하다고 봄?", cta: "#맨유 #맨체스터유나이티드 #이적시장" } });
+  assertEquals(validateManutdEditorDraft(validCaption, new Set(["source:bbc"])).valid, true);
+
+  const generic = draft({ caption: { body: "여러분의 생각은 어떠신가요?", cta: null } });
+  const genericResult = validateManutdEditorDraft(generic, new Set(["source:bbc"]));
+  assert(genericResult.errors.some((error) => (error.code as string) === "CAPTION_GENERIC_QUESTION"));
+
+  const noQuestion = draft({ caption: { body: "맨유가 새 센터백을 지켜보고 있다.", cta: null } });
+  const noQuestionResult = validateManutdEditorDraft(noQuestion, new Set(["source:bbc"]));
+  assert(noQuestionResult.errors.some((error) => (error.code as string) === "CAPTION_QUESTION_MISSING"));
+
+  const tooManyTags = draft({ caption: { body: "이 루머 믿음? #1 #2 #3 #4 #5 #6", cta: null } });
+  const tooManyTagsResult = validateManutdEditorDraft(tooManyTags, new Set(["source:bbc"]));
+  assert(tooManyTagsResult.errors.some((error) => (error.code as string) === "CAPTION_HASHTAG_LIMIT"));
+
+  const formal = draft({ caption: { body: "맨유가 새 센터백을 지켜보고 있습니다. 추가 협상을 진행했습니다.", cta: "확인해 주세요?" } });
+  const formalResult = validateManutdEditorDraft(formal, new Set(["source:bbc"]));
+  assert(formalResult.errors.some((error) => (error.code as string) === "CAPTION_FORMAL_STYLE"));
+});
+
+Deno.test("rejects unsupported numbers and rumor claims stronger than evidence", () => {
+  const unsupportedNumber = draft({ slides: [{ ...draft().slides[0]!, highlight: "24경기 출전" }, ...draft().slides.slice(1)] });
+  const numberResult = validateManutdEditorDraft(unsupportedNumber, new Set(["source:bbc"]), "산초가 새 팀을 찾고 있다.");
+  assert(numberResult.errors.some((error: { code: string }) => error.code === "UNSUPPORTED_NUMBER"));
+
+  const weak = draft({ slides: [{ ...draft().slides[0]!, headline: "맨유가 Player X를 지켜보고 있다는 보도", highlight: "아직 협상은 없다" }, ...draft().slides.slice(1)] });
+  const weakResult = validateManutdEditorDraft(weak, new Set(["source:bbc"]), "Manchester United are monitoring Player X. Sancho has 3 months and trains at 10th division.");
+  assertEquals(weakResult.valid, true);
+
+  const strengthened = draft({ slides: [{ ...draft().slides[0]!, headline: "맨유가 Player X와 협상 중이다", highlight: "영입을 추진한다" }, ...draft().slides.slice(1)] });
+  const strengthenedResult = validateManutdEditorDraft(strengthened, new Set(["source:bbc"]), "Manchester United are monitoring Player X. Sancho has 3 months and trains at 10th division.");
+  assert(strengthenedResult.errors.some((error: { code: string }) => error.code === "RUMOR_STRENGTH"));
+
+  const medium = draft({ slides: [{ ...draft().slides[0]!, headline: "맨유가 Player X 영입을 검토 중이다", highlight: "접촉 가능성이 제기됐다" }, ...draft().slides.slice(1)] });
+  const mediumResult = validateManutdEditorDraft(medium, new Set(["source:bbc"]), "Manchester United are considering a move and contact is possible. Sancho has 3 months and trains at 10th division.");
+  assertEquals(mediumResult.valid, true);
+
+  const strong = draft({ slides: [{ ...draft().slides[0]!, headline: "맨유가 Player X와 협상 중이다", highlight: "공식 제안을 보냈다" }, ...draft().slides.slice(1)] });
+  const strongResult = validateManutdEditorDraft(strong, new Set(["source:bbc"]), "Manchester United are in talks and have made an official offer for Player X. Sancho has 3 months and trains at 10th division.");
+  assertEquals(strongResult.valid, true);
+});
+
 Deno.test("keeps golden examples isolated as style references", () => {
   assertEquals(MANUTD_EDITOR_GOLDEN_EXAMPLES.length, 2);
   assert(MANUTD_EDITOR_GOLDEN_EXAMPLES.every((example) => example.style_only));

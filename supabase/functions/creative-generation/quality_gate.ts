@@ -51,6 +51,14 @@ function nonblank(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function evidenceText(evidence: EvidenceSnapshot): string {
+  return [
+    evidence.story.canonical_title,
+    ...evidence.posts.map((post) => post.caption),
+    ...evidence.sources.map((source) => source.evidence_text),
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0).join("\n");
+}
+
 function error(code: string, path: string): ValidationError {
   return { code, path };
 }
@@ -170,7 +178,7 @@ export function validateCreativeBrief(
     if (output.style_profile !== config.style_profile || output.style_version !== config.style_version) {
       errors.push(error("STYLE_IDENTITY", "style_profile"));
     }
-    const styleResult = validateManutdEditorDraft(styleDraft(output as unknown as CreativeBriefOutput, evidence), new Set(evidence.evidence_ids));
+    const styleResult = validateManutdEditorDraft(styleDraft(output as unknown as CreativeBriefOutput, evidence), new Set(evidence.evidence_ids), evidenceText(evidence));
     for (const entry of styleResult.errors) errors.push(error(`STYLE_${entry.code}`, entry.path ?? "root"));
   }
 

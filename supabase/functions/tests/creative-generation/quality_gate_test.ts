@@ -8,7 +8,7 @@ const evidence: EvidenceSnapshot = {
   candidate: {} as EvidenceSnapshot["candidate"],
   story: {} as EvidenceSnapshot["story"],
   posts: [],
-  sources: [{ evidence_id: "source:1", source_id: "source-1", canonical_name: "United", entity_type: "CLUB", reliability_score: 10, evidence_text: "Confirmed", first_cited_post_id: "post-1", citation_count: 1 }],
+  sources: [{ evidence_id: "source:1", source_id: "source-1", canonical_name: "United", entity_type: "CLUB", reliability_score: 10, evidence_text: "Confirmed 3 months 10th division", first_cited_post_id: "post-1", citation_count: 1 }],
   score_evidence: {},
   evidence_ids: ["post:1", "source:1"],
 };
@@ -121,7 +121,7 @@ function styleValid(overrides: Partial<CreativeBriefOutput> = {}): CreativeBrief
       { ...valid().slides[1]!, slide_number: 2, purpose: "CONTEXT", index: 2, role: "CONTEXT", headline: "자유 계약만 3개월째", highlight: null, body: "맨유와 계약이 끝난 뒤\n새 팀을 찾지 못하고 있다.", closing_line: null },
       { ...valid().slides[2]!, slide_number: 3, purpose: "KEY_FACT", index: 3, role: "KEY_FACT", headline: "10부리그 훈련장", highlight: "Flixton FC", body: "현재는 몸 상태를 유지하는 중이다.", closing_line: null },
     ],
-    caption: { body: "산초의 다음 행선지는?", cta: "여러분의 생각은?" },
+    caption: { body: "산초의 다음 행선지는?", cta: "이 선수 맨유에 필요하다고 봄?" },
     ...overrides,
   };
 }
@@ -136,4 +136,21 @@ Deno.test("rejects internal research prose from style-enabled public slides", ()
   const value = styleValid({ slides: [{ ...styleValid().slides[0]!, headline: "현재 확보된 자료에는 문제가 없습니다." }, ...styleValid().slides.slice(1)] });
   const result = validateCreativeBrief(value, evidence, styleConfig);
   assert(result.errors.some((entry) => entry.code === "STYLE_FORBIDDEN_PUBLIC_COPY"));
+});
+
+Deno.test("enforces concise page-one and caption style in the quality gate", () => {
+  const value = styleValid({
+    slides: [{ ...styleValid().slides[0]!, headline: "맨유의 새로운 수비 보강 후보", highlight: null }, ...styleValid().slides.slice(1)],
+    caption: { body: "여러분의 생각은 어떠신가요?", cta: "#맨유 #1 #2 #3 #4 #5" },
+  });
+  const result = validateCreativeBrief(value, evidence, styleConfig);
+  assert(result.errors.some((entry) => entry.code === "STYLE_HOOK_MAIN_LINES"));
+  assert(result.errors.some((entry) => entry.code === "STYLE_CAPTION_GENERIC_QUESTION"));
+  assert(result.errors.some((entry) => entry.code === "STYLE_CAPTION_HASHTAG_LIMIT"));
+});
+
+Deno.test("rejects numbers absent from the frozen evidence snapshot", () => {
+  const value = styleValid({ slides: [{ ...styleValid().slides[0]!, highlight: "24경기 출전" }, ...styleValid().slides.slice(1)] });
+  const result = validateCreativeBrief(value, { ...evidence, posts: [{ raw_post_id: "post-1", source_account_id: "account-1", account_username: "source", region: "GLOBAL", caption: "산초가 새 팀을 찾고 있다.", permalink: null, published_at: "2026-09-18T00:00:00Z", media_type: "IMAGE", evidence_id: "post:1" }], evidence_ids: ["post:1", "source:1"] }, styleConfig);
+  assert(result.errors.some((entry) => entry.code === "STYLE_UNSUPPORTED_NUMBER"));
 });

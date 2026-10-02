@@ -152,6 +152,7 @@ Deno.test("returns FAILED_VALIDATION and FAILED_PROVIDER safely", async () => {
 
 Deno.test("stores the ManUtd Editor style identity on a canonical brief", async () => {
   const repository = new MemoryRepository();
+  repository.candidate = evidence({ posts: [{ ...repository.candidate.posts[0]!, caption: "Sancho has spent 3 months training at a 10th-division facility." }] });
   repository.config = {
     ...config,
     quality_gate_config: { min_slides: 3, max_slides: 4, hook_count: 3, max_repair_attempts: 0, require_visual_direction: true, style_profile: "manutd_editor", style_version: "manutd-editor-v1", enable_style_validator: true },
@@ -165,7 +166,7 @@ Deno.test("stores the ManUtd Editor style identity on a canonical brief", async 
       { slide_number: 2, index: 2, purpose: "CONTEXT", role: "CONTEXT", headline: "자유 계약만 3개월째", highlight: null, body: "맨유와 계약이 끝난 뒤\n아직 새 소속팀을 찾지 못하고 있다.", closing_line: null, claims: [{ claim_id: "claim_2", type: "FACT", text: "산초가 새 팀을 찾고 있다.", evidence_ids: ["post:post-1"] }], visual_direction: { subject: "산초", image_type: "photo", layout_intent: "context card", stat_emphasis: null, text_hierarchy: ["headline", "body"] } },
       { slide_number: 3, index: 3, purpose: "KEY_FACT", role: "KEY_FACT", headline: "지금은 몸을 유지하는 중", highlight: "새 팀을 찾을 때까지", body: "훈련을 이어가며\n다음 기회를 기다리고 있다.", closing_line: null, claims: [{ claim_id: "claim_3", type: "FACT", text: "산초가 새 팀을 찾고 있다.", evidence_ids: ["post:post-1"] }], visual_direction: { subject: "훈련장", image_type: "training photo", layout_intent: "fact card", stat_emphasis: null, text_hierarchy: ["headline", "highlight", "body"] } },
     ],
-    caption: { body: "산초의 다음 행선지는 어디가 될까요?", cta: "여러분의 생각은?" },
+    caption: { body: "산초의 다음 행선지는 어디가 될까요?", cta: "이 선수 맨유에 필요하다고 봄?" },
     sources: [{ evidence_id: "post:post-1", label: "utdreport" }], editor_warning: null,
     internal_grounding: { evidence_ids: ["post:post-1"], source_caveats: [], unsupported_claims: [] },
   };

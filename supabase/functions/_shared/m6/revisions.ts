@@ -1,6 +1,7 @@
 import { validateCreativeBrief, type QualityGateConfig } from "../../creative-generation/quality_gate.ts";
 import type { StoredCreativeBrief } from "../../creative-generation/repository.ts";
-import type { CreativeBriefOutput, CreativeBriefSlide, EvidenceSnapshot } from "../../creative-generation/types.ts";
+import type { CreativeBriefOutput, CreativeBriefSlide, EvidenceSnapshot, JsonObject } from "../../creative-generation/types.ts";
+import { MANUTD_EDITOR_REVISION_INSTRUCTIONS, MANUTD_EDITOR_STYLE_PROFILE } from "../editorial-style/manutd_editor.ts";
 
 interface RevisionDependencies {
   qualityConfig: QualityGateConfig;
@@ -11,12 +12,20 @@ interface RevisionDependencies {
 
 function outputFromBrief(brief: StoredCreativeBrief): CreativeBriefOutput {
   const snapshot = brief.evidence_snapshot as EvidenceSnapshot;
-  return { schema_version: "1.0", content_mode: brief.content_mode as CreativeBriefOutput["content_mode"], match_phase: brief.match_phase as CreativeBriefOutput["match_phase"], generation_quality: brief.generation_quality as CreativeBriefOutput["generation_quality"], angle: brief.angle, key_takeaway: String(brief.slides_json.key_takeaway ?? ""), hooks: brief.hooks_json as CreativeBriefOutput["hooks"], slides: brief.slides_json.slides as CreativeBriefSlide[], caption: { body: brief.caption_draft, cta: brief.cta }, sources: snapshot.sources.map((source) => ({ evidence_id: source.evidence_id, label: source.canonical_name })) };
+  return { schema_version: "1.0", style_profile: MANUTD_EDITOR_STYLE_PROFILE.name, style_version: MANUTD_EDITOR_STYLE_PROFILE.version, content_mode: brief.content_mode as CreativeBriefOutput["content_mode"], match_phase: brief.match_phase as CreativeBriefOutput["match_phase"], generation_quality: brief.generation_quality as CreativeBriefOutput["generation_quality"], angle: brief.angle, key_takeaway: String(brief.slides_json.key_takeaway ?? ""), hooks: brief.hooks_json as CreativeBriefOutput["hooks"], slides: brief.slides_json.slides as CreativeBriefSlide[], caption: { body: brief.caption_draft, cta: brief.cta }, sources: snapshot.sources.map((source) => ({ evidence_id: source.evidence_id, label: source.canonical_name })), editor_warning: typeof brief.slides_json.editor_warning === "string" ? brief.slides_json.editor_warning : null, internal_grounding: typeof brief.slides_json.internal_grounding === "object" && brief.slides_json.internal_grounding !== null ? brief.slides_json.internal_grounding as JsonObject : undefined };
+}
+
+function styleQualityConfig(config: QualityGateConfig): QualityGateConfig {
+  return { ...config, style_profile: MANUTD_EDITOR_STYLE_PROFILE.name, style_version: MANUTD_EDITOR_STYLE_PROFILE.version, enable_style_validator: true };
+}
+
+function revisionInstruction(instruction: string): string {
+  return `${MANUTD_EDITOR_REVISION_INSTRUCTIONS}\n\nEditor request:\n${instruction}`;
 }
 
 function materialize(base: StoredCreativeBrief, output: CreativeBriefOutput, dependencies: RevisionDependencies, headlineOverride?: string): StoredCreativeBrief {
   const evidence = base.evidence_snapshot as EvidenceSnapshot;
-  const validation = validateCreativeBrief(output, evidence, dependencies.qualityConfig);
+  const validation = validateCreativeBrief(output, evidence, styleQualityConfig(dependencies.qualityConfig));
   if (!validation.valid) throw new Error("REVISION_INVALID");
   return {
     ...base,
@@ -48,7 +57,7 @@ export async function reviseSlide(baseBrief: StoredCreativeBrief, slideNumber: n
   const output = outputFromBrief(baseBrief);
   const target = output.slides.find((slide) => slide.slide_number === slideNumber);
   if (!target || !instruction.trim() || !dependencies.reviseSlide) throw new Error("SLIDE_NOT_FOUND");
-  const revised = await dependencies.reviseSlide(output, target, instruction);
+  const revised = await dependencies.reviseSlide(output, target, revisionInstruction(instruction));
   if (revised.slide_number !== slideNumber) throw new Error("REVISION_INVALID");
   return materialize(baseBrief, { ...output, slides: output.slides.map((slide) => slide.slide_number === slideNumber ? revised : slide) }, dependencies);
 }
@@ -56,7 +65,7 @@ export async function reviseSlide(baseBrief: StoredCreativeBrief, slideNumber: n
 export async function reviseCaption(baseBrief: StoredCreativeBrief, instruction: string, dependencies: RevisionDependencies): Promise<StoredCreativeBrief> {
   const output = outputFromBrief(baseBrief);
   if (!instruction.trim() || !dependencies.reviseCaption) throw new Error("CAPTION_PROVIDER_MISSING");
-  const caption = await dependencies.reviseCaption(output, instruction);
+  const caption = await dependencies.reviseCaption(output, revisionInstruction(instruction));
   if (!caption.body.trim() || !caption.cta.trim()) throw new Error("REVISION_INVALID");
   return materialize(baseBrief, { ...output, caption }, dependencies);
 }

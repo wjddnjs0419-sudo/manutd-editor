@@ -38,9 +38,14 @@ export interface ManutdEditorStyleProfile {
   language: "ko";
   default_slide_count: { min: 3; max: 4 };
   roles: readonly EditorialSlideRole[];
+  max_hook_line_characters: number;
+  max_body_lines: number;
   max_caption_characters: number;
+  max_caption_hashtags: number;
   max_body_characters: number;
   forbidden_public_phrases: readonly string[];
+  forbidden_hype_phrases: readonly string[];
+  generic_caption_questions: readonly string[];
 }
 
 export type StyleValidationErrorCode =
@@ -51,10 +56,22 @@ export type StyleValidationErrorCode =
   | "ROLE_ORDER"
   | "HEADLINE_EMPTY"
   | "HOOK_BODY_NOT_EMPTY"
+  | "HOOK_CLOSING_NOT_EMPTY"
+  | "HOOK_MAIN_LINES"
+  | "HOOK_LINE_TOO_LONG"
   | "BODY_TOO_LONG"
+  | "BODY_TOO_MANY_LINES"
   | "KOREAN_COPY_REQUIRED"
   | "FORBIDDEN_PUBLIC_COPY"
+  | "HYPE_COPY"
   | "CAPTION_TOO_LONG"
+  | "CAPTION_HASHTAG_LIMIT"
+  | "CAPTION_QUESTION_MISSING"
+  | "CAPTION_GENERIC_QUESTION"
+  | "CAPTION_FORMAL_STYLE"
+  | "UNSUPPORTED_NUMBER"
+  | "RUMOR_STRENGTH"
+  | "RUMOR_ATTRIBUTION"
   | "EVIDENCE_ID_UNKNOWN"
   | "EVIDENCE_MISSING";
 
@@ -68,4 +85,3 @@ export interface StyleValidationResult {
   valid: boolean;
   errors: StyleValidationError[];
 }
-
