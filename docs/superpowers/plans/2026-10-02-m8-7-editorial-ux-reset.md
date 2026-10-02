@@ -71,7 +71,7 @@
 
 - [x] Run `./scripts/run-milestone-8-6-smoke.sh` and all new M8.7 tests.
 - [x] Review complete diff, migration scheduling safety, secrets, and cross-story protections.
-- [ ] Commit on `codex/m8-7-editorial-ux-reset`, push branch to origin.
+- [x] Commit on `codex/m8-7-editorial-ux-reset`, push branch to origin.
 - [ ] Apply pending migrations and deploy only changed Edge Functions to project `byymtttpwmllqvggnddm`.
 - [ ] Verify remote migration history, deployed function versions, and Git SHA.
 
