@@ -72,8 +72,8 @@
 - [x] Run `./scripts/run-milestone-8-6-smoke.sh` and all new M8.7 tests.
 - [x] Review complete diff, migration scheduling safety, secrets, and cross-story protections.
 - [x] Commit on `codex/m8-7-editorial-ux-reset`, push branch to origin.
-- [ ] Apply pending migrations and deploy only changed Edge Functions to project `byymtttpwmllqvggnddm`.
-- [ ] Verify remote migration history, deployed function versions, and Git SHA.
+- [x] Apply pending migrations and deploy only changed Edge Functions to project `byymtttpwmllqvggnddm`.
+- [x] Verify remote migration history, deployed function versions, and Git SHA.
 
-**Production deployment blocker:** The linked project has remote migration `20261002123351`, which is absent from the current `origin/main` and this isolated worktree; it belongs to the separate match-calendar change. `supabase db push --dry-run` refuses to proceed. Do not repair migration history or deploy functions against a mismatched schema. Recheck after Git push; if still present, leave production untouched and report the blocker.
+**Production verification:** `20261002123714` is applied and matches remote history. The linked project already had `20261002123351` applied, but its source file was absent from this checkout; an exact temporary local copy was used only for CLI version reconciliation, then removed without changing the separate checkout or reapplying its SQL. The three M8.7 cron jobs and the new digest job/event constraints were verified remotely. Eight dependent Edge Functions are active at new versions. No Docker or subagents were used.
 - [ ] Report files, migration/schedule changes, exact test results, deployment state, limitations, and subagent use.
