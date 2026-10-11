@@ -1,0 +1,73 @@
+"""M9 auto-input tests: real creative_briefs evidence shapes, no guessing."""
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from m9_source_request_from_brief import build_request, recognized_people
+
+def brief(cover="알렉스 퍼거슨 경의 올드 트래퍼드 복귀 장면",
+          body="퍼거슨 경의 차분한 클로즈업"):
+    return {
+        "id": "17bf0000-0000-4000-8000-123456781234",
+        "slides_json":{"slides":[
+            {"slide_number":1,"visual_direction":{"subject":cover}},
+            {"slide_number":2,"visual_direction":{"subject":body}},
+        ]},
+        "evidence_snapshot":{"sources":[
+            {"canonical_url":"https://news.google.com/rss/articles/CBM123456789ABCD","editorial_role":"DISCOVERY_COMMUNITY"},
+            {"canonical_url":"https://www.theguardian.com/football/2026/oct/10/match-report","editorial_role":"FACT_PRIMARY"},
+            {"canonical_url":"https://www.manutd.com/en/news/detail/ferguson","editorial_role":"OFFICIAL"},
+            {"canonical_url":"https://instagram.com/example","editorial_role":"DISCOVERY_COMMUNITY"},
+            {"canonical_url":"http://unsafe.example.com/a","editorial_role":"FACT_PRIMARY"},
+        ]},
+    }
+
+class BriefToRequest(unittest.TestCase):
+    def test_extracts_canonical_url_prioritized_original_and_explicit_player_aliases(self):
+        result=build_request(brief(),["i.guim.co.uk","media.manutd.com"])
+        self.assertEqual(result["publisher_article_urls"][0],
+                         "https://www.theguardian.com/football/2026/oct/10/match-report")
+        self.assertEqual(len(result["publisher_article_urls"]),2)
+        self.assertEqual(result["official_article_urls"],
+                         ["https://www.manutd.com/en/news/detail/ferguson"])
+        self.assertEqual(result["slots"][0]["subject_aliases"][0],"Sir Alex Ferguson")
+        self.assertEqual(result["slots"][1]["subject_aliases"][0],"Sir Alex Ferguson")
+        self.assertTrue(result["_provenance"]["requires_human_photo_review"])
+
+    def test_fail_closed_for_two_named_people_on_same_photo(self):
+        x=brief("프레드와 텐 하흐의 대비 컷 또는 실루엣","프레드의 인터뷰 사진")
+        with self.assertRaisesRegex(ValueError,"AMBIGUOUS_PHOTO_SUBJECT_PAGE_1"):
+            build_request(x,["i.guim.co.uk"])
+
+    def test_different_players_for_cover_and_body(self):
+        x=brief("마이클 캐릭 감독 경기 후 모습","도미닉 솔란케가 동점골을 넣는 모습")
+        result=build_request(x,["i.guim.co.uk"])
+        self.assertEqual(result["_provenance"]["subject_names"],["Michael Carrick","Dominic Solanke"])
+
+    def test_fails_instead_of_inventing_person(self):
+        x=brief("올드 트래퍼드 경기장 전경","팬들 환호")
+        with self.assertRaisesRegex(ValueError,"M9_PHOTO_SUBJECT_NOT_IDENTIFIED"):
+            build_request(x,["i.guim.co.uk"])
+
+    def test_rejects_unverified_urls_and_unknown_cdn(self):
+        x=brief()
+        x["evidence_snapshot"]={"sources":[{"canonical_url":"https://www.instagram.com/manutd","editorial_role":"FACT_PRIMARY"}]}
+        with self.assertRaisesRegex(ValueError,"M9_PUBLISHER_ARTICLE_URL_REQUIRED"):
+            build_request(x,["i.guim.co.uk"])
+        with self.assertRaisesRegex(ValueError,"M9_OPERATOR_IMAGE_HOST_ALLOWLIST_REQUIRED"):
+            build_request(brief(),[])
+
+    def test_protects_short_english_name_boundaries(self):
+        self.assertEqual(recognized_people("Freddie scored his first goal"),[])
+        self.assertEqual(recognized_people("Fred criticizes Erik ten Hag"),["Fred","Erik ten Hag"])
+
+    def test_optional_active_entity_registry(self):
+        b=brief("새 선수가 복귀했다","새 선수의 경기 장면")
+        active=[{"canonical_name":"Test Player","entity_type":"PLAYER","active":True,
+                 "aliases":["새 선수","Test Player"]}]
+        result=build_request(b,["i.guim.co.uk"],tracked_entities=active)
+        self.assertEqual(result["_provenance"]["subject_names"],["Test Player","Test Player"])
+
+if __name__=="__main__":
+    unittest.main()
