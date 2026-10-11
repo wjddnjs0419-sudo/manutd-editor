@@ -48,3 +48,11 @@ Deno.test("keeps the original observation when article fetch fails", async () =>
 
   assertEquals(await enrich(original), original);
 });
+
+Deno.test("extracts relevant article paragraphs from publisher HTML larger than the old 200 KB limit", async () => {
+  const content = `<html><body><main><div>${"x".repeat(230_000)}</div><article><p>Manchester United completed another training session ahead of the next league fixture.</p></article></main></body></html>`;
+  const enrich = createArticleEnricher({ fetch: async () => new Response(content) });
+  const result = await enrich(observation());
+  assertStringIncludes(result.excerpt ?? "", "Manchester United completed another training session");
+  assertEquals(result.metadata.article_enrichment, "EXTRACTED");
+});
