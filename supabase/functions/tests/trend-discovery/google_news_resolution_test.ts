@@ -65,6 +65,41 @@ Deno.test("resolves an opaque Google News RSS link through the signed endpoint",
   assert.equal(calls[1]?.url, "https://news.google.com/_/DotsSplashUi/data/batchexecute");
 });
 
+Deno.test("follows one same-host Google locale redirect and accepts a bounded large signature page", async () => {
+  const calls: string[] = [];
+  const largeGooglePage = `<html><div data-n-a-sg="signature-123" data-n-a-ts="1791700000"></div>${"x".repeat(900_000)}</html>`;
+  const url = await resolveGoogleNewsArticleUrl(googleUrl, {
+    fetch: async (input) => {
+      const requestUrl = String(input);
+      calls.push(requestUrl);
+      if (calls.length === 1) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://news.google.com/articles/CBMiOpaqueNewsToken2026?hl=en-US&gl=US&ceid=US:en" },
+        });
+      }
+      if (calls.length === 2) return new Response(largeGooglePage);
+      if (calls.length === 3) return new Response(successRpc());
+      throw new Error("Unexpected HTTP request");
+    },
+  });
+  assert.equal(url, publisher);
+  assert.equal(calls.length, 3);
+  assert.match(calls[1] ?? "", /^https:\/\/news\.google\.com\/articles\//u);
+});
+
+Deno.test("does not follow a Google signature redirect to another host", async () => {
+  let calls = 0;
+  const url = await resolveGoogleNewsArticleUrl(googleUrl, {
+    fetch: async () => {
+      calls += 1;
+      return new Response(null, { status: 302, headers: { location: "https://attacker.example/collect" } });
+    },
+  });
+  assert.equal(url, null);
+  assert.equal(calls, 1);
+});
+
 Deno.test("rejects invalid signatures, unsafe returned URLs and unavailable Google endpoints", async () => {
   const unreadable = await resolveGoogleNewsArticleUrl(googleUrl, { fetch: async () => new Response("consent", { status: 429 }) });
   assert.equal(unreadable, null);

@@ -12,7 +12,7 @@ export interface GoogleNewsResolutionOptions {
 }
 
 const GOOGLE_NEWS = "news.google.com";
-const MAX_RESPONSE_BYTES = 850_000;
+const MAX_RESPONSE_BYTES = 1_500_000;
 const MAX_TIMEOUT_MS = 6_000;
 const GOOGLE_RPC_URL = "https://news.google.com/_/DotsSplashUi/data/batchexecute";
 const ARTICLE_PATH = /^\/(?:rss\/)?(?:articles|read)\/([A-Za-z0-9_-]{8,1600})\/?$/u;
@@ -56,13 +56,36 @@ async function getText(
   const controller = new AbortController();
   const deadline = setTimeout(() => controller.abort(), Math.max(1, Math.min(timeoutMs, MAX_TIMEOUT_MS)));
   try {
-    const response = await fetchImpl(url, {
+    let response = await fetchImpl(url, {
       ...init,
       signal: controller.signal,
       redirect: "manual",
       credentials: "omit",
       referrerPolicy: "no-referrer",
     });
+    const method = (init.method ?? "GET").toUpperCase();
+    if (method === "GET" && [301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location) return null;
+      let redirectUrl: URL;
+      try {
+        redirectUrl = new URL(location, url);
+      } catch {
+        return null;
+      }
+      // Google localizes the signed article page with one same-host redirect.
+      // Never follow cross-origin redirects or a second redirect hop.
+      if (redirectUrl.protocol !== "https:" || redirectUrl.hostname !== GOOGLE_NEWS ||
+        redirectUrl.origin !== new URL(url).origin) return null;
+      await response.body?.cancel();
+      response = await fetchImpl(redirectUrl, {
+        ...init,
+        signal: controller.signal,
+        redirect: "manual",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      });
+    }
     if (!response.ok || response.status >= 300) return null;
     const indicatedLength = Number(response.headers.get("content-length"));
     if (Number.isFinite(indicatedLength) && indicatedLength > MAX_RESPONSE_BYTES) return null;

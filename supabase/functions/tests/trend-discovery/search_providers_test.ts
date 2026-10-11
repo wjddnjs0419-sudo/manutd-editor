@@ -64,7 +64,10 @@ Deno.test("Google News uses fixed RSS search, normalizes dates and retains undat
   assertEquals(result[0].providerId, "google-news");
   assertEquals(result[0].sourceRole, "DISCOVERY_COMMUNITY");
   assertEquals(result[0].platform, "RSS");
-  assertEquals(result[0].metadata, {});
+  assertEquals(result[0].metadata, {
+    feed_url: "https://news.google.com/rss/search",
+    format: "RSS",
+  });
 });
 
 Deno.test("GDELT DOC uses fixed structured endpoint, bounded dates and safe article fields", async () => {
