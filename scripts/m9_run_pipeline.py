@@ -2,16 +2,17 @@
 """M9 one-command, publisher-first news-photo preview pipeline.
 
 Requires Python 3 + Pillow, Deno 2 + existing repository. Use only original
-publisher URLs/subject aliases you intentionally supplied. This launcher does
+publisher URLs/subject aliases in an existing canonical brief. This launcher does
 NOT configure scheduled execution, edit the active Telegram webhook, or
 publish publicly. --send-telegram is opt-in and delivers PRIVATE review only.
 
 Local:
- python3 scripts/m9_run_pipeline.py --request request.json --brief-json brief.json \
-     --workdir ./m9-preview --font /path/to/KoreanFont.otf --logo ./logo.png --cta ./cta.png
+ python3 scripts/m9_run_pipeline.py --brief-json brief.json \
+     --workdir ./m9-preview --font /path/to/KoreanFont.otf --logo ./logo.png --cta ./cta.png \\
+     --approved-image-hosts i.guim.co.uk
 
 With configured service role, applied M9 migration and worker host:
- python3 scripts/m9_run_pipeline.py --request request.json --brief-id UUID \
+ python3 scripts/m9_run_pipeline.py --brief-id UUID \
      --workdir ./m9-preview --font /path/to/font --logo ./logo.png \
      --upload --send-telegram --chat-id OWNER_CHAT_ID
 
@@ -24,6 +25,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from m9_source_request_from_brief import build_request
+from m9_preview_workflow import Http, SupabaseGateway
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,7 +42,8 @@ def launch(argv: list[str] | None = None) -> Path:
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--brief-json")
     g.add_argument("--brief-id")
-    p.add_argument("--request", required=True)
+    p.add_argument("--request", help="Optional override. If omitted, derive publisher URLs and named photo subjects from creative_briefs.")
+    p.add_argument("--approved-image-hosts", help="Operator-approved CDN hosts; defaults to M9_APPROVED_IMAGE_HOSTS")
     p.add_argument("--workdir", required=True)
     p.add_argument("--font", required=True)
     p.add_argument("--logo")
@@ -53,14 +57,28 @@ def launch(argv: list[str] | None = None) -> Path:
         p.error("--send-telegram requires --upload and --chat-id")
     root = Path(args.workdir).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    request = json.loads(Path(args.request).read_text(encoding="utf-8"))
+    if args.request:
+        request_path = Path(args.request).resolve()
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+    else:
+        if args.brief_id:
+            remote = SupabaseGateway(os.getenv("SUPABASE_URL", ""),
+                os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SECRET_KEY", ""), Http())
+            brief_data = remote.load_brief(args.brief_id)
+        else:
+            brief_data = json.loads(Path(args.brief_json).read_text(encoding="utf-8"))
+        names = (args.approved_image_hosts or os.getenv("M9_APPROVED_IMAGE_HOSTS") or "").split(",")
+        approved_hosts = [name.strip().lower() for name in names if name.strip()]
+        request = build_request(brief_data, approved_hosts)
+        request_path = root / "derived_source_request.json"
+        request_path.write_text(json.dumps(request,ensure_ascii=False,indent=2),encoding="utf-8")
     hosts = request.get("allowed_image_hosts")
     if not isinstance(hosts, list) or not hosts or any(not isinstance(h, str) for h in hosts):
         raise ValueError("M9_ALLOWLIST_REQUIRED")
     candidate_file = root / "candidates.json"
     command([args.deno, "run", "--allow-read", "--allow-write", "--allow-net",
              str(ROOT / "scripts/m9_collect_media.ts"),
-             str(Path(args.request).resolve()), str(candidate_file)])
+             str(request_path), str(candidate_file)])
     result = json.loads(candidate_file.read_text(encoding="utf-8"))
     if result.get("status") != "CANDIDATES_FOR_REVIEW" or any(
         not isinstance(s.get("selected"), dict) for s in result.get("selections",[])
