@@ -1,7 +1,7 @@
 const DEFAULT_TIMEOUT_MS = 8_000;
 const MAX_TIMEOUT_MS = 8_000;
 const DEFAULT_MAX_BYTES = 200_000;
-const HARD_MAX_BYTES = 200_000;
+const HARD_MAX_BYTES = 800_000;
 const DEFAULT_MAX_ITEMS = 20;
 
 export function boundedItemCount(value: number | undefined): number {

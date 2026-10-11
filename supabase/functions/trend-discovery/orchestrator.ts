@@ -1,4 +1,5 @@
 import { clusterObservations } from "./clustering.ts";
+import { isGoogleNewsArticleUrl } from "./google_news_resolution.ts";
 import type { ArticleEnricher } from "./article_enrichment.ts";
 import { expandDiscoveryQueries } from "./query_expansion.ts";
 import { calculateManutdRelevanceScore } from "./relevance.ts";
@@ -54,8 +55,17 @@ async function enrichObservations(
 ): Promise<readonly DiscoveryObservation[]> {
   if (!enricher || observations.length === 0 || maxEnrichments <= 0) return observations;
   const enrich = enricher;
+  // Google RSS publisher resolution adds two HTTP requests per article. Keep
+  // it bounded so a burst of Google headlines cannot exhaust an Edge Function.
+  let googleResolutions = 0;
   const candidates = [...observations]
     .sort((left, right) => relevanceScore(right) - relevanceScore(left) || publishedTime(right) - publishedTime(left))
+    .filter((observation) => {
+      if (!isGoogleNewsArticleUrl(observation.canonicalUrl)) return true;
+      if (googleResolutions >= 4) return false;
+      googleResolutions += 1;
+      return true;
+    })
     .slice(0, maxEnrichments);
   const enriched = new Map<string, DiscoveryObservation>();
   let nextCandidate = 0;

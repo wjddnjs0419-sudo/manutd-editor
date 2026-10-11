@@ -75,3 +75,16 @@ async function assertRejects(operation: () => Promise<unknown>, message: string)
     assert.equal(error instanceof Error ? error.message : String(error), message);
   }
 }
+
+Deno.test("Google News RSS publisher attribution is preserved as metadata", async () => {
+  const result = await parseFeedDocument(`<rss><channel><item>
+    <guid>news-1</guid><title>Man United latest team news - BBC Sport</title>
+    <link>https://news.google.com/rss/articles/CBMiOpaqueNewsToken2026?oc=5</link>
+    <source url="https://www.bbc.com/sport">BBC Sport</source>
+    <pubDate>Sun, 11 Oct 2026 00:00:00 GMT</pubDate>
+  </item></channel></rss>`, { ...feed, canonicalName: "Google News", editorialRole: "DISCOVERY_COMMUNITY", url: "https://news.google.com/rss/search?q=Manchester+United" }, { maxItems: 5, maxExcerptChars: 400 });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].metadata.publisher_name, "BBC Sport");
+  assert.equal(result[0].editorialRole, "DISCOVERY_COMMUNITY");
+  assert.equal(result[0].canonicalUrl, "https://news.google.com/rss/articles/CBMiOpaqueNewsToken2026?oc=5");
+});
