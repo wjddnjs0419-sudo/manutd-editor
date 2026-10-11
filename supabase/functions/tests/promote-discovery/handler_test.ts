@@ -20,3 +20,16 @@ Deno.test("promotion handler rejects unsafe methods, credentials, and limits", a
   assertEquals((await handler(new Request("https://example.test", { method: "POST", headers: { authorization: "Bearer promotion-secret", "content-type": "application/json" }, body: JSON.stringify({ limit: 501 }) })) ).status, 400);
   assertEquals((await handler(new Request("https://example.test", { method: "POST", headers: { authorization: "Bearer promotion-secret", "content-type": "application/json" }, body: JSON.stringify({ limit: 101 }) })) ).status, 400);
 });
+
+Deno.test("promotion handler rejects malformed recheck flags", async () => {
+  const handler = createPromoteDiscoveryHandler({
+    invokeSecret: "promotion-secret",
+    run: async () => ({ status: "COMPLETED", observationsProcessed: 0, storiesCreated: 0, storiesUpdated: 0, claimsCreated: 0, editorialCandidatesEnsured: 0, affectedStoryIds: [] }),
+  });
+  const response = await handler(new Request("https://example.test", {
+    method: "POST",
+    headers: { authorization: "Bearer promotion-secret", "content-type": "application/json" },
+    body: JSON.stringify({ refresh_existing_grounding: "yes" }),
+  }));
+  assertEquals(response.status, 400);
+});
