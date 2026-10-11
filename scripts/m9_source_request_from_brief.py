@@ -70,7 +70,8 @@ def recognized_people(text: str, registry: dict[str, tuple[str, ...]] | None = N
             if not alias or len(alias.strip()) < 3:
                 continue
             # Strict Unicode boundary prevents matching "Fred" inside "Freddie".
-            pattern = (r"(?<![^\W_])" + re.escape(alias) +\n                       (r"(?=$|[^\w]|[은는이가을를의와과에서도])" if re.search(r"[가-힣]",alias) else r"(?![^\W_])"))
+            pattern = (r"(?<![^\W_])" + re.escape(alias) +
+                       (r"(?=$|[^\w]|[은는이가을를의와과에서도])" if re.search(r"[가-힣]",alias) else r"(?![^\W_])"))
             if re.search(pattern,text,re.IGNORECASE | re.UNICODE):
                 found.append(canonical)
                 break
