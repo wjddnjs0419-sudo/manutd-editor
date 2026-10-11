@@ -1,3 +1,5 @@
+**Typography update (2026-10-12):** M9 uses **Pretendard Bold v1.3.9**, loaded at runtime from official Pretendard source and SHA-256 checked. CTA image is not rerendered. SIL OFL font files are neither checked into this repository nor bundled for users. The previously generated sample PNGs used the earlier font unless explicitly tagged Pretendard.
+
 **STATUS UPDATE (2026-10-12):** The private `app_private.m9_preview_jobs` migration is now APPLIED to the live Manutd editor Supabase project. GitHub Actions manual upload and separate owner-approved send are prepared in PR #7; no production PNG upload or Telegram message has been sent yet. See `docs/m9-github-actions-setup.md` for the current instructions.
 
 # M9 Automated private Telegram preview worker
@@ -37,7 +39,7 @@ Requires Python 3.11+, `Pillow`, Deno 2 and a locally installed Korean font and 
 python3 -m pip install Pillow
 python3 scripts/m9_run_pipeline.py --request ./request.json \
   --brief-json ./brief.json --workdir ./m9-preview \
-  --font /local/path/KoreanBold.otf --logo /local/path/manutd-logo.png \
+  --font /local/path/Pretendard-Bold.otf --logo /local/path/manutd-logo.png \
   --cta /local/path/cta.png
 ```
 
