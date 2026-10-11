@@ -153,7 +153,7 @@ def build_request(
     return {
         "publisher_article_urls":news,
         "official_article_urls":official,
-        "slots":[{"slot":role,"subject_aliases":list(registry[name])}
+        "slots":[{"slot":role,"subject_aliases":list(dict.fromkeys([name, *[alias for alias in registry[name] if len(alias.strip()) >= 4]]))[:6]}
                  for role,name in zip(M9_SLOT_LABELS,subjects)],
         "allowed_image_hosts":allowed_image_hosts,
         "_provenance":{
