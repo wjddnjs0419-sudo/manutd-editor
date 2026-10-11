@@ -258,7 +258,7 @@ export function renderTrendingList(page: StoryPage): ConsoleView {
 export function renderStoryDetail(story: CanonicalStory): ConsoleView {
   const evidenceSources = unique(story.evidence.map((item) => item.source_name));
   const sourceNames = story.sources.length > 0 ? story.sources : evidenceSources;
-  const sourceLine = sourceNames.length > 0 ? sourceNames.join(" / ") : "확인 중";
+  const sourceLine = sourceNames.length > 0 ? sourceNames.join(" / ") : "출처 미연결 (확인 작업 진행 여부는 별도)";
   const format = story.news_eligible ? "카드뉴스 + 텍스트 릴스" : "텍스트 릴스 검토";
   return {
     text: `${story.recommended ? "🔥" : "📚"} ${story.title}\n\n${story.summary ?? "현재 상황을 확인하고 있습니다."}\n\n🔥 Trend ${story.trend_score ?? "—"} · 📰 Editorial ${story.editorial_score}\n${story.trend_state ?? "STABLE"} · ${story.trend_source_count}개 출처 · ${story.trend_platform_count}개 플랫폼\n\n정보격차 ${score10(story.information_gap_score)}\n훅 ${score10(story.hook_strength)}\n공유성 ${score10(story.shareability)}\n출처신뢰 ${score10(story.source_confidence)}\n\n추천 포맷:\n${format}\n\n주요 출처: ${sourceLine}`,
