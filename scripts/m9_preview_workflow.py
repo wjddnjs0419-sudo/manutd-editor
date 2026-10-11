@@ -218,21 +218,33 @@ class SupabaseGateway:
 
     def claim(self, key: str, brief_id: str, media: dict[str, Any]) -> None:
         try:
-            self.request("POST", "/rest/v1/m9_preview_jobs", {
-                "job_key": key, "creative_brief_id": brief_id,
-                "status": "CLAIMED", "media_manifest": media,
-            }, schema="app_private", headers={"prefer": "return=minimal"})
+            result = self.request("POST", "/rest/v1/rpc/m9_claim_preview", {
+                "p_job_key": key, "p_brief_id": brief_id, "p_media": media,
+            })
         except RemoteError as exc:
             if exc.status == 409:
                 raise ValueError("M9_JOB_ALREADY_CLAIMED_NO_RETRY") from None
             raise
+        if result is not True:
+            raise RuntimeError("M9_JOB_CLAIM_INVALID_RESPONSE")
+
+    def get_preview(self, key: str) -> dict[str, Any] | None:
+        result = self.request("POST", "/rest/v1/rpc/m9_get_preview",
+                              {"p_job_key": key})
+        if result is None:
+            return None
+        if not isinstance(result, dict):
+            raise RuntimeError("M9_JOB_LOOKUP_INVALID_RESPONSE")
+        return result
 
     def transition(self, key: str, previous: str, next_status: str, patch: dict[str, Any] | None = None) -> None:
-        query = "?job_key=eq." + urllib.parse.quote(key, safe="") + "&status=eq." + previous
-        result = self.request("PATCH", "/rest/v1/m9_preview_jobs" + query,
-            {"status": next_status, **(patch or {})},
-            schema="app_private", headers={"prefer": "return=representation"})
-        if not isinstance(result, list) or len(result) != 1:
+        result = self.request("POST", "/rest/v1/rpc/m9_transition_preview", {
+            "p_job_key": key,
+            "p_previous": previous,
+            "p_next": next_status,
+            "p_patch": patch or {},
+        })
+        if result is not True:
             raise RuntimeError("M9_STATE_TRANSITION_CONFLICT")
 
     def upload_png(self, object_path: str, data: bytes) -> None:
