@@ -8,6 +8,7 @@ interface PromoteDiscoveryOptions {
   readonly limit?: number;
   readonly rankingDate?: string;
   readonly promotionJobId?: string;
+  readonly refreshExistingGrounding?: boolean;
 }
 
 function asOfDate(value: Date | string | undefined): Date {
@@ -110,7 +111,7 @@ export async function promoteDiscovery(options: PromoteDiscoveryOptions): Promis
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("INVALID_PROMOTION_LIMIT");
   const observations = [...await options.repository.listFreshUnassigned(asOf, limit, options.promotionJobId)];
   if (observations.length > limit) throw new Error("PROMOTION_LIMIT_EXCEEDED");
-  if (observations.length === 0) return { status: "COMPLETED", observationsProcessed: 0, storiesCreated: 0, storiesUpdated: 0, claimsCreated: 0, editorialCandidatesEnsured: 0, affectedStoryIds: [] };
+  if (observations.length === 0 && !options.refreshExistingGrounding) return { status: "COMPLETED", observationsProcessed: 0, storiesCreated: 0, storiesUpdated: 0, claimsCreated: 0, editorialCandidatesEnsured: 0, affectedStoryIds: [] };
   const stories = [...await options.repository.listStories(asOf)];
   const clusters = clusterObservations(observations);
   const rankingDate = options.rankingDate ?? businessDate(asOf, "Asia/Seoul");
@@ -147,6 +148,19 @@ export async function promoteDiscovery(options: PromoteDiscoveryOptions): Promis
       claimsCreated += 1;
       editorialCandidatesEnsured += 1;
     }
+  }
+  if (options.refreshExistingGrounding && affectedStoryIds.size < 100) {
+    // Trusted fact evidence can arrive for an already-known story without any
+    // new discovery observation. Recheck only recent canonical stories, with a
+    // strict cap; never fall back to a historical global grounding scan.
+    const since = asOf.getTime() - 48 * 60 * 60 * 1000;
+    const remaining = Math.min(25, limit, 100 - affectedStoryIds.size);
+    const recent = stories.filter((story) => {
+      const seen = Date.parse(story.lastSeenAt);
+      return Number.isFinite(seen) && seen >= since && seen <= asOf.getTime();
+    }).sort((left, right) => Date.parse(right.lastSeenAt) - Date.parse(left.lastSeenAt))
+      .slice(0, remaining);
+    for (const story of recent) affectedStoryIds.add(story.id);
   }
   return { status: "COMPLETED", observationsProcessed: observations.length, storiesCreated, storiesUpdated, claimsCreated, editorialCandidatesEnsured, affectedStoryIds: [...affectedStoryIds] };
 }
