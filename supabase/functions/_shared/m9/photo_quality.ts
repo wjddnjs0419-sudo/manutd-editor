@@ -96,7 +96,7 @@ export function inspectImageBytes(bytes: Uint8Array): M9ImageProbe {
         (marker>=0xC9 && marker<=0xCB) || (marker>=0xCD && marker<=0xCF);
       if (isSOF) {
         if (segmentSize<7 || at+6>=n)return result("NOT_AN_IMAGE",n);
-        return validDimensions(d.getUint16(at+3,false),d.getUint16(at+1,false),"image/jpeg",n);
+        return validDimensions(d.getUint16(at+5,false),d.getUint16(at+3,false),"image/jpeg",n);
       }
       at+=segmentSize;
     }
