@@ -55,7 +55,7 @@ async function enrichObservations(
   if (!enricher || observations.length === 0 || maxEnrichments <= 0) return observations;
   const enrich = enricher;
   const candidates = [...observations]
-    .sort((left, right) => relevanceScore(left) - relevanceScore(right) || publishedTime(right) - publishedTime(left))
+    .sort((left, right) => relevanceScore(right) - relevanceScore(left) || publishedTime(right) - publishedTime(left))
     .slice(0, maxEnrichments);
   const enriched = new Map<string, DiscoveryObservation>();
   let nextCandidate = 0;
