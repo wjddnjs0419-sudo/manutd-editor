@@ -40,13 +40,14 @@ def json_bytes(data: Any) -> bytes:
 
 def split_hook(text: str) -> tuple[str, str]:
     """Only break existing Korean hook text; never invent/rewrite claims."""
-    text = " ".join(text.split())
+    text = text.strip()
     if not text or len(text) < 5:
         raise ValueError("M9_HOOK_TOO_SHORT")
     if "\n" in text:
         pieces = [x.strip() for x in text.splitlines() if x.strip()]
         if len(pieces) == 2:
             return pieces[0], pieces[1]
+    text = " ".join(text.split())
     positions = [m.start() for m in re.finditer(r"\s+", text)]
     if not positions:
         cut = len(text) // 2
@@ -286,7 +287,7 @@ class TelegramGateway:
 def run_preview(brief: dict[str, Any], media: dict[str, Any], media_root: Path,
                 output: Path, font_file: Path, logo: Path | None,
                 gateway: SupabaseGateway | None, telegram: TelegramGateway | None,
-                *, send: bool, chat_id: str | None = None) -> dict[str, Any]:
+                *, send: bool, chat_id: str | None = None, cta_file: Path | None = None) -> dict[str, Any]:
     checked_media(media, media_root)
     key = job_key(brief, media)
     payload = prepared_render_job(brief, media)
@@ -296,8 +297,8 @@ def run_preview(brief: dict[str, Any], media: dict[str, Any], media_root: Path,
         gateway.claim(key, brief["id"], media)
     stage = "CLAIMED"
     try:
-        manifest = render(payload, workdir, output, font_file, logo, cta_path=None)
-        files = [output / entry["file"] for entry in manifest["slides"]]
+        manifest = render(payload, workdir, output, font_file, logo, cta_path=cta_file)
+        files = [output / entry["file"] for entry in manifest["slides"] if entry["kind"] != "CTA"]
         if len(files) != 2:
             raise ValueError("M9_TWO_RENDERED_SLIDES_REQUIRED")
         state = {"job_key": key, "status": "RENDERED", "rendered": [str(x.name) for x in files],
@@ -350,6 +351,7 @@ def main() -> None:
     cli.add_argument("--out", required=True)
     cli.add_argument("--font", required=True)
     cli.add_argument("--logo")
+    cli.add_argument("--cta", help="Optional existing CTA PNG for local 3-slide review; never uploaded again")
     cli.add_argument("--upload", action="store_true", help="Upload private PNGs to Supabase")
     cli.add_argument("--send-telegram", action="store_true", help="Send ONE private review album after upload")
     cli.add_argument("--chat-id", help="Owner-only Telegram chat ID")
@@ -370,7 +372,8 @@ def main() -> None:
                          Path(args.font).resolve(), Path(args.logo).resolve() if args.logo else None,
                          service if args.upload else None,
                          TelegramGateway(os.getenv("TELEGRAM_BOT_TOKEN", ""), http) if args.send_telegram else None,
-                         send=args.send_telegram, chat_id=args.chat_id)
+                         send=args.send_telegram, chat_id=args.chat_id,
+                         cta_file=Path(args.cta).resolve() if args.cta else None)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
