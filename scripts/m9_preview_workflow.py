@@ -152,9 +152,12 @@ def job_key(brief: dict[str, Any], media: dict[str, Any]) -> str:
     brief_id = str(brief.get("id") or "")
     if not UUID.fullmatch(brief_id):
         raise ValueError("M9_CREATIVE_BRIEF_ID_REQUIRED")
-    payload = {"brief_id": brief_id, "brief_version": brief.get("version"), "slides": brief.get("slides_json"),
-               "hooks": brief.get("hooks_json"), "cover": media.get("cover"), "body": media.get("body")}
-    return "m9:" + brief_id + ":" + hashlib.sha256(json_bytes(payload)).hexdigest()[:24]
+    # One private-preview delivery per canonical brief revision, regardless of
+    # rotating CDN signatures or newly downloaded media filenames.
+    revision = brief.get("version")
+    if not isinstance(revision, int) or revision < 1:
+        raise ValueError("M9_CREATIVE_BRIEF_VERSION_REQUIRED")
+    return "m9:" + brief_id + ":v" + str(revision)
 
 
 class RemoteError(RuntimeError):
