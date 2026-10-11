@@ -126,6 +126,16 @@ class M9IntegrationContracts(unittest.TestCase):
         self.assertEqual(p["body_paragraphs"], ["전반전이 종료됐다.", "후반전도 종료됐다."])
         self.assertEqual(p["cover_photo_source"], self.media["cover"]["source_url"])
 
+    def test_refuses_tampered_media_bytes(self):
+        import hashlib
+        altered = {**self.media, "cover": {**self.media["cover"],
+            "source_sha256": hashlib.sha256(b"different file").hexdigest()}}
+        with self.assertRaisesRegex(ValueError, "M9_MEDIA_HASH_MISMATCH"):
+            checked_media(altered, self.root)
+        valid = {**self.media, "cover": {**self.media["cover"],
+            "source_sha256": hashlib.sha256((self.root / "cover.jpg").read_bytes()).hexdigest()}}
+        checked_media(valid, self.root)
+
     def test_refuses_unreviewed_media_or_path_traversal(self):
         altered = {**self.media, "editorial_review_only": False}
         with self.assertRaisesRegex(ValueError, "M9_REVIEW_ONLY_REQUIRED"):
