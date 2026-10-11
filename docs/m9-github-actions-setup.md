@@ -17,7 +17,7 @@ The M9 slide renderer is Python Pillow, whereas the existing Supabase Edge Funct
    - `M9_TELEGRAM_BOT_TOKEN`: the existing Telegram editorial bot token from its owner.
    - `M9_TELEGRAM_OWNER_USER_ID`: numeric ID of the bot owner's PRIVATE Telegram chat. Group chats are not accepted by design.
 3. Confirm the original fixed CTA still exists at private `manutd-card-assets/assets/cta.png` and matches SHA256 `65d40cfa3421d343616eeb6d8412c1feac3aa1d051c3793f8086a0710ccfa88c`. The workflow checks both that hash and the 1080×1350 PNG size.
-4. The original Figma-approved brand mark is already supplied in the repository as `assets/manutd_editor_logo.png`, resized losslessly to 86px for the header. The Korean font is fetched during each run and is NOT checked in or uploaded as an artifact.
+4. The original Figma-approved brand mark is already supplied in the repository as `assets/manutd_editor_logo.png`, resized losslessly to 86px for the header. The Korean font is **Pretendard Bold v1.3.9**, downloaded from the official `orioncactus/pretendard` GitHub release path during each upload run; its SHA-256 is verified before rendering. It is NOT committed or uploaded as an artifact. The cover and body renderer now use Pretendard Bold; the approved static CTA retains its existing pixels. SIL Open Font License: https://github.com/orioncactus/pretendard.
 
 ## Safe 2-step operator flow
 
