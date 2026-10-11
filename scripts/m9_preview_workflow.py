@@ -207,7 +207,7 @@ class SupabaseGateway:
     def load_brief(self, identifier: str) -> dict[str, Any]:
         if not UUID.fullmatch(identifier):
             raise ValueError("M9_BRIEF_ID_INVALID")
-        fields = "id,candidate_id,version,slides_json,hooks_json,caption_draft,cta,generated_at,created_at"
+        fields = "id,candidate_id,version,slides_json,hooks_json,caption_draft,cta,generated_at,created_at,evidence_snapshot"
         result = self.request("GET", "/rest/v1/creative_briefs?select=" + fields + "&id=eq." + identifier + "&limit=1")
         if not isinstance(result, list) or len(result) != 1:
             raise ValueError("M9_BRIEF_NOT_FOUND")
