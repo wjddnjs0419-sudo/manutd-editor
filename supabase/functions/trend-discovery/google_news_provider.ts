@@ -61,7 +61,12 @@ export function createGoogleNewsDiscoveryProvider(
           if (!safeHttpsUrl(item.canonicalUrl)) continue;
           const normalized = await normalizeDiscoveryObservation({
             ...item,
-            metadata: {},
+            // Google News RSS includes the publisher in <source>. Preserve
+            // attribution without upgrading discovery data to FACT evidence.
+            sourceCanonicalName: typeof item.metadata.publisher_name === "string"
+              ? item.metadata.publisher_name
+              : item.sourceCanonicalName,
+            metadata: item.metadata,
           }, { provider, query, observedAt });
           if (normalized && inWindow(normalized.publishedAt, window)) {
             result.push(normalized);
