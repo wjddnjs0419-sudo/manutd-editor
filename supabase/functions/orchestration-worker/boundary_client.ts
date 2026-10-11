@@ -76,6 +76,7 @@ function requestBody(jobType: EditorialJobType, payload: Record<string, unknown>
       ...(typeof payload.as_of === "string" ? { as_of: payload.as_of } : {}),
       ...(typeof payload.limit === "number" && Number.isSafeInteger(payload.limit) ? { limit: payload.limit } : {}),
       ...(typeof payload.ranking_date === "string" ? { ranking_date: payload.ranking_date } : {}),
+      ...(payload.refresh_existing_grounding === true ? { refresh_existing_grounding: true } : {}),
       ...(typeof promotionJobId === "string" ? { promotion_job_id: promotionJobId } : {}),
     };
     return Object.keys(value).length === 0 ? undefined : value;
