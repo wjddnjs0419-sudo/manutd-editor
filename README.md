@@ -45,6 +45,10 @@ Production rollout 순서는 linked migration, `source-discovery`, `ground-claim
 `rank-editorial`, `orchestration-worker`, `telegram-morning-brief` Edge Function
 배포입니다. `SOURCE_DISCOVERY_FEEDS_JSON`가 비어 있으면 discovery는 안전한
 `NOOP`으로 완료하며, 이를 위해 09:00 briefing이 외부 feed를 기다리지는 않습니다.
+팩트 출처 피드 등록 예시와 `fact_observed`·`GROUND_CLAIMS` 운영 진단은
+[Grounding recovery runbook](docs/grounding-incident-runbook.md)을 참고하세요.
+새로운 FACT 출처가 등록되면 최근 48시간 소재의 제한된 재검증이 트리거되지만,
+출처가 없으면 `news_eligible`은 여전히 false일 수 있습니다.
 운영 중 문제가 생기면 먼저 M7 Cron/worker invocation을 pause하고, source
 enrichment만 비활성화해도 briefing은 M4 fallback으로 계속 동작합니다.
 
