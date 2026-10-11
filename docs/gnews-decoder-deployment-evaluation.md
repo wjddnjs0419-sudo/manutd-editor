@@ -84,7 +84,7 @@
 
 각 매체 페이지에서 메뉴·광고·관련 기사 영역이 실제 페이지에 모두 나타나는 것은 아니다. 이 표본에서는 개선 parser가 일반 페이지 요소와 73개 noise block(Yahoo), 36개(SI), 74개(TOI) 등을 제외했다. 추출 미리보기와 HTML 전체를 함께 보존하지 않았다.
 
-검증 스크립트는 Python 격리 환경에서 로컬 실행했다. 원문 HTTP 요청은 10회였고 매체 429는 없었다. 800KB 상한은 응답 원시 bytes만으로 메모리를 제한하지는 않는다. Python의 decoded string/DOM parser에는 추가 메모리가 들 수 있으므로 운영 전 peak RSS 측정과 페이지별 동시성 제한이 필요하다.
+본문 검증 스크립트는 로컬 격리 Python 3.14.4 환경에서 실행했다(GitHub runner의 URL 테스트는 Python 3.11). 원문 HTTP 요청은 10회였고 매체 429는 없었다. 800KB 상한은 응답 원시 bytes만으로 메모리를 제한하지는 않는다. Python의 decoded string/DOM parser에는 추가 메모리가 들 수 있으므로 운영 전 peak RSS 측정과 페이지별 동시성 제한이 필요하다.
 
 ## 3. 운영 구조 검토
 
