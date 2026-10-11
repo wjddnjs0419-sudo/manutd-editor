@@ -1,3 +1,5 @@
+**Font note (2026-10-12):** This document describes a historical Noto Sans CJK private-preview sample. The updated GitHub Actions M9 renderer uses **Pretendard Bold v1.3.9**; a separate Pretendard smoke render was verified at 1080×1350 for all three slides with no overflow. The static CTA image is byte-identical. Existing linked historical samples are not retroactively changed.
+
 # M9 news photo → code-rendered carousel: live-source private-preview smoke
 
 Date: 2026-10-11. This is a **manual-input, code-based private preview** of actual October 10, 2026 news imagery. Not a production job or an automatic license clearance.
