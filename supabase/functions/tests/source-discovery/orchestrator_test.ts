@@ -31,6 +31,7 @@ Deno.test("source discovery isolates feed failures and deduplicates observations
 
   assert.equal(result.status, "COMPLETED");
   assert.equal(result.observed, 1);
+  assert.equal(result.factObserved, 1);
   assert.equal(result.duplicates, 1);
   assert.equal(result.failedFeeds, 1);
   assert(saved.includes("new"));
@@ -47,7 +48,7 @@ Deno.test("missing feeds are a successful NOOP", async () => {
     maxBytes: 10_000,
     timeoutMs: 100,
   });
-  assert.deepEqual(result, { status: "NOOP", observed: 0, duplicates: 0, failedFeeds: 0, feedCount: 0 });
+  assert.deepEqual(result, { status: "NOOP", observed: 0, duplicates: 0, failedFeeds: 0, feedCount: 0, factObserved: 0 });
 });
 
 Deno.test("fact feeds enrich RSS summaries with bounded article paragraphs", async () => {
@@ -73,5 +74,6 @@ Deno.test("fact feeds enrich RSS summaries with bounded article paragraphs", asy
   });
 
   assert.equal(result.observed, 1);
+  assert.equal(result.factObserved, 1);
   assert.equal(savedExcerpt, "United tried to build from the back with shorter passes. The manager adjusted the defensive shape after the draw.");
 });
