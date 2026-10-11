@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import urllib.parse
 import uuid
 from typing import Any
 
@@ -34,16 +33,9 @@ def deliver_existing(
     owner_chat_id: str,
 ) -> dict[str, Any]:
     key = job_key(brief, {})
-    query = urllib.parse.quote(key, safe="")
-    rows = store.request(
-        "GET",
-        "/rest/v1/m9_preview_jobs?select=job_key,creative_brief_id,status"
-        f"&job_key=eq.{query}&limit=1",
-        schema="app_private",
-    )
-    if not isinstance(rows, list) or len(rows) != 1:
+    row = store.get_preview(key)
+    if row is None:
         raise ValueError("M9_UPLOADED_PREVIEW_NOT_FOUND")
-    row = rows[0]
     if row.get("creative_brief_id") != brief.get("id") or row.get("status") != "UPLOADED":
         raise ValueError("M9_PREVIEW_NOT_APPROVED_FOR_SEND")
 
