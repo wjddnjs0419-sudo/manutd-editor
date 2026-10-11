@@ -89,7 +89,13 @@ def checked_media(media: dict[str, Any], media_root: Path) -> dict[str, Any]:
         info = media.get(slot)
         if not isinstance(info, dict):
             raise ValueError(f"M9_{slot.upper()}_MEDIA_REQUIRED")
-        safe_local_file(media_root, info.get("file", ""))
+        photo_file = safe_local_file(media_root, info.get("file", ""))
+        expected_sha = info.get("source_sha256")
+        if expected_sha is not None:
+            if not isinstance(expected_sha, str) or not re.fullmatch(r"[a-f0-9]{64}", expected_sha):
+                raise ValueError("M9_MEDIA_HASH_INVALID")
+            if hashlib.sha256(photo_file.read_bytes()).hexdigest() != expected_sha:
+                raise ValueError("M9_MEDIA_HASH_MISMATCH")
         for field in ("source_url", "article_url", "credit"):
             if not isinstance(info.get(field), str) or not info[field].strip():
                 raise ValueError(f"M9_{slot.upper()}_{field.upper()}_REQUIRED")
@@ -360,6 +366,8 @@ def main() -> None:
         cli.error("--send-telegram requires --upload and --chat-id")
     if args.send_telegram and os.getenv("M9_ENABLE_TELEGRAM_PREVIEW") != "YES":
         cli.error("Set M9_ENABLE_TELEGRAM_PREVIEW=YES to allow one private preview send")
+    if args.send_telegram and args.chat_id != os.getenv("TELEGRAM_OWNER_USER_ID"):
+        cli.error("Only the configured Telegram owner private chat can receive M9 previews")
     http = Http()
     needs_remote = args.upload or args.brief_id
     service = SupabaseGateway(os.getenv("SUPABASE_URL", ""),
