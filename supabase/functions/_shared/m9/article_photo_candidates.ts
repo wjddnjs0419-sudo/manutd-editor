@@ -5,10 +5,11 @@
  * Discovery is NOT a grant of permission to republish the discovered photos.
  */
 import { fetchBoundedText } from "../../trend-discovery/search_provider_http.ts";
+import { extractResponsivePublisherPhotos } from "./responsive_media.ts";
 import { safePublisherUrl, isGoogleNewsArticleUrl, resolveGoogleNewsArticleUrl } from "../../trend-discovery/google_news_resolution.ts";
 
 export type PhotoOrigin = "ARTICLE" | "OFFICIAL_CLUB";
-export type PhotoMethod = "JSON_LD" | "OG_IMAGE" | "TWITTER_IMAGE" | "FIGURE";
+export type PhotoMethod = "JSON_LD" | "OG_IMAGE" | "TWITTER_IMAGE" | "FIGURE" | "RESPONSIVE_SRCSET";
 export interface PhotoCandidate {
   readonly image_url: string;
   readonly article_url: string;
@@ -127,13 +128,17 @@ export function extractPublisherImages(html: string, articleUrl: string, origin:
       caption: tags.get("og:image:alt") ?? tags.get("twitter:image:alt"), credit:tags.get("image:credit") });
   }
   photos.push(...figurePhotos(html.slice(0,450000)));
+  photos.push(...extractResponsivePublisherPhotos(html).map(p=>({
+    url:p.url,method:"RESPONSIVE_SRCSET" as const,width:p.width,
+    caption:p.caption,credit:p.credit,
+  })));
   const unique = new Map<string, PhotoCandidate>();
   const publication = date(tags.get("article:published_time"));
   for (const photo of photos) {
     const url = imageUrl(photo.url,article);
     if (!url) continue;
     const width=dimension(photo.width), height=dimension(photo.height);
-    const rank=photo.method==="JSON_LD"?90:photo.method==="OG_IMAGE"?80:photo.method==="TWITTER_IMAGE"?60:50;
+    const rank=photo.method==="RESPONSIVE_SRCSET"?100:photo.method==="JSON_LD"?90:photo.method==="OG_IMAGE"?80:photo.method==="TWITTER_IMAGE"?60:50;
     const score=rank+(width && height && width*height>=810000?10:0)+(string(photo.caption)?3:0);
     const item:PhotoCandidate = {
       image_url:url,article_url:article,origin,discovery_method:photo.method,
