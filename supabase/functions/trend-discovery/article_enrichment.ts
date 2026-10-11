@@ -47,7 +47,7 @@ export function createArticleEnricher(options: ArticleEnricherOptions = {}): Art
     // Publisher URL is useful even if the body is blocked by a paywall.
     if (!body) return resolved;
     const articleExcerpt = extractArticleExcerpt(body, maxExcerptChars);
-    if (!articleExcerpt || articleExcerpt.length <= (observation.excerpt?.length ?? 0)) return resolved;
+    if (!articleExcerpt || (!googleWrapper && articleExcerpt.length <= (observation.excerpt?.length ?? 0))) return resolved;
     return {
       ...resolved,
       excerpt: articleExcerpt,
