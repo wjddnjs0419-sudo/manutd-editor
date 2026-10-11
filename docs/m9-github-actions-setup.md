@@ -1,3 +1,5 @@
+**2026-10-12 setup update:** The original private preview-jobs table and the new public-schema **service-role-only** preview RPCs (claim/get/transition) have both been applied to the live Manutd editor Supabase project. We verified `anon` and `authenticated` cannot execute any of the three RPCs, while `service_role` can. The Python worker now uses these public RPCs rather than querying the `app_private` Data API schema directly. Tests: **37 Python + 32 Deno = 69 passed**. GitHub Repository Secret *values cannot be read by this connector*; user reports they have been added. PR #7 is still a draft and GitHub Actions has not been run or delivered Telegram images.
+
 # M9 manual GitHub Actions worker — setup and review
 
 Status (2026-10-12 KST): **prepared on DRAFT PR #7, not yet deployed/triggered**. The private Supabase `app_private.m9_preview_jobs` migration **HAS already been applied** to Manutd editor (`byymtttpwmllqvggnddm`) on 2026-10-12. No M9 job row or Telegram message has been created in production.
