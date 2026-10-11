@@ -31,8 +31,8 @@ Deno.test("harvests real news and official photo candidates once per URL for eac
    fetch:async(url)=>{
      const u=String(url);
      requests.push(u);
-     if(u.endsWith("/bruno"))return new Response(news,{status:200,headers:{"content-type":"text/html"}});
      if(u.includes("/en/news/bruno"))return new Response(official,{status:200,headers:{"content-type":"text/html"}});
+     if(u.endsWith("/bruno"))return new Response(news,{status:200,headers:{"content-type":"text/html"}});
      if(u.includes("-news.jpg"))return new Response(png(1600,900),{status:200,headers:{"content-type":"image/png"}});
      if(u.includes("-portrait.png"))return new Response(png(1200,1600),{status:200,headers:{"content-type":"image/png"}});
      throw new Error("Unexpected URL "+u);
