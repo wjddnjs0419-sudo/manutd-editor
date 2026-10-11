@@ -1,3 +1,4 @@
+import { resolveGoogleNewsArticleUrl, isGoogleNewsArticleUrl } from "./google_news_resolution.ts";
 import { extractArticleExcerpt } from "../source-discovery/article_extractor.ts";
 import type { DiscoveryObservation } from "./types.ts";
 import { fetchBoundedText, safeHttpsUrl } from "./search_provider_http.ts";
@@ -14,22 +15,44 @@ export type ArticleEnricher = (observation: DiscoveryObservation) => Promise<Dis
 export function createArticleEnricher(options: ArticleEnricherOptions = {}): ArticleEnricher {
   const maxExcerptChars = options.maxExcerptChars ?? 2_400;
   return async (observation) => {
-    const canonicalUrl = safeHttpsUrl(observation.canonicalUrl);
-    if (!canonicalUrl) return observation;
-    const body = await fetchBoundedText(new URL(canonicalUrl), {
+    const originalUrl = safeHttpsUrl(observation.canonicalUrl);
+    if (!originalUrl) return observation;
+    const googleWrapper = isGoogleNewsArticleUrl(originalUrl);
+    const publisherUrl = googleWrapper
+      ? await resolveGoogleNewsArticleUrl(originalUrl, {
+        fetch: options.fetch,
+        timeoutMs: options.timeoutMs,
+      })
+      : originalUrl;
+    // A Google News HTML shell is not an article. Keep the RSS synopsis
+    // rather than extracting arbitrary Google navigation paragraphs.
+    if (!publisherUrl) return observation;
+    const resolved = googleWrapper
+      ? {
+        ...observation,
+        canonicalUrl: publisherUrl,
+        metadata: {
+          ...observation.metadata,
+          google_news_url: originalUrl,
+          publisher_url_resolved: true,
+        },
+      }
+      : observation;
+    const body = await fetchBoundedText(new URL(publisherUrl), {
       fetch: options.fetch,
       timeoutMs: options.timeoutMs,
       maxBytes: options.maxBytes,
       accept: "text/html,application/xhtml+xml",
     });
-    if (!body) return observation;
+    // Publisher URL is useful even if the body is blocked by a paywall.
+    if (!body) return resolved;
     const articleExcerpt = extractArticleExcerpt(body, maxExcerptChars);
-    if (!articleExcerpt || articleExcerpt.length <= (observation.excerpt?.length ?? 0)) return observation;
+    if (!articleExcerpt || articleExcerpt.length <= (observation.excerpt?.length ?? 0)) return resolved;
     return {
-      ...observation,
+      ...resolved,
       excerpt: articleExcerpt,
       metadata: {
-        ...observation.metadata,
+        ...resolved.metadata,
         article_enrichment: "EXTRACTED",
         article_excerpt_chars: articleExcerpt.length,
       },
