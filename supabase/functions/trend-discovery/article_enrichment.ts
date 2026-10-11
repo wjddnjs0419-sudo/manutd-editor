@@ -41,7 +41,7 @@ export function createArticleEnricher(options: ArticleEnricherOptions = {}): Art
     const body = await fetchBoundedText(new URL(publisherUrl), {
       fetch: options.fetch,
       timeoutMs: options.timeoutMs,
-      maxBytes: options.maxBytes,
+      maxBytes: options.maxBytes ?? 650_000,
       accept: "text/html,application/xhtml+xml",
     });
     // Publisher URL is useful even if the body is blocked by a paywall.
