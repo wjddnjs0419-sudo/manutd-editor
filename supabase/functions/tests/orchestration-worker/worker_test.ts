@@ -526,3 +526,20 @@ Deno.test("promotion invocation carries its durable queue job ID for retry recov
 
   assert.equal(invocationPayloads[0]?.promotion_job_id, promotionJobId);
 });
+
+Deno.test("new trusted fact observations trigger a bounded existing-story recheck after source discovery", async () => {
+  for (const factObserved of [0, 2]) {
+    const queue = queueWith([job("sources-1", "DISCOVER_SOURCES")]);
+    const worker = createOrchestrationWorker({
+      queue,
+      invoker: invoker(async () => ({ status: 200, body: { status: "COMPLETED", observed: factObserved, fact_observed: factObserved, feed_count: 1 } })),
+      workerId: "worker-1",
+      now: () => now,
+    });
+    const result = await worker.processBatch();
+    assert.equal(result.succeeded, 1);
+    assert.equal(queue.enqueueCalls.length, 1);
+    assert.equal(queue.enqueueCalls[0]?.jobType, "DISCOVER_TRENDS");
+    assert.equal(queue.enqueueCalls[0]?.payload.refresh_existing_grounding, factObserved > 0 ? true : undefined);
+  }
+});
