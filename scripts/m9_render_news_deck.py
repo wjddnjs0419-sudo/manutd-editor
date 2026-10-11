@@ -179,9 +179,9 @@ def render(job: dict, workdir: Path, output_dir: Path,
         output_files.append({"slide_number": number, "kind": kind, "file": dest.name,
                              "width": W, "height": H})
     if cta_path:
-        cta = Image.open(cta_path)
-        if cta.size != SIZE:
-            raise ValueError("CTA asset must be 1080x1350")
+        with Image.open(cta_path) as cta:
+            if cta.size != SIZE:
+                raise ValueError("CTA asset must be 1080x1350")
         dest = output_dir / "slide_03_cta.png"
         shutil.copyfile(cta_path, dest)  # Exact fixed CTA bytes reused, never regenerated.
         output_files.append({"slide_number": 3, "kind": "CTA",
@@ -194,10 +194,14 @@ def render(job: dict, workdir: Path, output_dir: Path,
         "article_published_at": job["article_published_at"],
         "sources": [
             {"kind": "cover", "photo_url": job["cover_photo_source"],
-             "credit": job["cover_photo_credit"], "sha256": sha256(cover_photo),
+             "credit": job["cover_photo_credit"],
+             "article_url": job.get("cover_source_article_url", job["article_url"]),
+             "sha256": sha256(cover_photo),
              "original_dimensions": list(coversrc.size)},
             {"kind": "body", "photo_url": job["body_photo_source"],
-             "credit": job["body_photo_credit"], "sha256": sha256(body_photo),
+             "credit": job["body_photo_credit"],
+             "article_url": job.get("body_source_article_url", job["article_url"]),
+             "sha256": sha256(body_photo),
              "original_dimensions": list(bodysrc.size)}
         ],
         "slides": output_files
