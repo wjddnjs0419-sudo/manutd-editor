@@ -242,11 +242,14 @@ export function createGnewsResolverApiHandler(options: GnewsResolverApiOptions):
       if (!Number.isInteger(payload.batch_size) || (payload.batch_size as number) < 1 || (payload.batch_size as number) > MAX_BATCH_SIZE) {
         return json({ error: "INVALID_BATCH_SIZE" }, 400);
       }
+      const mode = payload.mode === undefined ? "recent" : payload.mode;
+      if (mode !== "recent" && mode !== "backfill") return json({ error: "INVALID_MODE" }, 400);
       rpcPath = "gnews_resolver_claim_batch";
       rpcBody = {
         p_request_id: payload.request_id,
         p_batch_size: payload.batch_size,
         p_worker_id: "github-actions",
+        p_mode: mode,
       };
     } else if (payload.action === "complete") {
       if (typeof payload.lease_id !== "string" || !UUID.test(payload.lease_id)) return json({ error: "INVALID_LEASE_ID" }, 400);

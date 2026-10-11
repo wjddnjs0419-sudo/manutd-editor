@@ -137,7 +137,7 @@ export function createDiscoveryPromotionRepository(options: RepositoryOptions): 
       const query = new URLSearchParams({
         select: "id,provider_id,source_canonical_name,editorial_role,external_id,canonical_url,google_news_original_url,google_news_article_id,resolved_publisher_url,article_final_url,url_resolution_status,article_fetch_status,article_extraction_status,article_content_excerpt,title,excerpt,published_at,first_observed_at,last_observed_at,platform,engagement,engagement_available,discovery_query_id,content_fingerprint,metadata,story_cluster_id",
         last_observed_at: `gte.${since}`,
-        order: "last_observed_at.asc,id.asc",
+        order: "last_observed_at.desc,id.asc",
         limit: String(Math.max(1, Math.min(500, limit))),
       });
       const andFilters = ["or(provider_id.neq.google-news,url_resolution_status.eq.RESOLVED)"];

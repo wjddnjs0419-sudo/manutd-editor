@@ -71,6 +71,25 @@ class BriefToRequest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"M9_PUBLISHER_ARTICLE_URL_REQUIRED"):
             build_request(x,["i.guim.co.uk"])
 
+    def test_refreshed_linked_source_uses_publisher_url_and_keeps_google_url_as_provenance(self):
+        x=brief()
+        x["evidence_snapshot"]={"sources":[{
+            "canonical_url":"https://www.bbc.com/sport/football/united-story",
+            "excerpt":"BBC article body excerpt about Manchester United.",
+            "editorial_role":"DISCOVERY_COMMUNITY",
+            "metadata":{
+                "google_news_original_url":"https://news.google.com/rss/articles/CBM123456789ABCD",
+                "resolved_publisher_url":"https://www.bbc.com/sport/football/united-story",
+                "article_extraction_status":"EXTRACTED",
+                "article_body_present":True,
+            },
+        }]}
+        result=build_request(x,["i.guim.co.uk"])
+        self.assertEqual(result["publisher_article_urls"],["https://www.bbc.com/sport/football/united-story"])
+        self.assertNotIn("news.google.com",str(result["publisher_article_urls"]))
+        self.assertEqual(result["_provenance"]["google_news_original_urls"],
+                         ["https://news.google.com/rss/articles/CBM123456789ABCD"])
+
     def test_protects_short_english_name_boundaries(self):
         self.assertEqual(recognized_people("Freddie scored his first goal"),[])
         self.assertEqual(recognized_people("Fred criticizes Erik ten Hag"),["Fred","Erik ten Hag"])

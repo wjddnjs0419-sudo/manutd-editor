@@ -48,7 +48,7 @@ create table app_private.gnews_article_url_cache (
   resolved_publisher_url text not null,
   resolved_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
-  constraint gnews_article_url_cache_article_id_check check (google_article_id ~ '^[A-Za-z0-9_-]{1,2000}$'),
+  constraint gnews_article_url_cache_article_id_check check (google_article_id ~ '^[A-Za-z0-9_-]+$' and length(google_article_id) <= 2000),
   constraint gnews_article_url_cache_publisher_url_check check (app_private.is_safe_gnews_publisher_url(resolved_publisher_url))
 );
 
@@ -91,8 +91,8 @@ grant select, insert, update, delete on table app_private.gnews_article_url_cach
 insert into app_private.gnews_article_url_cache (
   google_article_id, original_google_news_url, resolved_publisher_url, resolved_at
 )
-select distinct on (substring(original_url from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]{1,2000})'))
-  substring(original_url from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]{1,2000})'),
+select distinct on (substring(original_url from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]+)'))
+  substring(original_url from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]+)'),
   original_url,
   canonical_url,
   coalesce(updated_at, now())
@@ -102,7 +102,8 @@ from (
   from app_private.discovery_observations
   where provider_id = 'google-news'
 ) existing
-where original_url ~ '^https://news[.]google[.]com/rss/articles/[A-Za-z0-9_-]{1,2000}([/?#].*)?$'
+where original_url ~ '^https://news[.]google[.]com/rss/articles/[A-Za-z0-9_-]+([/?#].*)?$'
+  and length(substring(original_url from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]+)')) <= 2000
   and canonical_url <> original_url
   and app_private.is_safe_gnews_publisher_url(canonical_url)
 on conflict (google_article_id) do nothing;
@@ -112,14 +113,14 @@ set google_news_original_url = coalesce(observation.metadata->>'google_news_url'
     google_news_rss_excerpt = observation.excerpt,
     google_news_article_id = substring(
       coalesce(observation.metadata->>'google_news_url', observation.canonical_url)
-      from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]{1,2000})'
+      from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]+)'
     ),
     resolved_publisher_url = coalesce((
       select cache.resolved_publisher_url
       from app_private.gnews_article_url_cache as cache
       where cache.google_article_id = substring(
         coalesce(observation.metadata->>'google_news_url', observation.canonical_url)
-        from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]{1,2000})'
+        from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]+)'
       )
     ), observation.resolved_publisher_url),
     url_resolution_status = case
@@ -127,11 +128,11 @@ set google_news_original_url = coalesce(observation.metadata->>'google_news_url'
         select 1 from app_private.gnews_article_url_cache as cache
         where cache.google_article_id = substring(
           coalesce(observation.metadata->>'google_news_url', observation.canonical_url)
-          from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]{1,2000})'
+          from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]+)'
         )
       ) then 'RESOLVED'
       when coalesce(observation.metadata->>'google_news_url', observation.canonical_url)
-        ~ '^https://news[.]google[.]com/rss/articles/[A-Za-z0-9_-]{1,2000}([/?#].*)?$' then 'PENDING'
+        ~ '^https://news[.]google[.]com/rss/articles/[A-Za-z0-9_-]+([/?#].*)?$' then 'PENDING'
       else 'EXCLUDED'
     end,
     resolved_at = coalesce(observation.resolved_at, (
@@ -139,7 +140,7 @@ set google_news_original_url = coalesce(observation.metadata->>'google_news_url'
       from app_private.gnews_article_url_cache as cache
       where cache.google_article_id = substring(
         coalesce(observation.metadata->>'google_news_url', observation.canonical_url)
-        from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]{1,2000})'
+        from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]+)'
       )
     )),
     safe_error_category = case
@@ -147,11 +148,11 @@ set google_news_original_url = coalesce(observation.metadata->>'google_news_url'
         select 1 from app_private.gnews_article_url_cache as cache
         where cache.google_article_id = substring(
           coalesce(observation.metadata->>'google_news_url', observation.canonical_url)
-          from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]{1,2000})'
+        from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]+)'
         )
       ) then null
       when coalesce(observation.metadata->>'google_news_url', observation.canonical_url)
-        ~ '^https://news[.]google[.]com/rss/articles/[A-Za-z0-9_-]{1,2000}([/?#].*)?$' then null
+        ~ '^https://news[.]google[.]com/rss/articles/[A-Za-z0-9_-]+([/?#].*)?$' then null
       else 'INVALID_GOOGLE_NEWS_URL'
     end
 where observation.provider_id = 'google-news';
@@ -173,7 +174,8 @@ begin
     return new;
   end if;
   original_url := coalesce(new.google_news_original_url, new.metadata->>'google_news_url', new.canonical_url);
-  article_id := substring(original_url from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]{1,2000})');
+  article_id := substring(original_url from '^https://news[.]google[.]com/rss/articles/([A-Za-z0-9_-]+)');
+  if length(article_id) > 2000 then article_id := null; end if;
   new.google_news_original_url := original_url;
   new.google_news_article_id := coalesce(new.google_news_article_id, article_id);
   new.google_news_rss_excerpt := coalesce(new.google_news_rss_excerpt, new.excerpt);
@@ -200,7 +202,7 @@ alter table app_private.discovery_observations
   add constraint discovery_observations_gnews_extraction_status_check
     check (article_extraction_status in ('NOT_ATTEMPTED', 'EXTRACTED', 'EMPTY_BODY', 'TITLE_NOT_RELEVANT')),
   add constraint discovery_observations_gnews_id_check
-    check (google_news_article_id is null or google_news_article_id ~ '^[A-Za-z0-9_-]{1,2000}$'),
+    check (google_news_article_id is null or (google_news_article_id ~ '^[A-Za-z0-9_-]+$' and length(google_news_article_id) <= 2000)),
   add constraint discovery_observations_gnews_publisher_url_check
     check (resolved_publisher_url is null or app_private.is_safe_gnews_publisher_url(resolved_publisher_url)),
   add constraint discovery_observations_gnews_final_url_check
@@ -235,7 +237,8 @@ create index discovery_observations_gnews_article_id_idx
 create or replace function app_private.gnews_resolver_claim_batch(
   p_request_id text,
   p_batch_size integer,
-  p_worker_id text
+  p_worker_id text,
+  p_mode text
 )
 returns jsonb
 language plpgsql
@@ -256,10 +259,11 @@ begin
   if p_request_id is null or length(p_request_id) not between 8 and 128
     or p_request_id !~ '^[A-Za-z0-9:._-]+$'
     or p_batch_size is null or p_batch_size not between 1 and 30
-    or p_worker_id is distinct from 'github-actions' then
+    or p_worker_id is distinct from 'github-actions'
+    or p_mode is null or p_mode not in ('recent', 'backfill') then
     raise exception 'invalid resolver claim request' using errcode = '22023';
   end if;
-  request_payload := jsonb_build_object('batch_size', p_batch_size, 'worker_id', p_worker_id);
+  request_payload := jsonb_build_object('batch_size', p_batch_size, 'worker_id', p_worker_id, 'mode', p_mode);
   request_fingerprint := md5(request_payload::text);
   select * into request_row from app_private.gnews_resolver_api_requests
     where idempotency_key = p_request_id;
@@ -270,14 +274,14 @@ begin
     return request_row.response;
   end if;
 
-  insert into app_private.gnews_resolver_api_rate_limits(worker_id, window_started_at, request_count)
+  insert into app_private.gnews_resolver_api_rate_limits as rate_limit(worker_id, window_started_at, request_count)
   values (p_worker_id, current_minute, 1)
   on conflict (worker_id) do update set
     window_started_at = excluded.window_started_at,
-    request_count = case when app_private.gnews_resolver_api_rate_limits.window_started_at = excluded.window_started_at
-      then app_private.gnews_resolver_api_rate_limits.request_count + 1 else 1 end,
+    request_count = case when rate_limit.window_started_at = excluded.window_started_at
+      then rate_limit.request_count + 1 else 1 end,
     updated_at = now()
-  returning request_count into request_count;
+  returning rate_limit.request_count into request_count;
   if request_count > 10 then
     return jsonb_build_object('rate_limited', true, 'retry_after_seconds', 60);
   end if;
@@ -314,24 +318,42 @@ begin
     lease_expires_at := now() + interval '20 minutes';
     with eligible as (
       select distinct on (observation.google_news_article_id)
-        observation.id, observation.google_news_article_id, observation.first_observed_at
+        observation.id, observation.google_news_article_id,
+        coalesce(observation.published_at, observation.first_observed_at) as effective_at
       from app_private.discovery_observations as observation
       where observation.provider_id = 'google-news'
         and observation.platform = 'RSS'
         and observation.url_resolution_status in ('PENDING', 'FAILED', 'RATE_LIMITED')
         and observation.google_news_article_id is not null
-        and observation.google_news_original_url ~ '^https://news[.]google[.]com/rss/articles/[A-Za-z0-9_-]{1,2000}([/?#].*)?$'
+        and observation.google_news_original_url ~ '^https://news[.]google[.]com/rss/articles/[A-Za-z0-9_-]+([/?#].*)?$'
         and observation.resolver_attempt_count < 3
         and observation.resolver_next_attempt_at <= now()
         and (observation.resolver_lease_expires_at is null or observation.resolver_lease_expires_at <= now())
+        and ((p_mode = 'recent'
+              and coalesce(observation.published_at, observation.first_observed_at) >= now() - interval '72 hours'
+              and coalesce(observation.published_at, observation.first_observed_at) <= now())
+          or (p_mode = 'backfill'
+              and coalesce(observation.published_at, observation.first_observed_at) < now() - interval '72 hours'))
+        and not exists (
+          select 1 from app_private.discovery_observations as active
+          where active.provider_id = 'google-news'
+            and active.google_news_article_id = observation.google_news_article_id
+            and active.url_resolution_status = 'CLAIMED'
+            and active.resolver_lease_expires_at > now()
+        )
         and not exists (select 1 from app_private.gnews_article_url_cache as cache
           where cache.google_article_id = observation.google_news_article_id)
-      order by observation.google_news_article_id, observation.first_observed_at, observation.id
+      order by observation.google_news_article_id,
+        coalesce(observation.published_at, observation.first_observed_at) desc,
+        observation.last_observed_at desc, observation.id
     ), locked as (
       select observation.id
       from app_private.discovery_observations as observation
       join eligible on eligible.id = observation.id
-      order by observation.first_observed_at, observation.id
+      order by case when p_mode = 'recent' and eligible.effective_at >= now() - interval '24 hours' then 0 else 1 end,
+        case when p_mode = 'recent' then eligible.effective_at end desc,
+        case when p_mode = 'backfill' then eligible.effective_at end asc,
+        observation.id
       for update of observation skip locked
       limit p_batch_size
     ), claimed as (
@@ -347,7 +369,8 @@ begin
       returning observation.id, observation.google_news_article_id,
         observation.google_news_original_url, left(observation.title, 500) as title,
         left(observation.source_canonical_name, 160) as source_canonical_name,
-        observation.published_at
+        observation.published_at, observation.first_observed_at,
+        coalesce(observation.published_at, observation.first_observed_at) as effective_at
     )
     select coalesce(jsonb_agg(jsonb_build_object(
       'id', id,
@@ -356,7 +379,10 @@ begin
       'title', title,
       'source_canonical_name', source_canonical_name,
       'published_at', published_at
-    ) order by id), '[]'::jsonb) into claimed_items from claimed;
+    ) order by case when p_mode = 'recent' and effective_at >= now() - interval '24 hours' then 0 else 1 end,
+      case when p_mode = 'recent' then effective_at end desc,
+      case when p_mode = 'backfill' then effective_at end asc,
+      id), '[]'::jsonb) into claimed_items from claimed;
     response_payload := jsonb_build_object('lease_id', case when jsonb_array_length(claimed_items) = 0 then null else lease_id end,
       'lease_expires_at', case when jsonb_array_length(claimed_items) = 0 then null else lease_expires_at end,
       'items', claimed_items, 'cooldown_until', null);
@@ -439,14 +465,14 @@ begin
     return request_row.response;
   end if;
 
-  insert into app_private.gnews_resolver_api_rate_limits(worker_id, window_started_at, request_count)
+  insert into app_private.gnews_resolver_api_rate_limits as rate_limit(worker_id, window_started_at, request_count)
   values (p_worker_id, current_minute, 1)
   on conflict (worker_id) do update set
     window_started_at = excluded.window_started_at,
-    request_count = case when app_private.gnews_resolver_api_rate_limits.window_started_at = excluded.window_started_at
-      then app_private.gnews_resolver_api_rate_limits.request_count + 1 else 1 end,
+    request_count = case when rate_limit.window_started_at = excluded.window_started_at
+      then rate_limit.request_count + 1 else 1 end,
     updated_at = now()
-  returning request_count into request_count;
+  returning rate_limit.request_count into request_count;
   if request_count > 10 then
     return jsonb_build_object('rate_limited', true, 'retry_after_seconds', 60);
   end if;
@@ -542,14 +568,94 @@ begin
       resolved_publisher_url = case when result_row->>'url_resolution_status' = 'RESOLVED' then result_row->>'resolved_publisher_url' else null end,
       resolved_at = case when result_row->>'url_resolution_status' = 'RESOLVED' then coalesce(resolved_at, now()) else resolved_at end,
       article_fetch_status = result_row->>'article_fetch_status',
-      article_extraction_status = result_row->>'article_extraction_status',
-      article_final_url = result_row->>'article_final_url',
-      article_content_excerpt = result_row->>'article_content_excerpt',
+      article_extraction_status = case
+        when result_row->>'article_extraction_status' = 'EXTRACTED' then 'EXTRACTED'
+        when result_row->>'article_extraction_status' in ('EMPTY_BODY', 'TITLE_NOT_RELEVANT')
+          and observation_row.article_extraction_status <> 'EXTRACTED' then result_row->>'article_extraction_status'
+        else observation_row.article_extraction_status end,
+      article_final_url = coalesce(result_row->>'article_final_url', observation_row.article_final_url),
+      article_content_excerpt = case
+        when result_row->>'article_extraction_status' = 'EXTRACTED' then result_row->>'article_content_excerpt'
+        when result_row->>'article_extraction_status' in ('EMPTY_BODY', 'TITLE_NOT_RELEVANT')
+          and observation_row.article_extraction_status <> 'EXTRACTED' then null
+        else observation_row.article_content_excerpt end,
       safe_error_category = result_row->>'safe_error_category',
       resolver_lease_id = null,
       resolver_lease_expires_at = null,
       resolver_next_attempt_at = next_attempt
     where id = observation_row.id;
+
+    if result_row->>'url_resolution_status' = 'RESOLVED' then
+      update app_private.discovery_observations as duplicate
+      set url_resolution_status = 'RESOLVED',
+          resolved_publisher_url = publisher_url,
+          resolved_at = coalesce(duplicate.resolved_at, now()),
+          article_fetch_status = result_row->>'article_fetch_status',
+          article_extraction_status = case
+            when result_row->>'article_extraction_status' = 'EXTRACTED' then 'EXTRACTED'
+            when result_row->>'article_extraction_status' in ('EMPTY_BODY', 'TITLE_NOT_RELEVANT')
+              and duplicate.article_extraction_status <> 'EXTRACTED' then result_row->>'article_extraction_status'
+            else duplicate.article_extraction_status end,
+          article_final_url = coalesce(result_row->>'article_final_url', duplicate.article_final_url),
+          article_content_excerpt = case
+            when result_row->>'article_extraction_status' = 'EXTRACTED' then result_row->>'article_content_excerpt'
+            when result_row->>'article_extraction_status' in ('EMPTY_BODY', 'TITLE_NOT_RELEVANT')
+              and duplicate.article_extraction_status <> 'EXTRACTED' then null
+            else duplicate.article_content_excerpt end,
+          safe_error_category = result_row->>'safe_error_category',
+          resolver_lease_id = null,
+          resolver_lease_expires_at = null,
+          resolver_next_attempt_at = now()
+      where duplicate.provider_id = 'google-news'
+        and duplicate.google_news_article_id = observation_row.google_news_article_id
+        and duplicate.id <> observation_row.id
+        and duplicate.url_resolution_status in ('PENDING', 'FAILED', 'RATE_LIMITED');
+
+      with linked_sources as (
+        select distinct on (linked.source_observation_id)
+          linked.source_observation_id,
+          linked.google_news_original_url,
+          linked.google_news_article_id
+        from app_private.discovery_observations as linked
+        where linked.provider_id = 'google-news'
+          and linked.google_news_article_id = observation_row.google_news_article_id
+          and linked.source_observation_id is not null
+        order by linked.source_observation_id, linked.id
+      )
+      update app_private.source_observations as source
+      set canonical_url = coalesce(result_row->>'article_final_url', publisher_url),
+          excerpt = case when result_row->>'article_extraction_status' = 'EXTRACTED'
+            then result_row->>'article_content_excerpt' else source.excerpt end,
+          metadata = coalesce(source.metadata, '{}'::jsonb)
+            || jsonb_strip_nulls(jsonb_build_object(
+              'google_news_original_url', linked_sources.google_news_original_url,
+              'google_news_article_id', linked_sources.google_news_article_id,
+              'resolved_publisher_url', publisher_url,
+              'article_final_url', result_row->>'article_final_url',
+              'article_fetch_status', result_row->>'article_fetch_status',
+              'last_article_fetch_status', result_row->>'article_fetch_status',
+              'last_article_extraction_status', result_row->>'article_extraction_status',
+              'article_extraction_status', case
+                when result_row->>'article_extraction_status' = 'EXTRACTED' then 'EXTRACTED'
+                when result_row->>'article_extraction_status' in ('EMPTY_BODY', 'TITLE_NOT_RELEVANT')
+                  and coalesce(source.metadata->>'article_extraction_status', '') <> 'EXTRACTED'
+                  and coalesce(source.metadata->>'article_body_present', 'false') <> 'true'
+                  then result_row->>'article_extraction_status'
+                else null end,
+              'article_content_excerpt', case
+                when result_row->>'article_extraction_status' = 'EXTRACTED'
+                  then result_row->>'article_content_excerpt' else null end,
+              'article_body_present', case
+                when result_row->>'article_extraction_status' = 'EXTRACTED' then true
+                when result_row->>'article_extraction_status' in ('EMPTY_BODY', 'TITLE_NOT_RELEVANT')
+                  and coalesce(source.metadata->>'article_extraction_status', '') <> 'EXTRACTED'
+                  and coalesce(source.metadata->>'article_body_present', 'false') <> 'true' then false
+                else null end
+            ))
+            || jsonb_build_object('article_safe_error_category', coalesce(result_row->'safe_error_category', 'null'::jsonb))
+      from linked_sources
+      where source.id = linked_sources.source_observation_id;
+    end if;
   end loop;
 
   update app_private.discovery_observations as observation
@@ -579,7 +685,8 @@ $function$;
 
 revoke all on function app_private.is_safe_gnews_publisher_url(text) from public, anon, authenticated;
 revoke all on function app_private.capture_gnews_source_identity() from public, anon, authenticated;
-revoke all on function app_private.gnews_resolver_claim_batch(text, integer, text) from public, anon, authenticated;
+revoke all on function app_private.gnews_resolver_claim_batch(text, integer, text, text) from public, anon, authenticated;
 revoke all on function app_private.gnews_resolver_complete_batch(text, text, uuid, jsonb, jsonb, integer) from public, anon, authenticated;
-grant execute on function app_private.gnews_resolver_claim_batch(text, integer, text) to service_role;
+grant execute on function app_private.is_safe_gnews_publisher_url(text) to service_role;
+grant execute on function app_private.gnews_resolver_claim_batch(text, integer, text, text) to service_role;
 grant execute on function app_private.gnews_resolver_complete_batch(text, text, uuid, jsonb, jsonb, integer) to service_role;

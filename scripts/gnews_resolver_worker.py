@@ -99,13 +99,21 @@ class ResolverApiClient:
             raise ResolverApiError("RESOLVER_API_INVALID_RESPONSE")
         return value
 
-    def claim(self, request_id: str, batch_size: int = MAX_BATCH_SIZE) -> dict[str, Any]:
+    def claim(
+        self,
+        request_id: str,
+        batch_size: int = MAX_BATCH_SIZE,
+        mode: str = "recent",
+    ) -> dict[str, Any]:
         if not 1 <= batch_size <= MAX_BATCH_SIZE:
             raise ValueError("INVALID_BATCH_SIZE")
+        if mode not in {"recent", "backfill"}:
+            raise ValueError("INVALID_RESOLVER_MODE")
         return self._post({
             "action": "claim",
             "request_id": request_id,
             "batch_size": batch_size,
+            "mode": mode,
         })
 
     def complete(
@@ -393,10 +401,13 @@ def run_once(
     idempotency_key: str,
     *,
     batch_size: int = MAX_BATCH_SIZE,
+    mode: str = "recent",
     decoder: Callable[[Sequence[Mapping[str, Any]]], Mapping[str, Any]] = run_decoder,
     article_fetcher: Callable[..., Mapping[str, Any]] = fetch_article_page,
 ) -> dict[str, Any]:
-    claim = api.claim(f"{idempotency_key}:claim", batch_size)
+    if mode not in {"recent", "backfill"}:
+        raise ValueError("INVALID_RESOLVER_MODE")
+    claim = api.claim(f"{idempotency_key}:claim", batch_size, mode)
     items = claim.get("items")
     if not isinstance(items, list) or not items:
         return {"status": "NOOP", "claimed": 0, "processed": 0}
@@ -429,6 +440,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--idempotency-key", required=True)
     parser.add_argument("--batch-size", type=int, default=MAX_BATCH_SIZE)
+    parser.add_argument("--mode", choices=("recent", "backfill"), default="recent")
     args = parser.parse_args()
     if not 1 <= args.batch_size <= MAX_BATCH_SIZE:
         parser.error("--batch-size must be between 1 and 30")
@@ -445,6 +457,7 @@ def main() -> int:
             ResolverApiClient(api_url, worker_token),
             args.idempotency_key,
             batch_size=args.batch_size,
+            mode=args.mode,
         )
     except (ResolverApiError, ValueError) as exc:
         # Exceptions contain only fixed categories; tokens and URLs are never printed.

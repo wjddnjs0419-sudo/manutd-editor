@@ -8,6 +8,14 @@ on:
         required: true
         type: boolean
         default: false
+      resolver_mode:
+        description: "Recent 72-hour coverage, or one bounded historical backfill batch"
+        required: true
+        type: choice
+        options:
+          - recent
+          - backfill
+        default: recent
 
 permissions:
   contents: read
@@ -42,6 +50,7 @@ jobs:
       GNEWS_RESOLVER_ENABLED: "true"
       GNEWS_RESOLVER_API_URL: ${{ secrets.GNEWS_RESOLVER_API_URL }}
       GNEWS_RESOLVER_WORKER_TOKEN: ${{ secrets.GNEWS_RESOLVER_WORKER_TOKEN }}
+      RESOLVER_MODE: ${{ inputs.resolver_mode }}
       GITHUB_RUN_IDENTIFIER: github-${{ github.run_id }}:${{ github.run_attempt }}
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
@@ -52,4 +61,4 @@ jobs:
       - name: Install pinned resolver dependencies
         run: python -m pip install --disable-pip-version-check -r scripts/requirements-gnews-decoder-poc.txt
       - name: Resolve one batch of up to 30 observations
-        run: python -m scripts.gnews_resolver_worker --idempotency-key "$GITHUB_RUN_IDENTIFIER" --batch-size 30
+        run: python -m scripts.gnews_resolver_worker --idempotency-key "$GITHUB_RUN_IDENTIFIER" --batch-size 30 --mode "$RESOLVER_MODE"

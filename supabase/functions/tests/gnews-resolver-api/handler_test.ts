@@ -56,13 +56,15 @@ Deno.test("resolver API rejects disabled operation and oversized batches", async
 
 Deno.test("claim response is bounded and never returns the service role key", async () => {
   let rpcPath = "";
+  let rpcBody: Record<string, unknown> = {};
   const handler = createGnewsResolverApiHandler({
     supabaseUrl: "https://example.supabase.co",
     serviceRoleKey: "never-return-this-service-role-key",
     workerToken: "worker-secret",
     enabled: true,
-    fetch: async (input) => {
+    fetch: async (input, init) => {
       rpcPath = new URL(String(input)).pathname;
+      rpcBody = JSON.parse(String(init?.body ?? "{}"));
       return Response.json({
         lease_id: "00000000-0000-4000-8000-000000000001",
         lease_expires_at: "2026-10-12T09:00:00Z",
@@ -89,9 +91,34 @@ Deno.test("claim response is bounded and never returns the service role key", as
 
   assertEquals(response.status, 200);
   assertEquals(rpcPath, "/rest/v1/rpc/gnews_resolver_claim_batch");
+  assertEquals(rpcBody.p_mode, "recent");
   assertStringIncludes(body, "article-123");
   assertEquals(body.includes("never-return-this-service-role-key"), false);
   assertEquals(body.includes("hidden_database_field"), false);
+});
+
+Deno.test("claim mode defaults to recent and only explicit backfill enters history", async () => {
+  const modes: unknown[] = [];
+  const handler = createGnewsResolverApiHandler({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "service-role-key",
+    workerToken: "worker-secret",
+    enabled: true,
+    fetch: async (_input, init) => {
+      modes.push((JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>).p_mode);
+      return Response.json({ lease_id: null, lease_expires_at: null, cooldown_until: null, items: [] });
+    },
+  });
+  const send = (requestId: string, mode?: string) => handler(new Request("https://edge.test", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ action: "claim", request_id: requestId, batch_size: 30, ...(mode === undefined ? {} : { mode }) }),
+  }));
+
+  assertEquals((await send("default-mode-run")).status, 200);
+  assertEquals((await send("explicit-backfill", "backfill")).status, 200);
+  assertEquals((await send("invalid-mode-run", "all")).status, 400);
+  assertEquals(modes, ["recent", "backfill"]);
 });
 
 Deno.test("claim response rejects a non-Google URL or mismatched article ID", async () => {

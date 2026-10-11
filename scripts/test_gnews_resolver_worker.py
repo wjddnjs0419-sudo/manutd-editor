@@ -303,13 +303,35 @@ class GNewsResolverWorkerTests(unittest.TestCase):
             api.claim("workflow-run:attempt-1:claim", 30)
         self.assertEqual(calls, [True])
 
+    def test_claim_defaults_to_recent_and_backfill_is_explicit_and_bounded(self):
+        payloads = []
+
+        def request(_url, *, data, **_kwargs):
+            payloads.append(json.loads(data))
+            response = requests.Response()
+            response.status_code = 200
+            response._content = b'{"items":[],"lease_id":null,"lease_expires_at":null,"cooldown_until":null}'
+            return response
+
+        api = ResolverApiClient(
+            "https://example.supabase.co/functions/v1/gnews-resolver-api",
+            "worker-token",
+            request=request,
+        )
+        api.claim("recent-run:claim", 30)
+        api.claim("backfill-run:claim", 30, "backfill")
+        self.assertEqual([payload["mode"] for payload in payloads], ["recent", "backfill"])
+        self.assertEqual([payload["batch_size"] for payload in payloads], [30, 30])
+        with self.assertRaisesRegex(ValueError, "INVALID_RESOLVER_MODE"):
+            api.claim("invalid-run:claim", 30, "all")
+
     def test_restart_attempt_has_separate_idempotency_keys_for_claim_and_result_write(self):
         class FakeApi:
             def __init__(self):
                 self.request_ids = []
 
-            def claim(self, request_id, batch_size):
-                self.request_ids.append(request_id)
+            def claim(self, request_id, batch_size, mode):
+                self.request_ids.append((request_id, batch_size, mode))
                 return {"lease_id": "lease-7", "items": []}
 
             def complete(self, request_id, lease_id, results, unprocessed_ids, cooldown):
@@ -321,7 +343,7 @@ class GNewsResolverWorkerTests(unittest.TestCase):
         result = run_once(api, "workflow-77:attempt-2", decoder=empty_decoder)
 
         self.assertEqual(result["status"], "NOOP")
-        self.assertEqual(api.request_ids, ["workflow-77:attempt-2:claim"])
+        self.assertEqual(api.request_ids, [("workflow-77:attempt-2:claim", 30, "recent")])
 
 
 if __name__ == "__main__":

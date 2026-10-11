@@ -171,3 +171,22 @@ Deno.test("Google observations without extracted body keep M8 article excerpts e
   assertEquals(item.excerpt, null);
   assertEquals(item.publisherCanonicalUrl, "https://www.bbc.com/sport/football/second-story");
 });
+
+Deno.test("M8 promotion only queries the fresh window and places the newest observations first", async () => {
+  let requestUrl = "";
+  const repository = createDiscoveryPromotionRepository({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "service-role-key",
+    request: async (input) => {
+      requestUrl = String(input);
+      return new Response("[]");
+    },
+  });
+  const asOf = new Date("2026-10-12T12:00:00.000Z");
+  await repository.listFreshUnassigned(asOf, 25, undefined);
+  const query = new URL(requestUrl).searchParams;
+
+  assertEquals(query.get("order"), "last_observed_at.desc,id.asc");
+  assertEquals(query.get("and")?.includes("story_cluster_id.is.null"), true);
+  assertEquals(query.getAll("last_observed_at"), ["gte.2026-10-09T12:00:00.000Z", "lte.2026-10-12T12:00:00.000Z"]);
+});

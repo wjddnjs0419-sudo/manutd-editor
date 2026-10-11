@@ -1,17 +1,24 @@
 # Google News publisher URL resolution runbook
 
-This pipeline is an opt-in, manually invoked resolver for existing discovery observations. It does not change the production environment or apply its migration. Google News remains a discovery provider; it is never treated as a verified source.
+This pipeline is an opt-in, manually invoked resolver for existing discovery observations. The migration is applied only in disposable/staging validation; production settings and schema remain untouched. Google News remains a discovery provider; it is never treated as a verified source.
 
 ## Flow and state
 
 1. The existing RSS discovery provider stores `provider_id=google-news`, its Google RSS canonical URL, provider identity, title, RSS excerpt, fingerprint, and story-cluster references. Search is disabled unless `DISCOVERY_GOOGLE_NEWS_ENABLED=true`.
-2. The Edge function `gnews-resolver-api` accepts an authenticated claim or completion request. Its PostgreSQL functions claim up to 30 unique Google article IDs, lease rows for 20 minutes, rate-limit the worker, and persist idempotency and cooldown state.
+2. The Edge function `gnews-resolver-api` accepts an authenticated claim or completion request. Its PostgreSQL functions claim up to 30 unique Google article IDs, lease rows for 20 minutes, rate-limit the worker, and persist idempotency and cooldown state. A successful result updates every matching discovery row and only the existing `source_observation_id` rows; it never inserts a story or source observation.
 3. The manually dispatched GitHub Actions worker runs `gnews-decoder==0.1.1` with two concurrent signature reads, one batch RPC, and no automatic retry. Google HTTP 429 immediately stops that run and sets a global cooldown.
 4. Each safe publisher URL is fetched sequentially with DNS pinning, bounded redirects, and an 800,000-byte HTML cap. Existing shared search/RSS response limits and non-Google article enrichment limits remain unchanged. Access restrictions, fetch failures, and extraction failures remain separate statuses. Only a relevant extracted excerpt (up to 2,000 characters) is stored; HTML is discarded.
-5. M8 promotes only resolved Google observations that pass its existing ManUtd relevance filter. The canonical source observation uses the publisher URL and retains Google URL/provider identity in metadata. Promotion remains `DISCOVERY_ONLY`; the resolver does not verify claims or relax grounding/editorial eligibility.
+5. M8 promotes only recent, unassigned, resolved Google observations that pass its existing ManUtd relevance filter, newest `last_observed_at` first. For observations already assigned to a story, the resolver refreshes their existing source row directly through the stored `source_observation_id`; M8 does not re-promote them. The canonical source observation uses the publisher URL and retains Google URL/provider identity in metadata. Promotion remains `DISCOVERY_ONLY`; the resolver does not verify claims or relax grounding/editorial eligibility.
 6. M9 receives publisher URLs for image discovery and carries the original Google URL as provenance. Google wrapper URLs and YouTube URLs are rejected at the M9 boundary.
 
 URL resolution and article extraction have independent fields. A resolved publisher URL with a 403, paywall, empty body, or irrelevant article can never be interpreted as a successful extraction.
+
+## Freshness and historical backfill
+
+- The default `recent` mode selects rows whose publication time (or first observation time when publication time is missing) is between now and 72 hours ago. Items from the latest 24 hours are claimed first, then the rest of that window newest-first.
+- The manual `backfill` mode selects rows older than 72 hours and processes oldest-first. Each workflow dispatch claims at most one batch of 30; dispatches never loop through the historical set.
+- Both modes include already-assigned Google observations for URL resolution. Successful resolution preserves the discovery row's Google URL, provider identity, story/source foreign keys, story content, and publication fields. It updates only the linked source row's validated URL and, when present, extracted excerpt/status metadata. Repeated request keys replay their stored response; completed/cache-resolved articles are not decoded again.
+- Empty bodies and 403 responses preserve the existing source excerpt. They never create an extraction success. Resolver completion never changes a claim to `VERIFIED`.
 
 ## Feature flags
 
@@ -33,7 +40,7 @@ Complete these steps in a non-production project/repository first. This branch m
 2. Configure `GNEWS_RESOLVER_WORKER_TOKEN` as the same randomly generated high-entropy secret in the Edge environment and the GitHub `gnews-resolver` environment. Rotate both values together. The service-role key stays in Supabase only.
 3. Add `GNEWS_RESOLVER_API_URL` to the GitHub environment. Restrict the environment to the intended branch and configure required reviewers before setting the two Actions secrets.
 4. Run the resolver workflow with `run_resolver=false` to exercise its offline checks. Verify the Edge API is disabled and rejects missing/incorrect worker credentials.
-5. In staging only, enable the API and dispatch once with `run_resolver=true`. Inspect request counts, status transitions, provenance, cooldown, and lease expiry. Enable Google search separately only when testing discovery input.
+5. In staging only, enable the API and dispatch once with `run_resolver=true` and `resolver_mode=recent`. Use `resolver_mode=backfill` only for an explicitly reviewed, single 30-row historical batch. Inspect request counts, status transitions, provenance, cooldown, and lease expiry. Enable Google search separately only when testing discovery input.
 6. Before any production rollout, verify every item in the production checklist below and approve the migration/deployment/flag changes as distinct operations.
 
 No service-role key, database URL, or Supabase admin credential belongs in GitHub Actions. The API has an 800 KB request cap, a 30-row batch cap, fixed RPC names, a 10-request-per-minute database limit, request-id idempotency, strict result validation, and 20-minute leases. Worker errors and API errors are reduced to safe categories.
@@ -63,7 +70,7 @@ The figures are request/cost bounds, not a recurring monthly forecast. A future 
 
 - [ ] PR reviewed and merged by an authorized maintainer; no auto-merge configured.
 - [ ] Migration reviewed, backed up, and applied through the approved release process; cache/backfill counts and constraints checked.
-- [ ] SQL and Edge tests pass in staging; migration has not been applied by this implementation task.
+- [ ] SQL and Edge tests pass in staging; production migration and deployment remain unapplied by this implementation task.
 - [ ] Supabase service-role secret exists only in the Edge environment; worker token is rotated, shared only between the Edge function and protected GitHub environment.
 - [ ] GitHub `gnews-resolver` environment restricts branches and requires an operator reviewer; secrets are not repository-wide.
 - [ ] Resolver API is deployed with `GNEWS_RESOLVER_ENABLED=false`; unauthenticated, disabled, oversized, unsafe-result, stale-lease, and rate-limit behavior verified.
@@ -76,4 +83,8 @@ The figures are request/cost bounds, not a recurring monthly forecast. A future 
 
 ## Tests
 
-Offline Python and Deno tests use mocked HTTP responses. `supabase/tests/database/024_gnews_resolver_pipeline_test.sql` covers URL validation, duplicate article IDs, cache propagation, original URL provenance, and expired-lease rejection. Do not use `supabase db reset`, `supabase db push`, or a remote migration command just to run it; execute the pgTAP file only against a disposable local/staging database after the migration is intentionally applied there.
+Offline Python and Deno tests use mocked HTTP responses. `supabase/tests/database/024_gnews_resolver_pipeline_test.sql` covers URL validation, duplicate article IDs, linked-source refresh, body/403 behavior, recent/backfill selection, cache propagation, original URL provenance, cooldown, idempotency, and expired-lease recovery. Run it only against an explicitly isolated disposable/staging project with `supabase test db --db-url`; do not reset or push a shared local database or target a linked/production project.
+
+## PR dependency sequence
+
+PR #10 remains a Draft stacked on PR #9 (`codex/gnews-decoder-deployment-validation`). Merge PR #9 first. After it lands, update PR #10's base to `main` or rebase `codex/gnews-resolution-pipeline` onto the merged `main`, resolve any overlap, and rerun the migration, pgTAP, and focused M8/M9/worker checks before review. PR #8's Telegram automation is outside this change.
