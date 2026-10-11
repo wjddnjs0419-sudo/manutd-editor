@@ -221,3 +221,49 @@ Deno.test("runs queries concurrently without exceeding the discovery concurrency
   assert(probe.maxActive > 1, `expected overlapping query work, saw peak ${probe.maxActive}`);
   assert(probe.maxActive <= 4, `expected query work to stay bounded at four, saw peak ${probe.maxActive}`);
 });
+
+Deno.test("limits expensive Google News publisher resolution to four observations per run", async () => {
+  const repo = repository();
+  const all = Array.from({ length: 10 }, (_, index) => observation({
+    providerId: "google-news",
+    sourceRole: "DISCOVERY_COMMUNITY",
+    externalId: `news-${index}`,
+    canonicalUrl: `https://news.google.com/rss/articles/CBMiUniqueGoogleArticle${index}?oc=5`,
+    title: `Manchester United transfer update ${index}`,
+    contentFingerprint: `fingerprint-${index}`,
+  }));
+  const enriched: string[] = [];
+  const result = await runTrendDiscovery({
+    asOf: "2026-09-27T12:00:00.000Z",
+    maxQueries: 1,
+    providers: [provider({ providerId: "google-news", discover: async () => all })],
+    repository: repo,
+    enrichObservation: async (value) => {
+      enriched.push(value.externalId);
+      return value;
+    },
+  });
+  assertEquals(result.observationCount, 10);
+  assertEquals(enriched.length, 4);
+});
+
+Deno.test("bounded article enrichment prioritizes more relevant Manchester United articles", async () => {
+  const repo = repository();
+  const all = [
+    observation({ externalId: "unrelated", title: "Chelsea squad press conference", excerpt: "Liverpool transfer news.", contentFingerprint: "unrelated" }),
+    observation({ externalId: "relevant", title: "Manchester United injury news", excerpt: "Manchester United player returned to training.", contentFingerprint: "relevant", canonicalUrl: "https://www.bbc.com/sport/football/relevant" }),
+  ];
+  const enriched: string[] = [];
+  await runTrendDiscovery({
+    asOf: "2026-09-27T12:00:00.000Z",
+    maxQueries: 1,
+    maxEnrichments: 1,
+    providers: [provider({ discover: async () => all })],
+    repository: repo,
+    enrichObservation: async (value) => {
+      enriched.push(value.externalId);
+      return value;
+    },
+  });
+  assertEquals(enriched, ["relevant"]);
+});

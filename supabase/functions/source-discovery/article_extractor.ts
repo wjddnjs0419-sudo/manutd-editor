@@ -24,7 +24,10 @@ function truncate(value: string, maxChars: number): string {
 export function extractArticleExcerpt(html: string, maxChars: number): string | null {
   if (!Number.isFinite(maxChars) || maxChars < 1) return null;
   const withoutNoise = html.replace(/<(script|style|nav|footer|header|aside)\b[^>]*>[\s\S]*?<\/\1>/giu, " ");
-  const paragraphs = [...withoutNoise.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/giu)]
+  const article = withoutNoise.match(/<article\b[^>]*>([\s\S]*?)<\/article>/iu)?.[1];
+  const main = withoutNoise.match(/<main\b[^>]*>([\s\S]*?)<\/main>/iu)?.[1];
+  const selected = article ?? main ?? withoutNoise;
+  const paragraphs = [...selected.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/giu)]
     .map((match) => plainText(match[1] ?? ""))
     .filter((paragraph) => paragraph.length >= 40);
   const unique = [...new Set(paragraphs)];
