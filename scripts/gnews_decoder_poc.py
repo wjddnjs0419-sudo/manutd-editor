@@ -14,6 +14,7 @@ import socket
 import threading
 import time
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from html import unescape
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -25,6 +26,7 @@ from gnews_decoder import CONSENT_COOKIE, DecodeError, __version__, decode_many
 
 GOOGLE_HOST = "news.google.com"
 GOOGLE_ARTICLE_PATH = re.compile(r"^/rss/articles/[A-Za-z0-9_-]{1,2000}/?$")
+PUBLIC_DNS_HOST = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$")
 GOOGLE_RPC_PATH = "/_/DotsSplashUi/data/batchexecute"
 MAX_ARTICLE_BODY_BYTES = 200_000
 MAX_BODY_EXPERIMENT_BYTES = 800_000
@@ -124,7 +126,7 @@ def validate_publisher_url(value: object) -> str | None:
     if (
         url.scheme != "https"
         or not host
-        or "." not in host
+        or PUBLIC_DNS_HOST.fullmatch(host) is None
         or url.username is not None
         or url.password is not None
         or port not in (None, 443)
@@ -418,6 +420,8 @@ def fetch_article_page(
     timeout_s: float = PUBLISHER_TIMEOUT_SECONDS,
     max_bytes: int = MAX_ARTICLE_BODY_BYTES,
     max_redirects: int = MAX_ARTICLE_REDIRECTS,
+    expected_title: str | None = None,
+    max_excerpt_chars: int = 6_000,
     capture_body: bool = False,
     dns_resolver: Callable[..., list[tuple[Any, ...]]] | None = None,
     request_impl: Callable[
@@ -440,6 +444,7 @@ def fetch_article_page(
         final_url: str | None = None,
         excerpt: str | None = None,
         http_success: bool = False,
+        extraction_rejection_reason: str | None = None,
     ) -> dict[str, Any]:
         value = {
             "status": status,
@@ -448,6 +453,7 @@ def fetch_article_page(
             "http_access_success": http_success,
             "body_extraction_success": excerpt is not None,
             "article_excerpt": excerpt,
+            "extraction_rejection_reason": extraction_rejection_reason,
             "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
             "content_length_bytes": observed_content_length,
             "bytes_received": observed_bytes,
@@ -559,13 +565,19 @@ def fetch_article_page(
         charset = re.search(r"charset=([A-Za-z0-9._-]+)", content_type)
         encoding = charset.group(1) if charset else "utf-8"
         html = body.decode(encoding, errors="replace")
-        excerpt = extract_article_excerpt(html, max_chars=6_000)
+        extraction = extract_article_content(
+            html,
+            max_chars=max(1, min(6_000, int(max_excerpt_chars))),
+            expected_title=expected_title,
+        )
+        excerpt = extraction["excerpt"]
         if excerpt is None:
             return result(
-                "HTTP_ACCESS_SUCCESS_BODY_NOT_EXTRACTED",
+                extraction["rejection_reason"] or "HTTP_ACCESS_SUCCESS_BODY_NOT_EXTRACTED",
                 http_status=status_code,
                 final_url=current_url,
                 http_success=True,
+                extraction_rejection_reason=extraction["rejection_reason"],
             )
         return result(
             "ARTICLE_BODY_EXTRACTED",
@@ -804,6 +816,26 @@ def run_decoder(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     success_count = sum(item["conversion_success"] for item in article_results)
     get_metrics = [item for item in metrics if item.get("method") == "GET"]
     rpc_metrics = [item for item in metrics if item.get("method") == "POST"]
+    retry_after_seconds = None
+    if any(item.get("status") == 429 for item in metrics):
+        for metric in metrics:
+            if metric.get("status") != 429 or not metric.get("retry_after"):
+                continue
+            value = str(metric["retry_after"]).strip()
+            try:
+                retry_after_seconds = int(value)
+            except ValueError:
+                try:
+                    retry_at = parsedate_to_datetime(value)
+                    retry_after_seconds = max(
+                        0,
+                        int((retry_at - datetime.now(retry_at.tzinfo)).total_seconds()),
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    retry_after_seconds = None
+            if retry_after_seconds is not None:
+                retry_after_seconds = max(60, min(21_600, retry_after_seconds))
+                break
     return {
         "decoder_version": __version__,
         "selected_article_count": len(records),
@@ -831,6 +863,7 @@ def run_decoder(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             rpc_metrics[-1].get("elapsed_ms") if rpc_metrics else None
         ),
         "google_http_429_observed": any(item.get("status") == 429 for item in metrics),
+        "retry_after_seconds": retry_after_seconds,
         "request_count": len(metrics),
         "request_metrics": metrics,
         "fatal_error": fatal_error,

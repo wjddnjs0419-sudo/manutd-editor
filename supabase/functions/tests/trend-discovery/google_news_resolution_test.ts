@@ -113,26 +113,15 @@ Deno.test("rejects invalid signatures, unsafe returned URLs and unavailable Goog
   assert.equal(unsafe, null);
 });
 
-Deno.test("resolved news is extracted from the publisher rather than the Google navigation shell", async () => {
+Deno.test("Google News observations are left for the external resolver worker", async () => {
   const urls: string[] = [];
   const enrich = createArticleEnricher({
-    fetch: async (input) => {
-      const url = String(input);
-      urls.push(url);
-      if (url.includes("news.google.com/articles/")) return new Response('<div data-n-a-sg="sig" data-n-a-ts="1791700000"></div>');
-      if (url.includes("batchexecute")) return new Response(successRpc());
-      if (url === publisher) return new Response('<html><body><article><p>Manchester United have confirmed Bruno Fernandes returned to first-team training this morning.</p><p>The midfield player completed a full training session ahead of the next fixture.</p></article></body></html>');
-      throw new Error("Unexpected request");
-    },
-    maxExcerptChars: 500,
+    fetch: async (input) => { urls.push(String(input)); return new Response("unexpected"); },
   });
-  const result = await enrich(example());
-  assert.equal(result.canonicalUrl, publisher);
-  assert.equal(result.metadata.google_news_url, googleUrl);
-  assert.equal(result.metadata.publisher_url_resolved, true);
-  assert.equal(result.metadata.article_enrichment, "EXTRACTED");
-  assert.match(result.excerpt ?? "", /returned to first-team training/);
-  assert.equal(urls.length, 3);
+  const source = example();
+  const result = await enrich(source);
+  assert.deepEqual(result, source);
+  assert.equal(urls.length, 0);
 });
 
 Deno.test("failed Google resolution retains the original headline and RSS link", async () => {
@@ -141,17 +130,13 @@ Deno.test("failed Google resolution retains the original headline and RSS link",
   assert.deepEqual(await enrich(source), source);
 });
 
-Deno.test("publisher URL remains usable when its article page is inaccessible", async () => {
+Deno.test("Google News resolution failures never trigger a publisher fetch in the Edge runtime", async () => {
+  const urls: string[] = [];
   const enrich = createArticleEnricher({
-    fetch: async (input) => {
-      const url = String(input);
-      if (url.includes("news.google.com/articles/")) return new Response('<div data-n-a-sg="sig" data-n-a-ts="1791700000"></div>');
-      if (url.includes("batchexecute")) return new Response(successRpc());
-      return new Response("paywalled", { status: 403 });
-    },
+    fetch: async (input) => { urls.push(String(input)); return new Response("paywalled", { status: 403 }); },
   });
   const result = await enrich(example());
-  assert.equal(result.canonicalUrl, publisher);
+  assert.equal(result.canonicalUrl, googleUrl);
   assert.equal(result.excerpt, "Bruno Fernandes is back in training.");
-  assert.equal(result.metadata.article_enrichment, undefined);
+  assert.equal(urls.length, 0);
 });

@@ -17,42 +17,23 @@ export function createArticleEnricher(options: ArticleEnricherOptions = {}): Art
   return async (observation) => {
     const originalUrl = safeHttpsUrl(observation.canonicalUrl);
     if (!originalUrl) return observation;
-    const googleWrapper = isGoogleNewsArticleUrl(originalUrl);
-    const publisherUrl = googleWrapper
-      ? await resolveGoogleNewsArticleUrl(originalUrl, {
-        fetch: options.fetch,
-        timeoutMs: options.timeoutMs,
-      })
-      : originalUrl;
-    // A Google News HTML shell is not an article. Keep the RSS synopsis
-    // rather than extracting arbitrary Google navigation paragraphs.
-    if (!publisherUrl) return observation;
-    const resolved = googleWrapper
-      ? {
-        ...observation,
-        canonicalUrl: publisherUrl,
-        metadata: {
-          ...observation.metadata,
-          google_news_url: originalUrl,
-          publisher_url_resolved: true,
-        },
-      }
-      : observation;
-    const body = await fetchBoundedText(new URL(publisherUrl), {
+    // Google News URL conversion and publisher fetch are handled by the
+    // separately leased GitHub worker; Edge must preserve the RSS URL.
+    if (isGoogleNewsArticleUrl(originalUrl)) return observation;
+    const body = await fetchBoundedText(new URL(originalUrl), {
       fetch: options.fetch,
       timeoutMs: options.timeoutMs,
       maxBytes: options.maxBytes ?? 650_000,
       accept: "text/html,application/xhtml+xml",
     });
-    // Publisher URL is useful even if the body is blocked by a paywall.
-    if (!body) return resolved;
+    if (!body) return observation;
     const articleExcerpt = extractArticleExcerpt(body, maxExcerptChars);
-    if (!articleExcerpt || (!googleWrapper && articleExcerpt.length <= (observation.excerpt?.length ?? 0))) return resolved;
+    if (!articleExcerpt || articleExcerpt.length <= (observation.excerpt?.length ?? 0)) return observation;
     return {
-      ...resolved,
+      ...observation,
       excerpt: articleExcerpt,
       metadata: {
-        ...resolved.metadata,
+        ...observation.metadata,
         article_enrichment: "EXTRACTED",
         article_excerpt_chars: articleExcerpt.length,
       },

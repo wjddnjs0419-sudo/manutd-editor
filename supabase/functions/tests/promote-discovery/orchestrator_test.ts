@@ -25,6 +25,10 @@ const observation = (overrides: Partial<PromotionObservation> = {}): PromotionOb
   discoveryQueryId: "query-1",
   contentFingerprint: "fingerprint-1",
   metadata: { entities: ["Bruno Fernandes"], topic_family: "INJURY" },
+  publisherCanonicalUrl: "https://www.bbc.com/sport/football/bruno-update",
+  googleNewsOriginalUrl: "https://news.google.com/rss/articles/google-article-1",
+  articleFetchStatus: "FETCHED",
+  articleExtractionStatus: "EXTRACTED",
   storyClusterId: null,
   ...overrides,
 });
@@ -50,8 +54,8 @@ function repository(
       stories.push(story);
       return { id: story.id, created: true };
     },
-    async assignObservation(observationId, storyClusterId) {
-      calls.push(`assign:${observationId}:${storyClusterId}`);
+    async assignObservation(observationId, storyClusterId, sourceObservationId) {
+      calls.push(`assign:${observationId}:${storyClusterId}:${sourceObservationId}`);
       const item = observations.find((value) => value.id === observationId);
       if (item) item.storyClusterId = storyClusterId;
     },
@@ -84,7 +88,8 @@ Deno.test("promotion attaches fresh observations to an existing safe story", asy
   const result = await promoteDiscovery({ asOf: "2026-09-29T00:10:00.000Z", repository: repo });
   assertEquals(result as unknown, { status: "COMPLETED", observationsProcessed: 1, storiesCreated: 0, storiesUpdated: 1, claimsCreated: 1, editorialCandidatesEnsured: 1, affectedStoryIds: ["story-existing"] });
   assertEquals(repo.calls.filter((item) => item.startsWith("upsertStory")).length, 1);
-  assertEquals(repo.calls.some((item) => item === "assign:observation-1:story-existing"), true);
+  assertEquals(repo.calls.some((item) => item === "assign:observation-1:story-existing:source-observation-1"), true);
+  assertEquals(repo.calls.indexOf("source:observation-1") < repo.calls.indexOf("assign:observation-1:story-existing:source-observation-1"), true);
   assertEquals(repo.claims[0], {
     observationId: "observation-1",
     storyClusterId: "story-existing",
@@ -107,6 +112,21 @@ Deno.test("promotion never creates a verified claim from discovery evidence", as
   const repo = repository([observation({ sourceRole: "DISCOVERY_COMPETITOR" })]);
   await promoteDiscovery({ asOf: "2026-09-29T00:10:00.000Z", repository: repo });
   assertEquals((repo.claims[0] as { status: string }).status, "DISCOVERY_ONLY");
+});
+
+Deno.test("Google News articles without Manchester United relevance do not create M8 candidates", async () => {
+  const repo = repository([observation({
+    title: "Chelsea sign a new midfielder after a medical",
+    excerpt: "Chelsea completed a transfer deal with the midfielder.",
+    contentFingerprint: "irrelevant-google-fingerprint",
+    metadata: { entities: ["Chelsea"], topic_family: "TRANSFER" },
+  })]);
+
+  const result = await promoteDiscovery({ asOf: "2026-09-29T00:10:00.000Z", repository: repo });
+
+  assertEquals(result.observationsProcessed, 0);
+  assertEquals(repo.candidates.length, 0);
+  assertEquals(repo.claims.length, 0);
 });
 
 Deno.test("promotion summary lists each created and updated story ID once", async () => {

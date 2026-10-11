@@ -21,6 +21,10 @@ const observation: PromotionObservation = {
   discoveryQueryId: "query-1",
   contentFingerprint: "fingerprint-1",
   metadata: {},
+  publisherCanonicalUrl: "https://news.example/article-1",
+  googleNewsOriginalUrl: "https://news.google.com/rss/articles/article-1",
+  articleFetchStatus: "NOT_ATTEMPTED",
+  articleExtractionStatus: "NOT_ATTEMPTED",
   storyClusterId: null,
 };
 
@@ -59,15 +63,111 @@ Deno.test("promotion retry re-reads observations already assigned by the same jo
   });
   const asOf = new Date("2026-09-30T13:01:00.000Z");
   const list = repository.listFreshUnassigned as unknown as (asOf: Date, limit: number, promotionJobId: string) => Promise<readonly PromotionObservation[]>;
-  const assign = repository.assignObservation as unknown as (observationId: string, storyClusterId: string, promotionJobId: string) => Promise<void>;
+  const assign = repository.assignObservation as unknown as (observationId: string, storyClusterId: string, sourceObservationId: string, promotionJobId: string) => Promise<void>;
 
   const rows = await list.call(repository, asOf, 10, promotionJobId);
-  await assign.call(repository, "observation-1", "story-1", promotionJobId);
+  await assign.call(repository, "observation-1", "story-1", "source-observation-1", promotionJobId);
 
   const query = new URL(requests.find((item) => item.url.includes("/discovery_observations?"))!.url).searchParams;
-  assertEquals(query.get("or"), `(story_cluster_id.is.null,promotion_job_id.eq.${promotionJobId})`);
+  assertEquals(decodeURIComponent(query.get("and") ?? "").includes(`or(story_cluster_id.is.null,promotion_job_id.eq.${promotionJobId})`), true);
   assertEquals(rows.length, 1);
   assertEquals(rows[0]?.storyClusterId, "story-1");
   const patch = requests.find((item) => item.method === "PATCH");
-  assertEquals(patch?.body, { story_cluster_id: "story-1", promotion_job_id: promotionJobId });
+  assertEquals(patch?.body, { story_cluster_id: "story-1", source_observation_id: "source-observation-1", promotion_job_id: promotionJobId });
+});
+
+Deno.test("Google publisher provenance reaches M8 source observations without replacing discovery identity", async () => {
+  const requests: { url: string; method: string; body: Record<string, unknown> | null }[] = [];
+  const repository = createDiscoveryPromotionRepository({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "service-role-key",
+    request: async (input, init) => {
+      const url = String(input);
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      requests.push({ url, method: init?.method ?? "GET", body });
+      if (url.includes("/discovery_observations?")) return new Response(JSON.stringify([{
+        id: "observation-google-1",
+        provider_id: "google-news",
+        source_canonical_name: "BBC Sport",
+        editorial_role: "DISCOVERY_COMMUNITY",
+        external_id: "google-article-1",
+        canonical_url: "https://news.google.com/rss/articles/google-article-1",
+        google_news_original_url: "https://news.google.com/rss/articles/google-article-1",
+        google_news_article_id: "google-article-1",
+        resolved_publisher_url: "https://www.bbc.com/sport/football/united-story",
+        url_resolution_status: "RESOLVED",
+        article_extraction_status: "EXTRACTED",
+        excerpt: "Google News RSS summary that must not become article body.",
+        article_content_excerpt: "BBC article body excerpt about Manchester United.",
+        title: "Manchester United confirm a squad update",
+        published_at: "2026-09-29T13:00:00.000Z",
+        first_observed_at: "2026-09-29T13:01:00.000Z",
+        last_observed_at: "2026-09-29T13:01:00.000Z",
+        platform: "RSS",
+        engagement: {},
+        engagement_available: false,
+        discovery_query_id: "query-1",
+        content_fingerprint: "fingerprint-google-1",
+        metadata: { google_news_original_url: "https://news.google.com/rss/articles/google-article-1" },
+        story_cluster_id: null,
+      }]));
+      if (url.includes("/information_sources?")) return new Response(JSON.stringify([{ id: "bbc-source" }]));
+      if (url.includes("/source_observations?")) return new Response(JSON.stringify([{ id: "bbc-observation" }]));
+      return new Response("[]");
+    },
+  });
+  const list = repository.listFreshUnassigned as unknown as (asOf: Date, limit: number) => Promise<readonly PromotionObservation[]>;
+
+  const [item] = await list.call(repository, new Date("2026-09-30T00:00:00.000Z"), 10);
+  assert(item);
+  assertEquals(item.canonicalUrl, "https://news.google.com/rss/articles/google-article-1");
+  assertEquals(item.publisherCanonicalUrl, "https://www.bbc.com/sport/football/united-story");
+  assertEquals(item.excerpt, "BBC article body excerpt about Manchester United.");
+
+  await repository.ensureSourceObservation(item);
+  const sourceWrite = requests.find((entry) => entry.url.includes("/source_observations?"));
+  assertEquals(sourceWrite?.body?.canonical_url, "https://www.bbc.com/sport/football/united-story");
+  assertEquals(sourceWrite?.body?.excerpt, "BBC article body excerpt about Manchester United.");
+  assertEquals((sourceWrite?.body?.metadata as Record<string, unknown>).google_news_original_url, "https://news.google.com/rss/articles/google-article-1");
+  const discoveryQuery = new URL(requests.find((entry) => entry.url.includes("/discovery_observations?"))!.url).searchParams;
+  assertEquals(decodeURIComponent(discoveryQuery.get("and") ?? "").includes("url_resolution_status.eq.RESOLVED"), true);
+});
+
+Deno.test("Google observations without extracted body keep M8 article excerpts empty", async () => {
+  const repository = createDiscoveryPromotionRepository({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "service-role-key",
+    request: async (input) => {
+      if (String(input).includes("/discovery_observations?")) return new Response(JSON.stringify([{
+        id: "observation-google-2",
+        provider_id: "google-news",
+        source_canonical_name: "BBC Sport",
+        editorial_role: "DISCOVERY_COMMUNITY",
+        external_id: "google-article-2",
+        canonical_url: "https://news.google.com/rss/articles/google-article-2",
+        google_news_original_url: "https://news.google.com/rss/articles/google-article-2",
+        resolved_publisher_url: "https://www.bbc.com/sport/football/second-story",
+        url_resolution_status: "RESOLVED",
+        article_extraction_status: "TITLE_NOT_RELEVANT",
+        excerpt: "RSS summary is preserved in discovery storage.",
+        article_content_excerpt: null,
+        title: "Manchester United team news",
+        first_observed_at: "2026-09-29T13:01:00.000Z",
+        last_observed_at: "2026-09-29T13:01:00.000Z",
+        platform: "RSS",
+        engagement: {},
+        engagement_available: false,
+        content_fingerprint: "fingerprint-google-2",
+        metadata: {},
+        story_cluster_id: null,
+      }]));
+      return new Response("[]");
+    },
+  });
+  const list = repository.listFreshUnassigned as unknown as (asOf: Date, limit: number) => Promise<readonly PromotionObservation[]>;
+
+  const [item] = await list.call(repository, new Date("2026-09-30T00:00:00.000Z"), 10);
+  assert(item);
+  assertEquals(item.excerpt, null);
+  assertEquals(item.publisherCanonicalUrl, "https://www.bbc.com/sport/football/second-story");
 });

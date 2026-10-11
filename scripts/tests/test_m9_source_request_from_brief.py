@@ -15,7 +15,7 @@ def brief(cover="알렉스 퍼거슨 경의 올드 트래퍼드 복귀 장면",
             {"slide_number":2,"visual_direction":{"subject":body}},
         ]},
         "evidence_snapshot":{"sources":[
-            {"canonical_url":"https://news.google.com/rss/articles/CBM123456789ABCD","editorial_role":"DISCOVERY_COMMUNITY"},
+            {"canonical_url":"https://news.google.com/rss/articles/CBM123456789ABCD","resolved_publisher_url":"https://www.bbc.com/sport/football/united","google_news_original_url":"https://news.google.com/rss/articles/CBM123456789ABCD","editorial_role":"DISCOVERY_COMMUNITY"},
             {"canonical_url":"https://www.theguardian.com/football/2026/oct/10/match-report","editorial_role":"FACT_PRIMARY"},
             {"canonical_url":"https://www.manutd.com/en/news/detail/ferguson","editorial_role":"OFFICIAL"},
             {"canonical_url":"https://instagram.com/example","editorial_role":"DISCOVERY_COMMUNITY"},
@@ -29,6 +29,11 @@ class BriefToRequest(unittest.TestCase):
         self.assertEqual(result["publisher_article_urls"][0],
                          "https://www.theguardian.com/football/2026/oct/10/match-report")
         self.assertEqual(len(result["publisher_article_urls"]),2)
+        self.assertEqual(result["publisher_article_urls"][1],
+                         "https://www.bbc.com/sport/football/united")
+        self.assertNotIn("news.google.com", str(result["publisher_article_urls"]))
+        self.assertEqual(result["_provenance"]["google_news_original_urls"],
+                         ["https://news.google.com/rss/articles/CBM123456789ABCD"])
         self.assertEqual(result["official_article_urls"],
                          ["https://www.manutd.com/en/news/detail/ferguson"])
         self.assertEqual(result["slots"][0]["subject_aliases"][0],"Sir Alex Ferguson")
@@ -57,6 +62,14 @@ class BriefToRequest(unittest.TestCase):
             build_request(x,["i.guim.co.uk"])
         with self.assertRaisesRegex(ValueError,"M9_OPERATOR_IMAGE_HOST_ALLOWLIST_REQUIRED"):
             build_request(brief(),[])
+
+    def test_unresolved_google_wrapper_is_not_an_m9_photo_source(self):
+        x=brief()
+        x["evidence_snapshot"]={"sources":[
+            {"canonical_url":"https://news.google.com/rss/articles/CBM123456789ABCD","editorial_role":"DISCOVERY_COMMUNITY"}
+        ]}
+        with self.assertRaisesRegex(ValueError,"M9_PUBLISHER_ARTICLE_URL_REQUIRED"):
+            build_request(x,["i.guim.co.uk"])
 
     def test_protects_short_english_name_boundaries(self):
         self.assertEqual(recognized_people("Freddie scored his first goal"),[])

@@ -16,6 +16,7 @@
  * CDN hosts are explicit trusted configuration, not derived from fetched HTML.
  */
 import { harvestArticlePhotos, type M9PhotoHarvestJob } from "../supabase/functions/_shared/m9/photo_harvest.ts";
+import { isGoogleNewsArticleUrl, safePublisherUrl } from "../supabase/functions/trend-discovery/google_news_resolution.ts";
 
 function object(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -23,6 +24,7 @@ function object(value: unknown): value is Record<string, unknown> {
 export function validateM9SourceRequest(value: unknown): {
   job: M9PhotoHarvestJob;
   allowed_image_hosts: string[];
+  google_news_original_urls: string[];
 } {
   if (!object(value) || !Array.isArray(value.publisher_article_urls) ||
       !Array.isArray(value.slots) || !Array.isArray(value.allowed_image_hosts)) {
@@ -32,8 +34,14 @@ export function validateM9SourceRequest(value: unknown): {
   const officialUrls = value.official_article_urls ?? [];
   if (!Array.isArray(officialUrls) || sourceUrls.length < 1 ||
       sourceUrls.length > 5 || officialUrls.length > 5 ||
-      ![...sourceUrls, ...officialUrls].every(v => typeof v === "string" && v.startsWith("https://"))) {
+      ![...sourceUrls, ...officialUrls].every(v => typeof v === "string" && safePublisherUrl(v) !== null &&
+        !isVideoHost(new URL(v).hostname) && !isGoogleHost(new URL(v).hostname))) {
     throw new Error("M9_SOURCE_URLS_INVALID");
+  }
+  const googleOriginals = value.google_news_original_urls ?? [];
+  if (!Array.isArray(googleOriginals) || googleOriginals.length > 20 ||
+    !googleOriginals.every((url) => typeof url === "string" && isGoogleNewsArticleUrl(url))) {
+    throw new Error("M9_SOURCE_PROVENANCE_INVALID");
   }
   const validSlots = ["COVER_NEWS", "BODY_NEWS"] as const;
   if (value.slots.length !== 2 ||
@@ -57,7 +65,20 @@ export function validateM9SourceRequest(value: unknown): {
       slots: value.slots as unknown as M9PhotoHarvestJob["slots"],
     },
     allowed_image_hosts: hosts as string[],
+    google_news_original_urls: googleOriginals as string[],
   };
+}
+
+function isVideoHost(host: string): boolean {
+  const normalized = host.toLowerCase().replace(/\.$/u, "");
+  return normalized === "youtu.be" || normalized === "youtube.com" || normalized.endsWith(".youtube.com") ||
+    normalized === "youtube-nocookie.com" || normalized.endsWith(".youtube-nocookie.com");
+}
+
+function isGoogleHost(host: string): boolean {
+  const normalized = host.toLowerCase().replace(/\.$/u, "");
+  return normalized === "google.com" || normalized.endsWith(".google.com") || normalized.startsWith("google.") ||
+    normalized === "googleusercontent.com" || normalized.endsWith(".googleusercontent.com");
 }
 
 export async function collectM9ForWorker(
@@ -79,6 +100,11 @@ export async function collectM9ForWorker(
     rights_status: "UNVERIFIED" as const,
     candidate_count: result.candidate_count,
     selections: result.selections,
+    source_provenance: {
+      publisher_article_urls: request.job.publisher_article_urls,
+      google_news_original_urls: request.google_news_original_urls,
+      source_type: "creative_briefs.evidence_snapshot.sources",
+    },
   };
 }
 

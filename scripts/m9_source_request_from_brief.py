@@ -4,7 +4,7 @@
 No new football claims, no LLM subject guessing. If the brief is missing
 credited publisher URLs or contains multiple competing named subjects, fail
 closed and request manual editorial selection. Google News wrappers remain
-intact for the existing Deno Google News -> publisher URL resolver.
+provenance only; photo discovery requires an already resolved publisher URL.
 
 Trusted photo CDN hosts come ONLY from operator configuration, never from
 untrusted article metadata.
@@ -43,7 +43,8 @@ CURATED_PERSON_ALIASES: dict[str, tuple[str, ...]] = {
 ROLES = {"FACT_PRIMARY": 0, "FACT_INDEPENDENT": 1, "OFFICIAL": 2,
          "DISCOVERY_COMMUNITY": 5, "DISCOVERY_OFFICIAL": 3}
 SOCIAL_HOSTS = {"instagram.com", "www.instagram.com", "x.com", "twitter.com",
-                "www.youtube.com", "youtube.com", "t.me", "www.tiktok.com"}
+                "www.youtube.com", "youtube.com", "youtu.be", "m.youtube.com",
+                "t.me", "www.tiktok.com"}
 M9_SLOT_LABELS = ("COVER_NEWS", "BODY_NEWS")
 
 def is_publishable_source_url(value: object) -> bool:
@@ -58,9 +59,7 @@ def is_publishable_source_url(value: object) -> bool:
             host.endswith(".localhost") or ":" in host or \
             re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host):
             return False
-        if host in ("google.com", "www.google.com"):
-            return False
-        if host == "news.google.com" and not re.match(r"^/(?:rss/)?(?:articles|read)/",url.path):
+        if host == "google.com" or host.endswith(".google.com") or host.startswith("google.") or host.endswith(".googleusercontent.com"):
             return False
         return True
     except ValueError:
@@ -101,7 +100,9 @@ def source_pages(snapshot: dict[str,Any]) -> tuple[list[str],list[str]]:
     scored:list[tuple[int,int,str,bool]] = []
     for index,source in enumerate(sources):
         if not isinstance(source,dict):continue
-        url=source.get("canonical_url")
+        metadata=source.get("metadata") if isinstance(source.get("metadata"),dict) else {}
+        url=(source.get("resolved_publisher_url") or metadata.get("resolved_publisher_url")
+             or source.get("canonical_url"))
         if not is_publishable_source_url(url):continue
         publisher = urlsplit(url).hostname or ""
         official = publisher.lower() in ("manutd.com","www.manutd.com")
@@ -150,6 +151,13 @@ def build_request(
             else:raise ValueError(f"M9_PHOTO_SUBJECT_NOT_IDENTIFIED_PAGE_{index+1}")
         subjects.append(recognized[0])
     news,official=source_pages(snapshot)
+    google_original_urls=[]
+    for source in snapshot.get("sources",[]):
+        if not isinstance(source,dict):continue
+        metadata=source.get("metadata") if isinstance(source.get("metadata"),dict) else {}
+        original=source.get("google_news_original_url") or metadata.get("google_news_original_url") or metadata.get("google_news_url")
+        if isinstance(original,str) and original.startswith("https://news.google.com/rss/articles/") and original not in google_original_urls:
+            google_original_urls.append(original)
     return {
         "publisher_article_urls":news,
         "official_article_urls":official,
@@ -160,6 +168,7 @@ def build_request(
             "brief_id":brief.get("id"),
             "subject_names":subjects,
             "source_type":"creative_briefs.evidence_snapshot.sources",
+            "google_news_original_urls":google_original_urls[:20],
             "requires_human_photo_review":True,
             "auto_publish":False,
         },

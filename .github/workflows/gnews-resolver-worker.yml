@@ -1,0 +1,55 @@
+name: Google News publisher resolver
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_resolver:
+        description: "Run one bounded batch against the configured resolver API"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gnews-resolver-worker
+  cancel-in-progress: false
+
+jobs:
+  offline-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned resolver dependencies
+        run: python -m pip install --disable-pip-version-check -r scripts/requirements-gnews-decoder-poc.txt
+      - name: Run offline Python resolver and M9 checks
+        run: python -m unittest scripts.test_gnews_decoder_poc scripts.test_gnews_resolver_worker scripts.tests.test_m9_source_request_from_brief -v
+
+  resolve-one-batch:
+    if: inputs.run_resolver
+    needs: offline-checks
+    runs-on: ubuntu-latest
+    environment: gnews-resolver
+    timeout-minutes: 15
+    env:
+      GNEWS_RESOLVER_ENABLED: "true"
+      GNEWS_RESOLVER_API_URL: ${{ secrets.GNEWS_RESOLVER_API_URL }}
+      GNEWS_RESOLVER_WORKER_TOKEN: ${{ secrets.GNEWS_RESOLVER_WORKER_TOKEN }}
+      GITHUB_RUN_IDENTIFIER: github-${{ github.run_id }}:${{ github.run_attempt }}
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned resolver dependencies
+        run: python -m pip install --disable-pip-version-check -r scripts/requirements-gnews-decoder-poc.txt
+      - name: Resolve one batch of up to 30 observations
+        run: python -m scripts.gnews_resolver_worker --idempotency-key "$GITHUB_RUN_IDENTIFIER" --batch-size 30

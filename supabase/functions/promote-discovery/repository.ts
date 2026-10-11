@@ -1,4 +1,5 @@
 import type { DiscoveryObservation } from "../trend-discovery/types.ts";
+import { safePublisherUrl } from "../trend-discovery/google_news_resolution.ts";
 import type { DiscoveryPromotionRepository, PromotionObservation, PromotionStory, PromotionStoryInput } from "./types.ts";
 
 interface RepositoryOptions {
@@ -33,6 +34,28 @@ function observation(value: unknown): PromotionObservation | null {
   const platform = row.platform;
   const publishedAt = row.published_at === null ? null : string(row.published_at);
   if (!providerId || !sourceCanonicalName || !externalId || !canonicalUrl || !title || !firstObservedAt || !lastObservedAt || typeof sourceRole !== "string" || typeof platform !== "string" || !string(row.content_fingerprint)) return null;
+  const googleNewsOriginalUrl = providerId === "google-news"
+    ? string(row.google_news_original_url) ?? string(record(row.metadata).google_news_url) ?? canonicalUrl
+    : null;
+  const articleExtractionStatus = string(row.article_extraction_status) ?? "NOT_ATTEMPTED";
+  const articleFetchStatus = string(row.article_fetch_status) ?? "NOT_ATTEMPTED";
+  const publisherCanonicalUrl = providerId === "google-news"
+    ? safePublisherUrl(string(row.article_final_url) ?? string(row.resolved_publisher_url) ?? "")
+    : safePublisherUrl(canonicalUrl);
+  const excerpt = providerId === "google-news"
+    ? articleExtractionStatus === "EXTRACTED" ? string(row.article_content_excerpt) : null
+    : row.excerpt === null ? null : string(row.excerpt);
+  const metadata = {
+    ...record(row.metadata),
+    ...(providerId === "google-news" ? {
+      google_news_original_url: googleNewsOriginalUrl,
+      google_news_article_id: string(row.google_news_article_id),
+      resolved_publisher_url: publisherCanonicalUrl,
+      url_resolution_status: string(row.url_resolution_status),
+      article_fetch_status: articleFetchStatus,
+      article_extraction_status: articleExtractionStatus,
+    } : {}),
+  };
   return {
     id: String(row.id ?? ""),
     providerId,
@@ -41,7 +64,7 @@ function observation(value: unknown): PromotionObservation | null {
     externalId,
     canonicalUrl,
     title,
-    excerpt: row.excerpt === null ? null : string(row.excerpt),
+    excerpt,
     publishedAt,
     observedAt: lastObservedAt,
     firstObservedAt,
@@ -51,7 +74,11 @@ function observation(value: unknown): PromotionObservation | null {
     engagementAvailable: row.engagement_available === true,
     discoveryQueryId: string(row.discovery_query_id) ?? "",
     contentFingerprint: string(row.content_fingerprint)!,
-    metadata: record(row.metadata),
+    metadata,
+    publisherCanonicalUrl,
+    googleNewsOriginalUrl,
+    articleFetchStatus,
+    articleExtractionStatus,
     storyClusterId: typeof row.story_cluster_id === "string" ? row.story_cluster_id : null,
   };
 }
@@ -108,13 +135,15 @@ export function createDiscoveryPromotionRepository(options: RepositoryOptions): 
     async listFreshUnassigned(asOf, limit, promotionJobId) {
       const since = new Date(asOf.getTime() - 72 * 60 * 60 * 1000).toISOString();
       const query = new URLSearchParams({
-        select: "id,provider_id,source_canonical_name,editorial_role,external_id,canonical_url,title,excerpt,published_at,first_observed_at,last_observed_at,platform,engagement,engagement_available,discovery_query_id,content_fingerprint,metadata,story_cluster_id",
+        select: "id,provider_id,source_canonical_name,editorial_role,external_id,canonical_url,google_news_original_url,google_news_article_id,resolved_publisher_url,article_final_url,url_resolution_status,article_fetch_status,article_extraction_status,article_content_excerpt,title,excerpt,published_at,first_observed_at,last_observed_at,platform,engagement,engagement_available,discovery_query_id,content_fingerprint,metadata,story_cluster_id",
         last_observed_at: `gte.${since}`,
         order: "last_observed_at.asc,id.asc",
         limit: String(Math.max(1, Math.min(500, limit))),
       });
-      if (promotionJobId) query.set("or", `(story_cluster_id.is.null,promotion_job_id.eq.${promotionJobId})`);
-      else query.set("story_cluster_id", "is.null");
+      const andFilters = ["or(provider_id.neq.google-news,url_resolution_status.eq.RESOLVED)"];
+      if (promotionJobId) andFilters.push(`or(story_cluster_id.is.null,promotion_job_id.eq.${promotionJobId})`);
+      else andFilters.push("story_cluster_id.is.null");
+      query.set("and", `(${andFilters.join(",")})`);
       query.append("last_observed_at", `lte.${asOf.toISOString()}`);
       const rows = await request(`/rest/v1/discovery_observations?${query}`, {}, "app_private");
       return Array.isArray(rows) ? rows.flatMap((value) => { const item = observation(value); return item?.id ? [item] : []; }) : [];
@@ -146,17 +175,18 @@ export function createDiscoveryPromotionRepository(options: RepositoryOptions): 
       if (!inserted || typeof inserted.id !== "string") throw new Error("STORY_PROMOTION_PERSISTENCE_ERROR");
       return { id: inserted.id, created: true };
     },
-    async assignObservation(observationId, storyClusterId, promotionJobId) {
-      await request(`/rest/v1/discovery_observations?id=eq.${encodeURIComponent(observationId)}&story_cluster_id=is.null`, { method: "PATCH", headers: { prefer: "return=minimal" }, body: JSON.stringify({ story_cluster_id: storyClusterId, ...(promotionJobId ? { promotion_job_id: promotionJobId } : {}) }) }, "app_private");
+    async assignObservation(observationId, storyClusterId, sourceObservationId, promotionJobId) {
+      await request(`/rest/v1/discovery_observations?id=eq.${encodeURIComponent(observationId)}&story_cluster_id=is.null`, { method: "PATCH", headers: { prefer: "return=minimal" }, body: JSON.stringify({ story_cluster_id: storyClusterId, source_observation_id: sourceObservationId, ...(promotionJobId ? { promotion_job_id: promotionJobId } : {}) }) }, "app_private");
     },
     async ensureSourceObservation(item) {
       const sourceQuery = new URLSearchParams({ select: "id", canonical_name: `eq.${item.sourceCanonicalName}`, limit: "1" });
       let source = await first(`/rest/v1/information_sources?${sourceQuery}`);
       if (!source || typeof source.id !== "string") {
-        source = await first("/rest/v1/information_sources", { method: "POST", headers: { prefer: "return=representation" }, body: JSON.stringify({ canonical_name: item.sourceCanonicalName, entity_type: "MEDIA_OUTLET", aliases: [], website_url: new URL(item.canonicalUrl).origin, reliability_score: 0, reliability_rationale: "Discovery provider; not a verification source.", editorial_role: item.sourceRole, active: true }) });
+        source = await first("/rest/v1/information_sources", { method: "POST", headers: { prefer: "return=representation" }, body: JSON.stringify({ canonical_name: item.sourceCanonicalName, entity_type: "MEDIA_OUTLET", aliases: [], website_url: new URL(item.publisherCanonicalUrl ?? item.canonicalUrl).origin, reliability_score: 0, reliability_rationale: "Discovery provider; not a verification source.", editorial_role: item.sourceRole, active: true }) });
       }
       if (!source || typeof source.id !== "string") throw new Error("SOURCE_REGISTRY_PERSISTENCE_ERROR");
-      const payload = { information_source_id: source.id, editorial_role: item.sourceRole, external_id: item.externalId, canonical_url: item.canonicalUrl, title: item.title, excerpt: item.excerpt, published_at: item.publishedAt, observed_at: item.lastObservedAt, discovery_signal: 0.7, content_fingerprint: item.contentFingerprint, metadata: { ...item.metadata, discovery_observation_id: item.id } };
+      const sourceUrl = item.publisherCanonicalUrl ?? item.canonicalUrl;
+      const payload = { information_source_id: source.id, editorial_role: item.sourceRole, external_id: item.externalId, canonical_url: sourceUrl, title: item.title, excerpt: item.excerpt, published_at: item.publishedAt, observed_at: item.lastObservedAt, discovery_signal: 0.7, content_fingerprint: item.contentFingerprint, metadata: { ...item.metadata, discovery_observation_id: item.id, discovery_provider_id: item.providerId, discovery_external_id: item.externalId, ...(item.providerId === "google-news" ? { google_news_original_url: item.googleNewsOriginalUrl ?? item.canonicalUrl, google_news_article_id: item.metadata.google_news_article_id ?? null, resolved_publisher_url: sourceUrl, article_body_present: item.articleExtractionStatus === "EXTRACTED" } : {}) } };
       const saved = await first("/rest/v1/source_observations?on_conflict=information_source_id%2Cexternal_id", { method: "POST", headers: { prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify(payload) }, "app_private");
       if (!saved || typeof saved.id !== "string") throw new Error("SOURCE_OBSERVATION_PERSISTENCE_ERROR");
       return saved.id;

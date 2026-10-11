@@ -4,6 +4,10 @@ export interface PromotionObservation extends DiscoveryObservation {
   readonly id: string;
   readonly firstObservedAt: string;
   readonly lastObservedAt: string;
+  readonly publisherCanonicalUrl: string | null;
+  readonly googleNewsOriginalUrl: string | null;
+  readonly articleFetchStatus: string;
+  readonly articleExtractionStatus: string;
   storyClusterId: string | null;
 }
 
@@ -32,7 +36,7 @@ export interface DiscoveryPromotionRepository {
   listFreshUnassigned(asOf: Date, limit: number, promotionJobId?: string): Promise<readonly PromotionObservation[]>;
   listStories(asOf: Date): Promise<readonly PromotionStory[]>;
   upsertStory(input: PromotionStoryInput): Promise<{ id: string; created: boolean }>;
-  assignObservation(observationId: string, storyClusterId: string, promotionJobId?: string): Promise<void>;
+  assignObservation(observationId: string, storyClusterId: string, sourceObservationId: string, promotionJobId?: string): Promise<void>;
   ensureSourceObservation(observation: PromotionObservation): Promise<string>;
   ensureDiscoveryClaim(input: { observationId: string; storyClusterId: string; sourceObservationId: string; status: "DISCOVERY_ONLY" }): Promise<void>;
   ensureEditorialCandidate(input: { storyClusterId: string; rankingDate: string; observation: PromotionObservation }): Promise<void>;

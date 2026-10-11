@@ -15,10 +15,11 @@ export interface RoutedDiscoveryProviderOptions {
 function enabled(
   readEnv: (name: string) => string | undefined,
   name: string,
+  defaultEnabled = true,
 ): boolean {
   const value = readEnv(name);
-  return value === undefined ||
-    !["false", "0", "off", "no"].includes(value.trim().toLowerCase());
+  if (value === undefined) return defaultEnabled;
+  return !["false", "0", "off", "no"].includes(value.trim().toLowerCase());
 }
 
 function isEntityQuery(query: DiscoveryQuery): boolean {
@@ -65,10 +66,8 @@ export function createRoutedDiscoveryProviders(
 ): readonly DiscoveryProvider[] {
   const readEnv = options.readEnv ?? ((name: string) => Deno.env.get(name));
   const providers: DiscoveryProvider[] = [...(options.trustedProviders ?? [])];
-  if (
-    options.googleNewsProvider &&
-    enabled(readEnv, "DISCOVERY_GOOGLE_NEWS_ENABLED")
-  ) providers.push(options.googleNewsProvider);
+  const googleNewsEnabled = readEnv("DISCOVERY_GOOGLE_NEWS_ENABLED")?.trim().toLowerCase() === "true";
+  if (options.googleNewsProvider && googleNewsEnabled) providers.push(options.googleNewsProvider);
   if (options.gdeltProvider && enabled(readEnv, "DISCOVERY_GDELT_ENABLED")) {
     providers.push(options.gdeltProvider);
   }

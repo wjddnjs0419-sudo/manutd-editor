@@ -104,3 +104,29 @@ Deno.test("provider env switches disable search without disabling trusted feeds"
   for (const provider of providers) await provider.discover(base);
   assertEquals(calls, ["trusted:team"]);
 });
+
+Deno.test("Google News search defaults off while GDELT and trusted feeds retain their settings", async () => {
+  const calls: string[] = [];
+  const providers = createRoutedDiscoveryProviders({
+    searchProfile: "FAST",
+    trustedProviders: [fake("trusted", calls)],
+    googleNewsProvider: fake("google", calls),
+    gdeltProvider: fake("gdelt", calls),
+    readEnv: () => undefined,
+  });
+
+  for (const provider of providers) await provider.discover(base);
+
+  assertEquals(calls, ["trusted:team", "gdelt:team"]);
+});
+
+Deno.test("Google News search only enables for an explicit true flag", async () => {
+  const calls: string[] = [];
+  const providers = createRoutedDiscoveryProviders({
+    searchProfile: "FAST",
+    googleNewsProvider: fake("google", calls),
+    readEnv: () => "enabled",
+  });
+  for (const provider of providers) await provider.discover(base);
+  assertEquals(calls, []);
+});

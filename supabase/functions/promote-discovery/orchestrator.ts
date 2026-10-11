@@ -1,4 +1,5 @@
 import { clusterObservations } from "../trend-discovery/clustering.ts";
+import { isTrendRelevant } from "../trend-discovery/relevance.ts";
 import { businessDate } from "../_shared/m6/business_date.ts";
 import type { PromotionObservation, PromotionStory, DiscoveryPromotionRepository, PromotionSummary } from "./types.ts";
 
@@ -109,8 +110,13 @@ export async function promoteDiscovery(options: PromoteDiscoveryOptions): Promis
   const asOf = asOfDate(options.asOf);
   const limit = options.limit ?? 100;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("INVALID_PROMOTION_LIMIT");
-  const observations = [...await options.repository.listFreshUnassigned(asOf, limit, options.promotionJobId)];
-  if (observations.length > limit) throw new Error("PROMOTION_LIMIT_EXCEEDED");
+  const listedObservations = [...await options.repository.listFreshUnassigned(asOf, limit, options.promotionJobId)];
+  if (listedObservations.length > limit) throw new Error("PROMOTION_LIMIT_EXCEEDED");
+  const observations = listedObservations.filter((item) => item.providerId !== "google-news" || isTrendRelevant({
+    title: item.title,
+    excerpt: item.excerpt,
+    entities: strings(record(item.metadata).entities),
+  }));
   if (observations.length === 0 && !options.refreshExistingGrounding) return { status: "COMPLETED", observationsProcessed: 0, storiesCreated: 0, storiesUpdated: 0, claimsCreated: 0, editorialCandidatesEnsured: 0, affectedStoryIds: [] };
   const stories = [...await options.repository.listStories(asOf)];
   const clusters = clusterObservations(observations);
@@ -141,8 +147,8 @@ export async function promoteDiscovery(options: PromoteDiscoveryOptions): Promis
     else storiesUpdated += 1;
     affectedStoryIds.add(story.id);
     for (const item of items) {
-      await options.repository.assignObservation(item.id, story.id, options.promotionJobId);
       const sourceObservationId = await options.repository.ensureSourceObservation(item);
+      await options.repository.assignObservation(item.id, story.id, sourceObservationId, options.promotionJobId);
       await options.repository.ensureDiscoveryClaim({ observationId: item.id, storyClusterId: story.id, sourceObservationId, status: "DISCOVERY_ONLY" });
       await options.repository.ensureEditorialCandidate({ storyClusterId: story.id, rankingDate, observation: item });
       claimsCreated += 1;

@@ -29,3 +29,11 @@ Deno.test("article pages have priority over official fallback pages",async()=>{
  assertEquals(c[0]?.origin,"ARTICLE");
  assertEquals(c.at(-1)?.origin,"OFFICIAL_CLUB");
 });
+Deno.test("M9 photo collection uses resolved publisher URLs and never resolves Google links itself",async()=>{
+ const urls:string[]=[];
+ await collectPublisherImages([
+  {url:"https://news.google.com/rss/articles/google-id",origin:"ARTICLE"},
+  {url:"https://www.bbc.com/sport/football/united-story",origin:"ARTICLE"},
+ ],{fetch:async(input)=>{urls.push(String(input));return new Response(html);}});
+ assertEquals(urls,["https://www.bbc.com/sport/football/united-story"]);
+});
