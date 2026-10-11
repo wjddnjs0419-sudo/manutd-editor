@@ -1,3 +1,5 @@
+**STATUS UPDATE (2026-10-12):** The private `app_private.m9_preview_jobs` migration is now APPLIED to the live Manutd editor Supabase project. GitHub Actions manual upload and separate owner-approved send are prepared in PR #7; no production PNG upload or Telegram message has been sent yet. See `docs/m9-github-actions-setup.md` for the current instructions.
+
 # M9 Automated private Telegram preview worker
 
 Status (2026-10-12 KST): **implemented and locally exercised on live Guardian photo sources; NOT deployed to production**.
