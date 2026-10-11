@@ -8,9 +8,9 @@ Deno.test("promotion handler authenticates and forwards bounded search context",
     now: () => new Date("2026-09-29T00:00:00.000Z"),
     run: async (input) => { received = input; return { status: "COMPLETED", observationsProcessed: 0, storiesCreated: 0, storiesUpdated: 0, claimsCreated: 0, editorialCandidatesEnsured: 0, affectedStoryIds: [] }; },
   });
-  const response = await handler(new Request("https://example.test", { method: "POST", headers: { authorization: "Bearer promotion-secret" }, body: JSON.stringify({ as_of: "2026-09-29T01:00:00.000Z", limit: 20, ranking_date: "2026-09-29", promotion_job_id: "99999999-9999-4999-8999-999999999999" }) }));
+  const response = await handler(new Request("https://example.test", { method: "POST", headers: { authorization: "Bearer promotion-secret" }, body: JSON.stringify({ as_of: "2026-09-29T01:00:00.000Z", limit: 20, ranking_date: "2026-09-29", promotion_job_id: "99999999-9999-4999-8999-999999999999", refresh_existing_grounding: true }) }));
   assertEquals(response.status, 200);
-  assertEquals(received, { asOf: new Date("2026-09-29T01:00:00.000Z"), limit: 20, rankingDate: "2026-09-29", promotionJobId: "99999999-9999-4999-8999-999999999999" });
+  assertEquals(received, { asOf: new Date("2026-09-29T01:00:00.000Z"), limit: 20, rankingDate: "2026-09-29", promotionJobId: "99999999-9999-4999-8999-999999999999", refreshExistingGrounding: true });
 });
 
 Deno.test("promotion handler rejects unsafe methods, credentials, and limits", async () => {
