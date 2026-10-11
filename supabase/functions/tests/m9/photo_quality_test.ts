@@ -54,7 +54,7 @@ Deno.test("rejects unapproved hosts, redirects, and non-images with no unbounded
   let calls=0;
   const fake:typeof fetch=async()=>{
     calls++;
-    return new Response(png(1500,1100),{status:200,headers:{"content-type":"image/png"}});
+    return new Response(png(1500,1100).buffer as ArrayBuffer,{status:200,headers:{"content-type":"image/png"}});
   };
   assertEquals(allowedPhotoImageUrl("https://evil.example.com/a.jpg",["images.example.org"]),false);
   assertEquals(allowedPhotoImageUrl("http://images.example.org/a.jpg",["images.example.org"]),false);
@@ -110,7 +110,7 @@ Deno.test("shortlist probes the real image bytes and respects host allowlist",as
     fetch:async(_input,init)=>{
       assertEquals(init?.redirect,"manual");
       assertEquals(new Headers(init?.headers).get("range"),"bytes=0-131071");
-      return new Response(jpg(2000,1300),{status:206,headers:{"content-type":"image/jpeg"}});
+      return new Response(jpg(2000,1300).buffer as ArrayBuffer,{status:206,headers:{"content-type":"image/jpeg"}});
     },
   });
   assertEquals(selected.status,"CANDIDATES_FOR_REVIEW");
