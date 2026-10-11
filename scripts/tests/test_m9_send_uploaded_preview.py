@@ -18,10 +18,9 @@ class FakeStore:
         self.fail_sign=fail_sign
         self.signed=[]
         self.transitions=[]
-    def request(self,method,path,payload=None,schema=None):
-        assert method=="GET"
-        assert schema=="app_private"
-        return [{"job_key":self.key,"creative_brief_id":BRIEF["id"],"status":self.status}]
+    def get_preview(self, key):
+        assert key == self.key
+        return {"job_key":self.key,"creative_brief_id":BRIEF["id"],"status":self.status}
     def signed_url(self,path):
         self.signed.append(path)
         if self.fail_sign:raise ValueError("M9_SIGN_FAILED")
