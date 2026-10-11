@@ -1,0 +1,94 @@
+#!/usr/bin/env -S deno run --allow-read --allow-write --allow-net
+/**
+ * M9: approved article URLs + subject aliases -> ranked REAL photo candidate JSON.
+ * This is a CLI boundary for a Python-capable renderer worker. Never publishes.
+ *
+ * Usage:
+ *   deno run --allow-read --allow-write --allow-net \
+ *     scripts/m9_collect_media.ts request.json photo_candidates.json
+ *
+ * request.json requires:
+ * { publisher_article_urls: [...], official_article_urls: [...],
+ *   slots: [{ slot:"COVER_NEWS", subject_aliases:["Michael Carrick"] },
+ *           { slot:"BODY_NEWS", subject_aliases:["Dominic Solanke"] }],
+ *   allowed_image_hosts:["i.guim.co.uk"] }
+ *
+ * CDN hosts are explicit trusted configuration, not derived from fetched HTML.
+ */
+import { harvestArticlePhotos, type M9PhotoHarvestJob } from "../supabase/functions/_shared/m9/photo_harvest.ts";
+
+function object(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+export function validateM9SourceRequest(value: unknown): {
+  job: M9PhotoHarvestJob;
+  allowed_image_hosts: string[];
+} {
+  if (!object(value) || !Array.isArray(value.publisher_article_urls) ||
+      !Array.isArray(value.slots) || !Array.isArray(value.allowed_image_hosts)) {
+    throw new Error("M9_SOURCE_REQUEST_INVALID");
+  }
+  const sourceUrls = value.publisher_article_urls;
+  const officialUrls = value.official_article_urls ?? [];
+  if (!Array.isArray(officialUrls) || sourceUrls.length < 1 ||
+      sourceUrls.length > 5 || officialUrls.length > 5 ||
+      ![...sourceUrls, ...officialUrls].every(v => typeof v === "string" && v.startsWith("https://"))) {
+    throw new Error("M9_SOURCE_URLS_INVALID");
+  }
+  const validSlots = ["COVER_NEWS", "BODY_NEWS"] as const;
+  if (value.slots.length !== 2 ||
+      value.slots[0]?.slot !== validSlots[0] ||
+      value.slots[1]?.slot !== validSlots[1] ||
+      !value.slots.every(s => object(s) && Array.isArray(s.subject_aliases) &&
+        s.subject_aliases.length >= 1 && s.subject_aliases.length <= 6 &&
+        s.subject_aliases.every((name: unknown) => typeof name === "string" && name.trim().length >= 4))) {
+    throw new Error("M9_SUBJECT_ALIASES_INVALID");
+  }
+  const hosts = value.allowed_image_hosts;
+  if (hosts.length < 1 || hosts.length > 12 ||
+      !hosts.every(x => typeof x === "string" &&
+        /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/u.test(x) && !x.includes(".."))) {
+    throw new Error("M9_TRUSTED_IMAGE_HOSTS_REQUIRED");
+  }
+  return {
+    job: {
+      publisher_article_urls: sourceUrls as string[],
+      official_article_urls: officialUrls as string[],
+      slots: value.slots as unknown as M9PhotoHarvestJob["slots"],
+    },
+    allowed_image_hosts: hosts as string[],
+  };
+}
+
+export async function collectM9ForWorker(
+  input: unknown,
+  opts: { fetch?: typeof fetch; now?: Date } = {},
+) {
+  const request = validateM9SourceRequest(input);
+  const result = await harvestArticlePhotos(request.job, {
+    allowedImageHosts: request.allowed_image_hosts,
+    fetch: opts.fetch,
+    now: opts.now,
+    maxSourcePages: 5,
+    maxImageProbes: 8,
+  });
+  return {
+    schema_version: "m9-media-v1" as const,
+    status: result.status,
+    review_only: true as const,
+    rights_status: "UNVERIFIED" as const,
+    candidate_count: result.candidate_count,
+    selections: result.selections,
+  };
+}
+
+if (import.meta.main) {
+  if (Deno.args.length !== 2) throw new Error("Usage: m9_collect_media.ts request.json candidates.json");
+  const request = JSON.parse(await Deno.readTextFile(Deno.args[0]));
+  const result = await collectM9ForWorker(request);
+  await Deno.writeTextFile(Deno.args[1], JSON.stringify(result, null, 2));
+  console.log(JSON.stringify({
+    status: result.status, candidates: result.candidate_count,
+    selected_slots: result.selections.filter(s => s.selected !== null).length,
+  }));
+}
