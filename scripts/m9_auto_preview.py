@@ -76,8 +76,9 @@ def run_once(
         "attempted": 0, "sent": 0, "failed": 0,
         "reason": "PRIVATE_EDITORIAL_REVIEW_ONLY",
     }
+    max_attempts = min(6, max_sends * 2)
     for brief in ids:
-        if summary["sent"] >= max_sends:
+        if summary["sent"] >= max_sends or summary["attempted"] >= max_attempts:
             break
         key = job_key(brief, {})
         if store.get_preview(key) is not None:
@@ -99,7 +100,7 @@ def run_once(
         try:
             # Output (including signed URLs and photo metadata) stays private.
             finished = command(args, text=True, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, check=False, timeout=400)
+                               stderr=subprocess.PIPE, check=False, timeout=270)
             if finished.returncode != 0:
                 summary["failed"] += 1
                 continue
