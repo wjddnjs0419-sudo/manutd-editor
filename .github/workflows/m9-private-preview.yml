@@ -1,0 +1,115 @@
+name: "M9 private card-news preview"
+
+# Deliberately manual. No Instagram publishing, cron or implicit bot send.
+on:
+  workflow_dispatch:
+    inputs:
+      brief_id:
+        description: "Existing Manutd Editor creative_briefs UUID"
+        required: true
+        type: string
+      approved_image_hosts:
+        description: "Trusted EXACT image CDN hosts, comma-separated (no wildcards)"
+        required: true
+        default: "i.guim.co.uk"
+        type: string
+      mode:
+        description: "First upload preview PNGs, then separately send the already-uploaded album"
+        required: true
+        type: choice
+        options:
+          - upload_preview
+          - send_uploaded
+        default: upload_preview
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m9-preview-${{ inputs.brief_id }}
+  cancel-in-progress: false
+
+jobs:
+  m9-preview:
+    name: "Publisher photos → Pillow PNGs → private Storage → optional Telegram"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_URL: ${{ secrets.M9_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.M9_SUPABASE_SERVICE_ROLE_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.M9_TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_OWNER_USER_ID: ${{ secrets.M9_TELEGRAM_OWNER_USER_ID }}
+      M9_ENABLE_TELEGRAM_PREVIEW: ${{ inputs.mode == 'send_uploaded' && 'YES' || 'NO' }}
+      M9_APPROVED_IMAGE_HOSTS: ${{ inputs.approved_image_hosts }}
+      M9_BRIEF_ID: ${{ inputs.brief_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: "v2.x"
+      - name: "Verify required environment configuration"
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$SUPABASE_URL" ]] || { echo "M9_SUPABASE_URL secret missing"; exit 1; }
+          [[ -n "$SUPABASE_SERVICE_ROLE_KEY" ]] || { echo "M9_SUPABASE_SERVICE_ROLE_KEY secret missing"; exit 1; }
+          [[ "$M9_BRIEF_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "Invalid creative brief UUID"; exit 1; }
+          if [[ "$M9_ENABLE_TELEGRAM_PREVIEW" == "YES" ]]; then
+            [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_OWNER_USER_ID" ]] || {
+              echo "Telegram preview secrets missing"
+              exit 1
+            }
+          fi
+      - name: "Install Pillow"
+        run: python -m pip install --disable-pip-version-check 'Pillow==11.3.0'
+      - name: "Load Pretendard Bold (v1.3.9) for this run only"
+        if: inputs.mode == 'upload_preview'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/m9"
+          curl --fail --show-error --silent --location --retry 2 --max-time 90 \
+            "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/Pretendard-Bold.otf" \
+            --output "$RUNNER_TEMP/m9/Pretendard-Bold.otf"
+          echo "2e91915fab54df71cc9598ebf608b2bdb54c6fe3c066ac61dff0bc44fca71cc7  $RUNNER_TEMP/m9/Pretendard-Bold.otf" | sha256sum --check --status
+      - name: "Fetch EXACT approved fixed CTA from private Supabase Storage"
+        if: inputs.mode == 'upload_preview'
+        shell: bash
+        run: |
+          python scripts/m9_fetch_fixed_cta.py --out "$RUNNER_TEMP/m9/cta.png"
+      - name: "Create private review deck"
+        if: inputs.mode == 'upload_preview'
+        shell: bash
+        run: |
+          set -euo pipefail
+          arguments=(
+            --brief-id "$M9_BRIEF_ID"
+            --workdir "$RUNNER_TEMP/m9/job"
+            --font "$RUNNER_TEMP/m9/Pretendard-Bold.otf"
+            --logo "assets/manutd_editor_logo.png"
+            --cta "$RUNNER_TEMP/m9/cta.png"
+            --approved-image-hosts "$M9_APPROVED_IMAGE_HOSTS"
+            --upload
+          )
+          python scripts/m9_run_pipeline.py "${arguments[@]}"
+      - name: "Send previously uploaded preview to owner"
+        if: inputs.mode == 'send_uploaded'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/m9_send_uploaded_preview.py --brief-id "$M9_BRIEF_ID" --chat-id "$TELEGRAM_OWNER_USER_ID"
+      - name: "Report safe status only"
+        if: success() && inputs.mode == 'upload_preview'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+          file = pathlib.Path(os.environ["RUNNER_TEMP"]) / "m9/job/slides/delivery-state.json"
+          state=json.loads(file.read_text())
+          print("M9_RESULT_STATUS:", state["status"])
+          print("M9_PRIVATE_REVIEW_ONLY:", state.get("review_only"))
+          print("No photos, signed links or secrets are uploaded as CI artifacts.")
+          PY
