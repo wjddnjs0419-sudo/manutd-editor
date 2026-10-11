@@ -13,7 +13,7 @@ export interface ArticleEnricherOptions {
 export type ArticleEnricher = (observation: DiscoveryObservation) => Promise<DiscoveryObservation>;
 
 export function createArticleEnricher(options: ArticleEnricherOptions = {}): ArticleEnricher {
-  const maxExcerptChars = options.maxExcerptChars ?? 2_400;
+  const maxExcerptChars = options.maxExcerptChars ?? 6_000;
   return async (observation) => {
     const originalUrl = safeHttpsUrl(observation.canonicalUrl);
     if (!originalUrl) return observation;
