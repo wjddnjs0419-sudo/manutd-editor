@@ -35,6 +35,10 @@ CURATED_PERSON_ALIASES: dict[str, tuple[str, ...]] = {
     "Kobbie Mainoo": ("Kobbie Mainoo", "코비 마이누", "마이누"),
     "Casemiro": ("Casemiro", "카세미루"),
     "Ruben Amorim": ("Ruben Amorim", "후벵 아모링", "아모림", "아모링"),
+    "Amad Diallo": ("Amad Diallo", "아마드 디알로", "아마드"),
+    "Alberto Costa": ("Alberto Costa", "알베르토 코스타"),
+    "Pep Guardiola": ("Pep Guardiola", "펩 과르디올라", "과르디올라"),
+    "Eva Olid": ("Eva Olid", "에바 올리드", "올리드"),
 }
 ROLES = {"FACT_PRIMARY": 0, "FACT_INDEPENDENT": 1, "OFFICIAL": 2,
          "DISCOVERY_COMMUNITY": 5, "DISCOVERY_OFFICIAL": 3}
