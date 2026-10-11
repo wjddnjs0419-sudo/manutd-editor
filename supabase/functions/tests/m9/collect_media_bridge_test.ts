@@ -1,5 +1,5 @@
 import { assertEquals, assertThrows } from "jsr:@std/assert@1.0.8";
-import { validateM9SourceRequest } from "../../../scripts/m9_collect_media.ts";
+import { validateM9SourceRequest } from "../../../../scripts/m9_collect_media.ts";
 
 const request={
  publisher_article_urls:["https://publisher.example.org/article"],
