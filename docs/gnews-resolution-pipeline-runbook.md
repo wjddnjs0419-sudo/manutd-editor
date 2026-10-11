@@ -20,6 +20,18 @@ URL resolution and article extraction have independent fields. A resolved publis
 - Both modes include already-assigned Google observations for URL resolution. Successful resolution preserves the discovery row's Google URL, provider identity, story/source foreign keys, story content, and publication fields. It updates only the linked source row's validated URL and, when present, extracted excerpt/status metadata. Repeated request keys replay their stored response; completed/cache-resolved articles are not decoded again.
 - Empty bodies and 403 responses preserve the existing source excerpt. They never create an extraction success. Resolver completion never changes a claim to `VERIFIED`.
 
+## Reconcile legacy source links
+
+The production read-only audit found 1,206 Google News observations with a story ID and no `source_observation_id`. Exact `canonical_url + external_id` matching finds 1,197 unique source rows and 9 with no match. Of the 1,197 pairs, 849 exactly match the source outlet name, title, publication time, fingerprint, and editorial role; 348 have one or more metadata differences. No pair was ambiguous in that audit. Among the 348, 191 have title or outlet-name differences (86 title only, 44 outlet only, 61 both). Of the remaining 157, 105 differ only in publication time (13 by more than one day), 35 differ only in fingerprint and have a different excerpt, and 17 differ in both time and fingerprint.
+
+The differences are not treated as cosmetic by default. Outlet/domain, title, timestamp, fingerprint, and excerpt differences can reflect a changed article, a provider/outlet attribution mismatch, or a newer source version. The resolver therefore links only one URL/ID candidate with an exact outlet, title, publication time, fingerprint, and editorial-role match. All other candidates remain in a review report. A missing or ambiguous candidate is never created or linked automatically.
+
+`supabase/reconciliation/gnews_source_link_reconciliation_dry_run.sql` prints decision counts, field-difference counts, candidate IDs and their compared values, and a separate no-match report. It is read-only. It requires migration `20261012000300_gnews_source_link_reconciliation.sql`; running the migration or reconciliation against production requires a separate approved release. The plan function itself does not write quarantine records.
+
+After reviewing a staging dry run, an operator can pass at most 30 observation IDs and the exact expected source IDs from that reviewed plan to `app_private.gnews_source_link_reconciliation_apply` inside a `SERIALIZABLE` transaction. A changed candidate or metadata snapshot is quarantined. Serialization failures (`40001`) must be retried only after rerunning the dry-run for those IDs. Apply explicitly changes only `discovery_observations.source_observation_id`; the existing `updated_at` trigger refreshes that row's update timestamp. It preserves `story_cluster_id` and does not create or update source rows, claims, evidence, stories, publication state, or verification state. It upserts candidate-level review records into `app_private.gnews_source_link_reconciliation_quarantine`, so repeated unsafe runs do not multiply audit rows. Rows with no source match have a separate `NO_MATCH` decision. The example batch in `supabase/reconciliation/gnews_source_link_reconciliation_apply_reviewed_batch.sql` is intentionally inert until its placeholder IDs are replaced.
+
+Use `supabase/reconciliation/gnews_source_link_reconciliation_verify.sql` with the same reviewed pairs after an apply. It reports whether the source and story IDs match the preview, checks the original external ID and Google URL provenance, and shows story-claim/evidence counts. Capture the before-state from the dry-run worksheet before applying a batch.
+
 ## Feature flags
 
 Keep these independent and default them to off:
@@ -83,7 +95,7 @@ The figures are request/cost bounds, not a recurring monthly forecast. A future 
 
 ## Tests
 
-Offline Python and Deno tests use mocked HTTP responses. `supabase/tests/database/024_gnews_resolver_pipeline_test.sql` covers URL validation, duplicate article IDs, linked-source refresh, body/403 behavior, recent/backfill selection, cache propagation, original URL provenance, cooldown, idempotency, and expired-lease recovery. Run it only against an explicitly isolated disposable/staging project with `supabase test db --db-url`; do not reset or push a shared local database or target a linked/production project.
+Offline Python and Deno tests use mocked HTTP responses. `supabase/tests/database/024_gnews_resolver_pipeline_test.sql` covers URL validation, duplicate article IDs, linked-source refresh, body/403 behavior, recent/backfill selection, cache propagation, original URL provenance, cooldown, idempotency, and expired-lease recovery. `supabase/tests/database/025_gnews_source_link_reconciliation_test.sql` covers safe, ambiguous, key-mismatched, metadata-mismatched, missing, restored-URL, repeated, and existing-story cases plus resolver refresh after recovering the source ID. Run both only against an explicitly isolated disposable/staging database with migrations applied; do not reset or push a shared local database or target a linked/production project.
 
 ## PR dependency sequence
 

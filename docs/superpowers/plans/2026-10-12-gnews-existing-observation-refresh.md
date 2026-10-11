@@ -79,3 +79,16 @@
 
 - [x] Document the 24/72-hour priority, one-batch backfill mode, linked-source update behavior, and explicit PR #9 → #10 merge/rebase sequence.
 - [x] Run requested tests and migration/pgTAP verification; inspect the diff. PR #10 remains Draft on the PR #9 base.
+
+### Task 5: Reconcile legacy source IDs without guessing
+
+**Files:**
+- Add: `supabase/migrations/20261012000300_gnews_source_link_reconciliation.sql`
+- Add: `supabase/tests/database/025_gnews_source_link_reconciliation_test.sql`
+- Add: `supabase/reconciliation/gnews_source_link_reconciliation_*.sql`
+- Modify: `docs/gnews-resolution-pipeline-runbook.md`
+
+- [x] Add a read-only decision plan using external ID and canonical/original/resolved URL identity, with explicit outlet/title/date/fingerprint/role audits.
+- [x] Add a serializable, reviewed-ID batch apply that only sets the existing source FK and quarantines every mismatch, ambiguity, and no-match without creating source/story rows.
+- [x] Reproduce safe, restored, key-mismatch, metadata-mismatch, ambiguous, no-match, repeated, and resolver-refresh cases in pgTAP.
+- [x] Apply all migrations and run 024/025 pgTAP in a fresh disposable local Supabase project; verify the persisted M8 PostgREST and M9 source-builder handoff.
