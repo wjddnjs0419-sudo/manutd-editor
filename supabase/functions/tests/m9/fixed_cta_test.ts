@@ -25,7 +25,7 @@ Deno.test("re-appending CTA is idempotent", () => {
 
 Deno.test("rejects misplaced or wrong CTA assets", () => {
   const cta = appendFixedCta([cover], "card-assets")[1]!;
-  assertThrows(() => appendFixedCta([cta, { ...cover, slide_number: 2 }], "card-assets"), Error, "M9_CTA_MUST_BE_LAST");
+  assertThrows(() => appendFixedCta([{ ...cta, slide_number: 1 }, { ...cover, slide_number: 2 }], "card-assets"), Error, "M9_CTA_MUST_BE_LAST");
   assertThrows(() => appendFixedCta([cover, { ...cta, storage_path: "assets/old.png" }], "card-assets"), Error, "M9_CTA_ASSET_MISMATCH");
 });
 
