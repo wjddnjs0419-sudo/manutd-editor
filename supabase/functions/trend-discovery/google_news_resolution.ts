@@ -99,7 +99,7 @@ async function getText(
 }
 
 function attribute(html: string, name: string): string | null {
-  const pattern = new RegExp(`\\b${name}=["']([^"'<>]{1,2_048})["']`, "u");
+  const pattern = new RegExp(`\\b${name}=["']([^"'<>]{1,2048})["']`, "u");
   return pattern.exec(html)?.[1] ?? null;
 }
 
