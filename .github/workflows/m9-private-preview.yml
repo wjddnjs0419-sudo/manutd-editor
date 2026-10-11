@@ -1,0 +1,105 @@
+name: "M9 private card-news preview"
+
+# Deliberately manual. No Instagram publishing, cron or implicit bot send.
+on:
+  workflow_dispatch:
+    inputs:
+      brief_id:
+        description: "Existing Manutd Editor creative_briefs UUID"
+        required: true
+        type: string
+      approved_image_hosts:
+        description: "Trusted EXACT image CDN hosts, comma-separated (no wildcards)"
+        required: true
+        default: "i.guim.co.uk"
+        type: string
+      send_telegram:
+        description: "Send the review album only to the configured owner's private chat"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m9-preview-${{ inputs.brief_id }}
+  cancel-in-progress: false
+
+jobs:
+  m9-preview:
+    name: "Publisher photos → Pillow PNGs → private Storage → optional Telegram"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_URL: ${{ secrets.M9_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.M9_SUPABASE_SERVICE_ROLE_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.M9_TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_OWNER_USER_ID: ${{ secrets.M9_TELEGRAM_OWNER_USER_ID }}
+      M9_ENABLE_TELEGRAM_PREVIEW: ${{ inputs.send_telegram && 'YES' || 'NO' }}
+      M9_APPROVED_IMAGE_HOSTS: ${{ inputs.approved_image_hosts }}
+      M9_BRIEF_ID: ${{ inputs.brief_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: "v2.x"
+      - name: "Verify required environment configuration"
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$SUPABASE_URL" ]] || { echo "M9_SUPABASE_URL secret missing"; exit 1; }
+          [[ -n "$SUPABASE_SERVICE_ROLE_KEY" ]] || { echo "M9_SUPABASE_SERVICE_ROLE_KEY secret missing"; exit 1; }
+          [[ "$M9_BRIEF_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "Invalid creative brief UUID"; exit 1; }
+          if [[ "$M9_ENABLE_TELEGRAM_PREVIEW" == "YES" ]]; then
+            [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_OWNER_USER_ID" ]] || {
+              echo "Telegram preview secrets missing"
+              exit 1
+            }
+          fi
+      - name: "Install Pillow"
+        run: python -m pip install --disable-pip-version-check 'Pillow==11.3.0'
+      - name: "Load Korean font for this run only"
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/m9"
+          curl --fail --show-error --silent --location --retry 2 --max-time 90 \
+            "https://raw.githubusercontent.com/googlefonts/noto-cjk/main/Sans/OTF/Korean/NotoSansCJKkr-Bold.otf" \
+            --output "$RUNNER_TEMP/m9/korean-bold.otf"
+          test -s "$RUNNER_TEMP/m9/korean-bold.otf"
+      - name: "Fetch EXACT approved fixed CTA from private Supabase Storage"
+        shell: bash
+        run: |
+          python scripts/m9_fetch_fixed_cta.py --out "$RUNNER_TEMP/m9/cta.png"
+      - name: "Create private review deck"
+        shell: bash
+        run: |
+          set -euo pipefail
+          arguments=(
+            --brief-id "$M9_BRIEF_ID"
+            --workdir "$RUNNER_TEMP/m9/job"
+            --font "$RUNNER_TEMP/m9/korean-bold.otf"
+            --logo "assets/manutd_editor_logo.png"
+            --cta "$RUNNER_TEMP/m9/cta.png"
+            --approved-image-hosts "$M9_APPROVED_IMAGE_HOSTS"
+            --upload
+          )
+          if [[ "$M9_ENABLE_TELEGRAM_PREVIEW" == "YES" ]]; then
+            arguments+=(--send-telegram --chat-id "$TELEGRAM_OWNER_USER_ID")
+          fi
+          python scripts/m9_run_pipeline.py "${arguments[@]}"
+      - name: "Report safe status only"
+        if: success()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+          file = pathlib.Path(os.environ["RUNNER_TEMP"]) / "m9/job/slides/delivery-state.json"
+          state=json.loads(file.read_text())
+          print("M9_RESULT_STATUS:", state["status"])
+          print("M9_PRIVATE_REVIEW_ONLY:", state.get("review_only"))
+          print("No photos, signed links or secrets are uploaded as CI artifacts.")
+          PY
