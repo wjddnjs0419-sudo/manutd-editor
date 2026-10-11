@@ -107,6 +107,7 @@ export async function parseFeedDocument(
   for (const block of blocks(xml).slice(0, options.maxItems)) {
     const externalId = text(field(block, "guid") || field(block, "id"));
     const title = text(field(block, "title"));
+    const publisherName = text(field(block, "source")).slice(0, 160);
     const canonicalUrl = link(block);
     if (!externalId || !title || !canonicalUrl) continue;
     let parsedUrl: URL;
@@ -131,7 +132,7 @@ export async function parseFeedDocument(
       publishedAt,
       discoverySignal: feed.editorialRole.startsWith("DISCOVERY_") ? 0.7 : 0.5,
       contentFingerprint: await fingerprint(`${externalId}\u0000${title}\u0000${excerpt ?? ""}\u0000${normalizedUrl}`),
-      metadata: { feed_url: feed.url, format: xml.includes("<entry") ? "ATOM" : "RSS" },
+      metadata: { feed_url: feed.url, format: xml.includes("<entry") ? "ATOM" : "RSS", ...(publisherName ? { publisher_name: publisherName } : {}) },
     });
   }
   return result;
