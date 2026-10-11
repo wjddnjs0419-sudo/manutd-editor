@@ -136,6 +136,16 @@ class M9IntegrationContracts(unittest.TestCase):
             "source_sha256": hashlib.sha256((self.root / "cover.jpg").read_bytes()).hexdigest()}}
         checked_media(valid, self.root)
 
+    def test_rotating_signed_photo_urls_do_not_create_second_job(self):
+        import copy
+        altered = copy.deepcopy(self.media)
+        altered["cover"]["source_url"] += "?s=new-temporary-cdn-signature"
+        altered["body"]["source_sha256"] = "1" * 64
+        self.assertEqual(job_key(self.brief, altered), job_key(self.brief, self.media))
+        changed_revision = copy.deepcopy(self.brief)
+        changed_revision["version"] += 1
+        self.assertNotEqual(job_key(changed_revision, altered), job_key(self.brief, self.media))
+
     def test_refuses_unreviewed_media_or_path_traversal(self):
         altered = {**self.media, "editorial_review_only": False}
         with self.assertRaisesRegex(ValueError, "M9_REVIEW_ONLY_REQUIRED"):
