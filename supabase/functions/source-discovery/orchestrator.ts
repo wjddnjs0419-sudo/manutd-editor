@@ -73,9 +73,10 @@ async function articleExcerpt(
 }
 
 export async function runSourceDiscovery(options: RunSourceDiscoveryOptions): Promise<SourceDiscoverySummary> {
-  if (options.feeds.length === 0) return { status: "NOOP", observed: 0, duplicates: 0, failedFeeds: 0, feedCount: 0 };
+  if (options.feeds.length === 0) return { status: "NOOP", observed: 0, duplicates: 0, failedFeeds: 0, feedCount: 0, factObserved: 0 };
   const limit = options.limit ?? options.maxItems;
   let observed = 0;
+  let factObserved = 0;
   let duplicates = 0;
   let failedFeeds = 0;
   for (const feed of options.feeds) {
@@ -94,8 +95,10 @@ export async function runSourceDiscovery(options: RunSourceDiscoveryOptions): Pr
           ? { ...item, excerpt: fetchedExcerpt }
           : item;
         const inserted = await options.repository.saveObservation({ ...enrichedItem, informationSourceId: sourceId, observedAt: options.now().toISOString() });
-        if (inserted) observed += 1;
-        else duplicates += 1;
+        if (inserted) {
+          observed += 1;
+          if (isFactRole(feed)) factObserved += 1;
+        } else duplicates += 1;
       }
     } catch (error) {
       failedFeeds += 1;
@@ -104,5 +107,5 @@ export async function runSourceDiscovery(options: RunSourceDiscoveryOptions): Pr
       clearTimeout(timeout);
     }
   }
-  return { status: "COMPLETED", observed, duplicates, failedFeeds, feedCount: options.feeds.length };
+  return { status: "COMPLETED", observed, duplicates, failedFeeds, feedCount: options.feeds.length, factObserved };
 }

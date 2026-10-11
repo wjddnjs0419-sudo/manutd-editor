@@ -217,7 +217,17 @@ export function createOrchestrationWorker(options: OrchestrationWorkerOptions): 
         ? groundingTransition(job, result.body)
         : (() => {
           const next = downstreamFor(job, result);
-          return next ? { jobType: next, payload: downstreamPayload(job, next), dedupeKey: `${chainKey(job)}:${next}` } : null;
+          if (!next) return null;
+          const payload = downstreamPayload(job, next);
+          // Recheck recently active canonical stories when a genuinely new trusted
+          // fact observation is collected. A no-feed NOOP never schedules rechecks.
+          if (job.job_type === "DISCOVER_SOURCES" &&
+              isRecord(result.body) &&
+              typeof result.body.fact_observed === "number" &&
+              result.body.fact_observed > 0) {
+            payload.refresh_existing_grounding = true;
+          }
+          return { jobType: next, payload, dedupeKey: `${chainKey(job)}:${next}` };
         })();
       let downstreamEnqueued = 0;
       if (transition) {

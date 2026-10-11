@@ -72,7 +72,7 @@ export function createSourceDiscoveryHandler(dependencies: SourceDiscoveryHandle
     try {
       const requested = await input(request, defaultLimit);
       const result = await dependencies.run({ ...requested, asOf: requested.asOf ?? now() });
-      return json({ request_id: id, status: result.status, observed: result.observed, duplicates: result.duplicates, failed_feeds: result.failedFeeds, feed_count: result.feedCount }, 200);
+      return json({ request_id: id, status: result.status, observed: result.observed, duplicates: result.duplicates, failed_feeds: result.failedFeeds, feed_count: result.feedCount, fact_observed: result.factObserved ?? 0 }, 200);
     } catch (error) {
       if (error instanceof InvalidRequestError) return json({ request_id: id, error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, 400);
       log({ requestId: id, event: "source_discovery_failed", code: "SOURCE_DISCOVERY_FAILED" });

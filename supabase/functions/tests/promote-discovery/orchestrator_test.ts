@@ -160,3 +160,41 @@ Deno.test("promotion summary has no affected story IDs when nothing is promoted"
     affectedStoryIds: [],
   });
 });
+
+Deno.test("trusted fact refresh rechecks only recent existing canonical stories with no new promotion", async () => {
+  const current: PromotionStory = {
+    id: "11111111-1111-4111-8111-111111111111",
+    canonicalTitle: "Bruno Fernandes returns to Manchester United training",
+    summary: null,
+    topic: "INJURY",
+    firstSeenAt: "2026-09-28T06:00:00.000Z",
+    lastSeenAt: "2026-09-29T00:00:00.000Z",
+    promotionKey: "promotion:injury:bruno-fernandes",
+    signature: {},
+  };
+  const old: PromotionStory = {
+    ...current, id: "22222222-2222-4222-8222-222222222222",
+    firstSeenAt: "2026-09-01T00:00:00.000Z",
+    lastSeenAt: "2026-09-01T00:00:00.000Z",
+  };
+  const repo = repository([], [old, current]);
+  const result = await promoteDiscovery({
+    asOf: "2026-09-29T02:00:00.000Z", repository: repo, refreshExistingGrounding: true,
+  });
+  assertEquals(result.affectedStoryIds, [current.id]);
+  assertEquals(result.observationsProcessed, 0);
+  assertEquals(repo.claims.length, 0);
+  assertEquals(repo.candidates.length, 0);
+});
+
+Deno.test("refresh has strict per-run scope cap and no writes for existing stories", async () => {
+  const stories: PromotionStory[] = Array.from({ length: 55 }, (_, i) => ({
+    id: `story-${i}`, canonicalTitle: `Manchester United item ${i}`, summary: null, topic: "NEWS",
+    firstSeenAt: "2026-09-29T00:00:00.000Z", lastSeenAt: "2026-09-29T01:00:00.000Z",
+    promotionKey: null, signature: {},
+  }));
+  const repo = repository([], stories);
+  const result = await promoteDiscovery({ asOf: "2026-09-29T02:00:00.000Z", limit: 100, repository: repo, refreshExistingGrounding: true });
+  assertEquals(result.affectedStoryIds.length, 25);
+  assertEquals(repo.calls, []);
+});

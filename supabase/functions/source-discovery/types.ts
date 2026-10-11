@@ -55,6 +55,8 @@ export interface SourceDiscoverySummary {
   readonly duplicates: number;
   readonly failedFeeds: number;
   readonly feedCount: number;
+  /** Newly inserted observations from trusted fact feeds, not discovery-only sources. */
+  readonly factObserved?: number;
 }
 
 export interface ParsedFeedObservation {
