@@ -1,15 +1,6 @@
 name: Google News URL resolver validation
 
 on:
-  pull_request:
-    types: [opened]
-    branches: [main]
-    paths:
-      - .github/workflows/gnews-decoder-deployment-validation.yml
-      - scripts/fixtures/gnews-decoder-input.json
-      - scripts/gnews_decoder_poc.py
-      - scripts/requirements-gnews-decoder-poc.txt
-      - scripts/test_gnews_decoder_poc.py
   workflow_dispatch:
     inputs:
       confirm_live_google_requests:
@@ -27,7 +18,7 @@ concurrency:
 
 jobs:
   resolve-google-news-urls:
-    if: github.event_name == 'pull_request' || inputs.confirm_live_google_requests
+    if: inputs.confirm_live_google_requests
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
