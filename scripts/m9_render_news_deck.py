@@ -101,12 +101,12 @@ def wrap_text(draw: ImageDraw.ImageDraw, text: str, face: ImageFont.FreeTypeFont
     return lines
 
 def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
-                logo_path: Path | None) -> Image.Image:
+                logo_path: Path | None, heading_face: ImageFont.FreeTypeFont | None = None) -> Image.Image:
     im = full_bleed(source, (0.5, 0.5))
     im = Image.alpha_composite(im, Image.new("RGBA", SIZE, (0, 0, 0, 179)))
     draw = ImageDraw.Draw(im)
     headline = str(data["body_headline"]).strip()
-    f80 = ImageFont.truetype(face.path, 80)
+    f80 = ImageFont.truetype((heading_face or face).path, 80)
     if measure(draw, headline, f80) > 915:
         raise ValueError("BODY_NEWS headline overflow: shorten rather than shrink")
     draw.text((80, 168), headline, font=f80, fill="#ffffff")
@@ -150,7 +150,8 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
     return im
 
 def render(job: dict, workdir: Path, output_dir: Path,
-           face_path: Path, logo_path: Path | None, cta_path: Path | None) -> dict:
+           face_path: Path, logo_path: Path | None, cta_path: Path | None,
+           body_font_path: Path | None = None) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     for field in ("article_url", "article_published_at", "cover_line_one",
                   "cover_line_two", "body_headline", "body_paragraphs",
@@ -161,6 +162,7 @@ def render(job: dict, workdir: Path, output_dir: Path,
     if not str(job["article_url"]).startswith("https://"):
         raise ValueError("Source article must be an HTTPS URL")
     face = font(str(face_path), 40)
+    body_face = font(str(body_font_path or face_path), 40)
     cover_photo = (workdir / str(job["cover_photo"])).resolve()
     body_photo = (workdir / str(job["body_photo"])).resolve()
     # Avoid using one input from outside trusted workdir.
@@ -170,10 +172,23 @@ def render(job: dict, workdir: Path, output_dir: Path,
     coversrc = validate_photo(cover_photo)
     bodysrc = validate_photo(body_photo)
     output_files = []
-    for number, kind, result in (
-        (1, "COVER_NEWS", render_cover(coversrc, job, face)),
-        (2, "BODY_NEWS", render_body(bodysrc, job, face, logo_path)),
-    ):
+    body_slides = job.get("body_slides")
+    if not isinstance(body_slides, list) or not body_slides:
+        body_slides = [{
+            "body_headline": job["body_headline"],
+            "body_paragraphs": job["body_paragraphs"],
+            "body_highlight": job.get("body_highlight", ""),
+        }]
+    rendered = [(1, "COVER_NEWS", render_cover(coversrc, job, face))]
+    for index, body_slide in enumerate(body_slides, start=2):
+        if not isinstance(body_slide, dict):
+            raise ValueError("M9_BODY_SLIDE_INVALID")
+        for field in ("body_headline", "body_paragraphs"):
+            if field not in body_slide:
+                raise ValueError("M9_BODY_SLIDE_INVALID")
+        data = {**job, **body_slide}
+        rendered.append((index, "BODY_NEWS", render_body(bodysrc, data, body_face, logo_path, face)))
+    for number, kind, result in rendered:
         dest = output_dir / f"slide_{number:02d}_{kind.lower()}.png"
         result.convert("RGB").save(dest, "PNG", optimize=True)
         output_files.append({"slide_number": number, "kind": kind, "file": dest.name,
@@ -182,9 +197,9 @@ def render(job: dict, workdir: Path, output_dir: Path,
         with Image.open(cta_path) as cta:
             if cta.size != SIZE:
                 raise ValueError("CTA asset must be 1080x1350")
-        dest = output_dir / "slide_03_cta.png"
+        dest = output_dir / f"slide_{len(rendered) + 1:02d}_cta.png"
         shutil.copyfile(cta_path, dest)  # Exact fixed CTA bytes reused, never regenerated.
-        output_files.append({"slide_number": 3, "kind": "CTA",
+        output_files.append({"slide_number": len(rendered) + 1, "kind": "CTA",
                              "file": dest.name, "width": W, "height": H})
     report = {
         "state": "PRIVATE_PREVIEW_REQUIRES_REVIEW",
@@ -215,6 +230,7 @@ def main() -> None:
     parser.add_argument("--job", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--font", required=True)
+    parser.add_argument("--body-font")
     parser.add_argument("--logo")
     parser.add_argument("--cta")
     args = parser.parse_args()
@@ -222,7 +238,8 @@ def main() -> None:
     job = json.loads(job_path.read_text(encoding="utf-8"))
     report = render(job, job_path.parent, Path(args.output).resolve(),
                     Path(args.font), Path(args.logo) if args.logo else None,
-                    Path(args.cta) if args.cta else None)
+                    Path(args.cta) if args.cta else None,
+                    Path(args.body_font) if args.body_font else None)
     print(json.dumps({"status": report["state"], "slides": report["slides"]},
                      ensure_ascii=False, indent=2))
 

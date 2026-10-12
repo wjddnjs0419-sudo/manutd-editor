@@ -1,10 +1,11 @@
 export interface CanonicalGenerationInvocation {
   readonly candidate_id: string;
   readonly trigger_type: "MANUAL";
+  readonly generation_intent?: "EXPLORATION";
 }
 
 export interface CanonicalGenerationResult {
-  readonly status: "READY" | "NOOP";
+  readonly status: "READY" | "DRAFT" | "NOOP";
   readonly creative_brief_id: string;
 }
 
@@ -21,10 +22,17 @@ export async function invokeCanonicalCarousel(
   candidateId: string,
   dependencies: CanonicalGenerationDependencies,
   expectedStoryClusterId?: string,
+  generationIntent?: "EXPLORATION",
 ): Promise<Record<string, unknown>> {
   if (!candidateId.trim()) throw new Error("CANDIDATE_NOT_FOUND");
-  const value = await dependencies.invoke({ candidate_id: candidateId, trigger_type: "MANUAL" });
-  if (!object(value) || (value.status !== "READY" && value.status !== "NOOP") || typeof value.creative_brief_id !== "string") {
+  const value = await dependencies.invoke({ candidate_id: candidateId, trigger_type: "MANUAL", ...(generationIntent ? { generation_intent: generationIntent } : {}) });
+  if (!object(value)) throw new Error("CREATIVE_GENERATION_FAILED");
+  if (value.status === "BLOCKED_EVIDENCE") {
+    const reason = Array.isArray(value.error_codes) && typeof value.error_codes[0] === "string" ? value.error_codes[0] : "ARTICLE_EVIDENCE_MISSING";
+    throw new Error(`CREATIVE_GENERATION_BLOCKED:${reason}`);
+  }
+  if (value.status === "DAILY_LIMIT") throw new Error("CREATIVE_GENERATION_DAILY_LIMIT");
+  if ((value.status !== "READY" && value.status !== "DRAFT" && value.status !== "NOOP") || typeof value.creative_brief_id !== "string") {
     throw new Error("CREATIVE_GENERATION_FAILED");
   }
   const result = value as unknown as CanonicalGenerationResult;

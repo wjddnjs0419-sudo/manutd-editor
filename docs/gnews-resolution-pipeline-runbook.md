@@ -2,6 +2,8 @@
 
 This pipeline is an opt-in, manually invoked resolver for existing discovery observations. The migration is applied only in disposable/staging validation; production settings and schema remain untouched. Google News remains a discovery provider; it is never treated as a verified source.
 
+The separate default-off Exploration Mode can use extracted publisher-page text from these observations to create review-only DRAFT briefs. It does not change URL resolution, promote Google News into a verified source, or affect PR #8's READY-only M9 scheduler. Configuration, draft-preview steps, and usage fields are documented in [Editorial Exploration Mode](editorial-exploration-mode.md).
+
 ## Flow and state
 
 1. The existing RSS discovery provider stores `provider_id=google-news`, its Google RSS canonical URL, provider identity, title, RSS excerpt, fingerprint, and story-cluster references. Search is disabled unless `DISCOVERY_GOOGLE_NEWS_ENABLED=true`.

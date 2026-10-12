@@ -93,6 +93,17 @@ Deno.test("retries a 429 then succeeds without logging provider body", async () 
   const result = await provider.generate(input);
   assertEquals(result.generation_quality, "FULL");
   assertEquals(attempts, 2);
+  assertEquals(provider.getUsageStats(), { provider_calls: 2, input_tokens: 0, output_tokens: 0, retry_count: 1 });
+});
+
+Deno.test("records provider call and token totals without retaining response content", async () => {
+  const provider = createOpenAIProvider({
+    apiKey: "test-key",
+    sleep: async () => {},
+    fetchImpl: async () => response({ output_text: JSON.stringify(output), usage: { input_tokens: 1234, output_tokens: 567 } }),
+  });
+  await provider.generate(input);
+  assertEquals(provider.getUsageStats(), { provider_calls: 1, input_tokens: 1234, output_tokens: 567, retry_count: 0 });
 });
 
 Deno.test("does not retry permanent authorization failures", async () => {

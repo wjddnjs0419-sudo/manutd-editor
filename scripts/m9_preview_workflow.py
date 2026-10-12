@@ -128,15 +128,37 @@ def prepared_render_job(brief: dict[str, Any], media: dict[str, Any]) -> dict[st
         raise ValueError("M9_BODY_HEADLINE_REQUIRED")
     cover = media["cover"]
     body_media = media["body"]
+    snapshot = brief.get("evidence_snapshot") if isinstance(brief.get("evidence_snapshot"), dict) else {}
+    article_records = snapshot.get("exploration_articles") if isinstance(snapshot.get("exploration_articles"), list) else []
+    published_at = next((row.get("published_at") for row in article_records if isinstance(row, dict) and isinstance(row.get("published_at"), str)), None)
+    if not published_at:
+        for row in snapshot.get("sources", []) if isinstance(snapshot.get("sources"), list) else []:
+            if isinstance(row, dict) and isinstance(row.get("published_at"), str):
+                published_at = row["published_at"]
+                break
+    body_slides = []
+    for slide in slides[1:]:
+        body_text = slide.get("body")
+        if not isinstance(body_text, str) or not body_text.strip():
+            raise ValueError("M9_BODY_TEXT_REQUIRED")
+        body_headline = slide.get("headline")
+        if not isinstance(body_headline, str) or not body_headline.strip():
+            raise ValueError("M9_BODY_HEADLINE_REQUIRED")
+        body_slides.append({
+            "body_headline": body_headline.strip(),
+            "body_paragraphs": [line.strip() for line in body_text.splitlines() if line.strip()] or [body_text.strip()],
+            "body_highlight": slide.get("highlight") or "",
+        })
     return {
         "article_url": cover["article_url"],
-        "article_published_at": brief.get("generated_at") or brief.get("created_at") or "",
+        "article_published_at": published_at or brief.get("generated_at") or brief.get("created_at") or "",
         "eyebrow": media.get("eyebrow") or "■  NEWS  |  맨유 에디터",
         "cover_line_one": line_one,
         "cover_line_two": line_two,
         "body_headline": headline,
         "body_paragraphs": paragraphs,
         "body_highlight": second.get("highlight") or "",
+        "body_slides": body_slides,
         "cover_photo": cover["file"],
         "body_photo": body_media["file"],
         "cover_photo_credit": cover["credit"],
@@ -146,6 +168,22 @@ def prepared_render_job(brief: dict[str, Any], media: dict[str, Any]) -> dict[st
         "cover_source_article_url": cover["article_url"],
         "body_source_article_url": body_media["article_url"],
     }
+
+
+def validate_preview_status(brief: dict[str, Any], allow_draft_preview: bool = False) -> None:
+    status = brief.get("status")
+    if status is None:
+        return  # Local legacy fixtures may omit database status.
+    if status == "READY":
+        return
+    if status in ("DRAFT", "SELECTED"):
+        if not allow_draft_preview:
+            raise ValueError("M9_DRAFT_PREVIEW_REQUIRES_OPT_IN")
+        metadata = brief.get("generation_metadata")
+        if not isinstance(metadata, dict) or metadata.get("generation_intent") != "EXPLORATION":
+            raise ValueError("M9_DRAFT_EXPLORATION_REQUIRED")
+        return
+    raise ValueError("M9_BRIEF_NOT_READY")
 
 
 def job_key(brief: dict[str, Any], media: dict[str, Any]) -> str:
@@ -207,14 +245,16 @@ class SupabaseGateway:
         except ValueError:
             raise RemoteError(502, "M9_INVALID_JSON_RESPONSE") from None
 
-    def load_brief(self, identifier: str) -> dict[str, Any]:
+    def load_brief(self, identifier: str, allow_draft_preview: bool = False) -> dict[str, Any]:
         if not UUID.fullmatch(identifier):
             raise ValueError("M9_BRIEF_ID_INVALID")
-        fields = "id,candidate_id,version,slides_json,hooks_json,caption_draft,cta,generated_at,created_at,evidence_snapshot"
+        fields = "id,candidate_id,version,status,generation_metadata,slides_json,hooks_json,caption_draft,cta,generated_at,created_at,evidence_snapshot"
         result = self.request("GET", "/rest/v1/creative_briefs?select=" + fields + "&id=eq." + identifier + "&limit=1")
         if not isinstance(result, list) or len(result) != 1:
             raise ValueError("M9_BRIEF_NOT_FOUND")
-        return result[0]
+        brief = result[0]
+        validate_preview_status(brief, allow_draft_preview)
+        return brief
 
     def claim(self, key: str, brief_id: str, media: dict[str, Any]) -> None:
         try:
@@ -248,7 +288,7 @@ class SupabaseGateway:
             raise RuntimeError("M9_STATE_TRANSITION_CONFLICT")
 
     def upload_png(self, object_path: str, data: bytes) -> None:
-        if not re.fullmatch(r"previews/[a-f0-9-]+/slide_0[12]\.png", object_path):
+        if not re.fullmatch(r"previews/[a-f0-9-]+/slide_0[1-5]\.png", object_path):
             raise ValueError("M9_INVALID_STORAGE_PATH")
         if not data.startswith(b"\x89PNG\r\n\x1a\n") or len(data) > MAX_BYTES:
             raise ValueError("M9_INVALID_PNG")
@@ -308,7 +348,11 @@ class TelegramGateway:
 def run_preview(brief: dict[str, Any], media: dict[str, Any], media_root: Path,
                 output: Path, font_file: Path, logo: Path | None,
                 gateway: SupabaseGateway | None, telegram: TelegramGateway | None,
-                *, send: bool, chat_id: str | None = None, cta_file: Path | None = None) -> dict[str, Any]:
+                *, send: bool, chat_id: str | None = None, cta_file: Path | None = None,
+                body_font_file: Path | None = None, allow_draft_preview: bool = False) -> dict[str, Any]:
+    validate_preview_status(brief, allow_draft_preview)
+    if brief.get("status") in ("DRAFT", "SELECTED") and send:
+        raise ValueError("M9_DRAFT_TELEGRAM_SEND_NOT_SUPPORTED")
     checked_media(media, media_root)
     key = job_key(brief, media)
     payload = prepared_render_job(brief, media)
@@ -318,17 +362,18 @@ def run_preview(brief: dict[str, Any], media: dict[str, Any], media_root: Path,
         gateway.claim(key, brief["id"], media)
     stage = "CLAIMED"
     try:
-        manifest = render(payload, workdir, output, font_file, logo, cta_path=cta_file)
+        manifest = render(payload, workdir, output, font_file, logo, cta_path=cta_file, body_font_path=body_font_file)
         files = [output / entry["file"] for entry in manifest["slides"] if entry["kind"] != "CTA"]
-        if len(files) != 2:
-            raise ValueError("M9_TWO_RENDERED_SLIDES_REQUIRED")
+        expected_news_slides = 1 + len(payload.get("body_slides", [])) if payload.get("body_slides") else 2
+        if len(files) != expected_news_slides:
+            raise ValueError("M9_NEWS_SLIDE_COUNT_MISMATCH")
         state = {"job_key": key, "status": "RENDERED", "rendered": [str(x.name) for x in files],
                  "cta_reference": CTA_PATH, "review_only": True}
         if gateway:
             gateway.transition(key, stage, "RENDERED", {"rendered_manifest": manifest})
             stage = "RENDERED"
             unique_dir = str(uuid.uuid5(uuid.NAMESPACE_URL, key))
-            paths = [f"previews/{unique_dir}/slide_0{i}.png" for i in (1, 2)]
+            paths = [f"previews/{unique_dir}/slide_0{i}.png" for i in range(1, len(files) + 1)]
             for path, file in zip(paths, files):
                 gateway.upload_png(path, file.read_bytes())
             gateway.transition(key, stage, "UPLOADED")
@@ -371,6 +416,8 @@ def main() -> None:
     cli.add_argument("--media", required=True, help="Reviewed local cover/body image manifest")
     cli.add_argument("--out", required=True)
     cli.add_argument("--font", required=True)
+    cli.add_argument("--body-font")
+    cli.add_argument("--allow-draft-preview", action="store_true", help="Explicitly allow an Exploration DRAFT/SELECTED brief for private upload-only review")
     cli.add_argument("--logo")
     cli.add_argument("--cta", help="Optional existing CTA PNG for local 3-slide review; never uploaded again")
     cli.add_argument("--upload", action="store_true", help="Upload private PNGs to Supabase")
@@ -388,7 +435,8 @@ def main() -> None:
     service = SupabaseGateway(os.getenv("SUPABASE_URL", ""),
                               os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SECRET_KEY", ""),
                               http) if needs_remote else None
-    brief = service.load_brief(args.brief_id) if args.brief_id else json.loads(Path(args.brief_json).read_text(encoding="utf-8"))
+    brief = service.load_brief(args.brief_id, args.allow_draft_preview) if args.brief_id else json.loads(Path(args.brief_json).read_text(encoding="utf-8"))
+    validate_preview_status(brief, args.allow_draft_preview)
     media_path = Path(args.media).resolve()
     media = json.loads(media_path.read_text(encoding="utf-8"))
     result = run_preview(brief, media, media_path.parent, Path(args.out).resolve(),
@@ -396,7 +444,9 @@ def main() -> None:
                          service if args.upload else None,
                          TelegramGateway(os.getenv("TELEGRAM_BOT_TOKEN", ""), http) if args.send_telegram else None,
                          send=args.send_telegram, chat_id=args.chat_id,
-                         cta_file=Path(args.cta).resolve() if args.cta else None)
+                         cta_file=Path(args.cta).resolve() if args.cta else None,
+                         body_font_file=Path(args.body_font).resolve() if args.body_font else None,
+                         allow_draft_preview=args.allow_draft_preview)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

@@ -308,19 +308,23 @@ export function renderCarouselDraft(draft: ManutdEditorCarouselDraft, storyTitle
   const warning = draft.editor_warning ? `\n\n편집자 메모\n${draft.editor_warning}` : "";
   const subject = storyTitle?.trim() ? `\n소재: ${storyTitle.trim()}` : "";
   const token = draft.creative_brief_id ?? draft.story_id;
+  const reviewActions = [
+    [
+      { text: "🔄 다른 훅", callback_data: callbackData("draft:rehook", token) },
+      { text: "✏️ 수정", callback_data: callbackData("draft:edit", token) },
+      { text: "✅ 초안 선택", callback_data: callbackData("draft:approve", token) },
+    ],
+    [
+      { text: "🔎 근거", callback_data: callbackData("draft:evidence", token) },
+      { text: "◀ 소재로 돌아가기", callback_data: "draft:back:list" },
+    ],
+  ];
+  if (draft.brief_status === "DRAFT" || draft.brief_status === "SELECTED") {
+    reviewActions[1]!.splice(1, 0, { text: "🖼️ 비공개 미리보기", callback_data: callbackData("draft:preview", token) });
+  }
   return {
     text: `📱 카드뉴스 초안${subject}\n\n${body}\n\n캡션\n${draft.caption.body}${draft.caption.cta ? `\n${draft.caption.cta}` : ""}${warning}`,
-    inline_keyboard: [
-      [
-        { text: "🔄 다른 훅", callback_data: callbackData("draft:rehook", token) },
-        { text: "✏️ 수정", callback_data: callbackData("draft:edit", token) },
-        { text: "✅ 초안 선택", callback_data: callbackData("draft:approve", token) },
-      ],
-      [
-        { text: "🔎 근거", callback_data: callbackData("draft:evidence", token) },
-        { text: "◀ 소재로 돌아가기", callback_data: "draft:back:list" },
-      ],
-    ],
+    inline_keyboard: reviewActions,
   };
 }
 

@@ -90,3 +90,33 @@ Deno.test("does not include media binaries in a snapshot", () => {
   assertEquals("raw_payload" in snapshot.posts[0]!, false);
 });
 
+Deno.test("freezes publisher article text as separate unverified exploration evidence", () => {
+  const article = {
+    source_observation_id: "observation-1",
+    publisher_name: "The Athletic",
+    canonical_url: "https://theathletic.com/123/manchester-united-report",
+    published_at: "2026-10-12T08:00:00Z",
+    extraction_status: "EXTRACTED",
+    article_text: "The Athletic reports that Manchester United are considering the player. This remains an unconfirmed report.",
+    content_fingerprint: "article-fingerprint-1",
+    verified: false,
+  };
+  const snapshot = buildEvidenceSnapshot({
+    ...input(),
+    exploration_articles: [article],
+  } as unknown as CandidateEvidenceInput, true);
+
+  assertEquals((snapshot as unknown as Record<string, unknown>).exploration_articles, [{
+    ...article,
+    evidence_id: "article:observation-1",
+  }]);
+  assertEquals(snapshot.evidence_ids.includes("article:observation-1"), true);
+  assertEquals(snapshot.sources[0]?.verified, undefined);
+});
+
+Deno.test("Standard evidence snapshots keep the original shape", () => {
+  const snapshot = buildEvidenceSnapshot(input({
+    exploration_articles: [{ source_observation_id: "observation-1", publisher_name: "The Athletic", canonical_url: "https://theathletic.com/123/article", published_at: "2026-10-12T08:00:00Z", extraction_status: "EXTRACTED", article_text: "Article text.", content_fingerprint: "fp" }],
+  }));
+  assertEquals("exploration_articles" in snapshot, false);
+});

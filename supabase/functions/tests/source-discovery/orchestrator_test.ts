@@ -52,11 +52,12 @@ Deno.test("missing feeds are a successful NOOP", async () => {
 });
 
 Deno.test("fact feeds enrich RSS summaries with bounded article paragraphs", async () => {
-  let savedExcerpt: string | null = null;
+  const saved: { excerpt: string | null; metadata: Readonly<Record<string, unknown>> } = { excerpt: null, metadata: {} };
   const repository: SourceDiscoveryRepository = {
     ensureSource: async () => "bbc-source",
     saveObservation: async (observation) => {
-      savedExcerpt = observation.excerpt;
+      saved.excerpt = observation.excerpt;
+      saved.metadata = observation.metadata;
       return true;
     },
   };
@@ -75,7 +76,24 @@ Deno.test("fact feeds enrich RSS summaries with bounded article paragraphs", asy
 
   assert.equal(result.observed, 1);
   assert.equal(result.factObserved, 1);
-  assert.equal(savedExcerpt, "United tried to build from the back with shorter passes. The manager adjusted the defensive shape after the draw.");
+  assert.equal(saved.excerpt, "United tried to build from the back with shorter passes. The manager adjusted the defensive shape after the draw.");
+  assert.equal(saved.metadata.article_extraction_status, "EXTRACTED");
+  assert.equal(saved.metadata.article_excerpt_chars, saved.excerpt?.length ?? -1);
+});
+
+Deno.test("feed-only summaries are explicitly marked so Exploration cannot treat them as article text", async () => {
+  const saved: { metadata: Readonly<Record<string, unknown>> } = { metadata: {} };
+  const result = await runSourceDiscovery({
+    repository: { ensureSource: async () => "bbc-source", saveObservation: async (observation) => { saved.metadata = observation.metadata; return true; } },
+    feeds: [feeds[0]!],
+    now: () => new Date("2026-09-27T02:00:00Z"),
+    fetch: async (url) => String(url).includes("/article/") ? new Response("<html><body>No article paragraphs here.</body></html>") : new Response("<rss><item><guid>summary-1</guid><title>United update</title><description>Feed summary only.</description><link>https://bbc.test/article/summary</link></item></rss>"),
+    maxItems: 5,
+    maxBytes: 10_000,
+    timeoutMs: 100,
+  });
+  assert.equal(result.observed, 1);
+  assert.equal(saved.metadata.article_extraction_status, "FEED_SUMMARY");
 });
 
 Deno.test("discovery-only news feeds do not trigger trusted fact rechecking", async () => {

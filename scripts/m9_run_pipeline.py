@@ -26,7 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 from m9_source_request_from_brief import build_request
-from m9_preview_workflow import Http, SupabaseGateway
+from m9_preview_workflow import Http, SupabaseGateway, validate_preview_status
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,6 +46,8 @@ def launch(argv: list[str] | None = None) -> Path:
     p.add_argument("--approved-image-hosts", help="Operator-approved CDN hosts; defaults to M9_APPROVED_IMAGE_HOSTS")
     p.add_argument("--workdir", required=True)
     p.add_argument("--font", required=True)
+    p.add_argument("--body-font", help="Optional Pretendard SemiBold font for body copy; defaults to --font")
+    p.add_argument("--allow-draft-preview", action="store_true", help="Explicitly allow an Exploration DRAFT/SELECTED brief for private upload-only review")
     p.add_argument("--logo")
     p.add_argument("--cta")
     p.add_argument("--deno", default="deno")
@@ -57,16 +59,19 @@ def launch(argv: list[str] | None = None) -> Path:
         p.error("--send-telegram requires --upload and --chat-id")
     root = Path(args.workdir).resolve()
     root.mkdir(parents=True, exist_ok=True)
+    if args.brief_id:
+        remote = SupabaseGateway(os.getenv("SUPABASE_URL", ""),
+            os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SECRET_KEY", ""), Http())
+        brief_data = remote.load_brief(args.brief_id, args.allow_draft_preview)
+    else:
+        brief_data = json.loads(Path(args.brief_json).read_text(encoding="utf-8"))
+    validate_preview_status(brief_data, args.allow_draft_preview)
+    if brief_data.get("status") in ("DRAFT", "SELECTED") and args.send_telegram:
+        raise ValueError("M9_DRAFT_TELEGRAM_SEND_NOT_SUPPORTED")
     if args.request:
         request_path = Path(args.request).resolve()
         request = json.loads(request_path.read_text(encoding="utf-8"))
     else:
-        if args.brief_id:
-            remote = SupabaseGateway(os.getenv("SUPABASE_URL", ""),
-                os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SECRET_KEY", ""), Http())
-            brief_data = remote.load_brief(args.brief_id)
-        else:
-            brief_data = json.loads(Path(args.brief_json).read_text(encoding="utf-8"))
         names = (args.approved_image_hosts or os.getenv("M9_APPROVED_IMAGE_HOSTS") or "").split(",")
         approved_hosts = [name.strip().lower() for name in names if name.strip()]
         request = build_request(brief_data, approved_hosts)
@@ -99,6 +104,8 @@ def launch(argv: list[str] | None = None) -> Path:
                      ["--brief-json", str(Path(args.brief_json).resolve())])
     if args.logo: next_command += ["--logo", str(Path(args.logo).resolve())]
     if args.cta: next_command += ["--cta", str(Path(args.cta).resolve())]
+    if args.body_font: next_command += ["--body-font", str(Path(args.body_font).resolve())]
+    if args.allow_draft_preview: next_command += ["--allow-draft-preview"]
     if args.upload: next_command += ["--upload"]
     if args.send_telegram: next_command += ["--send-telegram","--chat-id", args.chat_id]
     command(next_command)

@@ -31,6 +31,8 @@ class M9RenderSmoke(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.font = find_font()
         assert self.font
+        body_font = os.environ.get("M9_TEST_BODY_FONT")
+        self.body_font = Path(body_font) if body_font and Path(body_font).is_file() else self.font
         Image.new("RGB", (2000, 1500), "#404448").save(self.root / "cover.jpg")
         Image.new("RGB", (1800, 1500), "#69626e").save(self.root / "body.jpg")
         Image.new("RGBA", (300, 300), (150, 20, 30, 255)).save(self.root / "logo.png")
@@ -57,7 +59,8 @@ class M9RenderSmoke(unittest.TestCase):
     def test_renders_full_bleed_cover_body_plus_exact_cta(self) -> None:
         out = self.root / "out"
         report = render(self.data, self.root, out, self.font,
-                        self.root / "logo.png", self.root / "cta.png")
+                        self.root / "logo.png", self.root / "cta.png",
+                        body_font_path=self.body_font)
         self.assertEqual(len(report["slides"]), 3)
         self.assertEqual(report["state"], "PRIVATE_PREVIEW_REQUIRES_REVIEW")
         for entry in report["slides"]:

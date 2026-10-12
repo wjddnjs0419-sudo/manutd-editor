@@ -1,6 +1,8 @@
 import { validateGenerationConfig, type GenerationConfig } from "./config.ts";
 import type { CandidateEvidenceInput, JsonValue } from "./types.ts";
 import type { ExistingPipelineState } from "./notion_projection.ts";
+import type { ExplorationArticleEvidenceInput } from "./types.ts";
+import { businessDate } from "../_shared/m6/business_date.ts";
 
 export type GenerationJobStatus = "QUEUED" | "GENERATING" | "READY" | "DRAFT" | "BLOCKED_EVIDENCE" | "CLASSIFICATION_UNCERTAIN" | "FAILED_VALIDATION" | "FAILED_PROVIDER";
 export type TriggerType = "AUTO_PRIORITY" | "NOTION_SELECTED" | "MANUAL";
@@ -20,6 +22,13 @@ export interface GenerationJob {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  generation_intent?: "STANDARD" | "EXPLORATION";
+  exploration_fingerprint?: string | null;
+  input_tokens?: number;
+  output_tokens?: number;
+  provider_calls?: number;
+  retry_count?: number;
+  estimated_cost_usd?: number | null;
 }
 
 export interface CreativeBriefInsert {
@@ -47,6 +56,11 @@ export interface CreativeBriefInsert {
   readonly generated_at: string;
   readonly style_profile?: string;
   readonly style_version?: string;
+  readonly exploration_fingerprint?: string;
+  readonly provider_calls?: number;
+  readonly input_tokens?: number;
+  readonly output_tokens?: number;
+  readonly estimated_cost_usd?: number | null;
 }
 
 export interface StoredCreativeBrief extends CreativeBriefInsert {
@@ -57,13 +71,18 @@ export interface GenerationRepository {
   getCandidateEvidence(candidateId: string): Promise<CandidateEvidenceInput | null>;
   getActiveConfig(): Promise<unknown>;
   findReadyBrief(candidateId: string, inputFingerprint: string): Promise<StoredCreativeBrief | null>;
+  findExplorationBrief?(explorationFingerprint: string): Promise<StoredCreativeBrief | null>;
+  findExistingBriefForStory?(storyClusterId: string, publisherUrls: readonly string[]): Promise<StoredCreativeBrief | null>;
   getJob(candidateId: string, inputFingerprint: string): Promise<GenerationJob | null>;
+  getJobById?(jobId: string): Promise<GenerationJob | null>;
   insertJob(input: Omit<GenerationJob, "id">): Promise<GenerationJob>;
+  reserveExplorationJob?(input: { candidate_id: string; exploration_fingerprint: string; trigger_type: TriggerType; now: Date; daily_limit: number }): Promise<{ status: "RESERVED" | "EXISTING" | "DAILY_LIMIT"; job_id?: string }>;
   acquireLease(jobId: string, leaseOwner: string, now: Date, leaseUntil: Date): Promise<boolean>;
   updateJob(jobId: string, patch: Partial<GenerationJob>): Promise<void>;
   nextRevision(candidateId: string): Promise<number>;
   insertCreativeBrief(input: CreativeBriefInsert): Promise<StoredCreativeBrief>;
   listPriorityCandidateIds?(rankingDate: string): Promise<readonly string[]>;
+  listExplorationCandidateIds?(now: Date): Promise<readonly string[]>;
   getPipelineState?(candidateId: string): Promise<ExistingPipelineState | null>;
   savePipelineState?(state: { candidate_id: string; creative_brief_id: string; revision: number; notion_page_id: string; sync_hash: string | null; production_status: ExistingPipelineState["production_status"] }): Promise<void>;
   getDailyIntelligencePageId?(candidateId: string): Promise<string | null>;
@@ -169,6 +188,89 @@ function m8GroundedSources(
   return grounded.sort((left, right) => left.source_id.localeCompare(right.source_id));
 }
 
+function m8ExplorationArticles(
+  claimsValue: unknown,
+  evidenceValue: unknown,
+  observationsValue: unknown,
+  informationSourcesValue: unknown,
+  discoveryValue: unknown,
+): ExplorationArticleEvidenceInput[] {
+  const claimIds = new Set<string>();
+  const modalities = new Map<string, ExplorationArticleEvidenceInput["modality"]>();
+  if (Array.isArray(claimsValue)) for (const value of claimsValue) {
+    const row = object(value);
+    if (typeof row.id !== "string") continue;
+    claimIds.add(row.id);
+    if (["CONFIRMED", "RUMOR", "PREDICTION", "DENIAL", "OPINION", "UNKNOWN"].includes(String(row.claim_modality))) {
+      modalities.set(row.id, row.claim_modality as ExplorationArticleEvidenceInput["modality"]);
+    }
+  }
+
+  const sourceNames = new Map<string, string>();
+  if (Array.isArray(informationSourcesValue)) for (const value of informationSourcesValue) {
+    const row = object(value);
+    if (typeof row.id === "string" && typeof row.canonical_name === "string") sourceNames.set(row.id, row.canonical_name);
+  }
+
+  const sourceRows = new Map<string, Record<string, unknown>>();
+  if (Array.isArray(observationsValue)) for (const value of observationsValue) {
+    const row = object(value);
+    if (typeof row.id === "string") sourceRows.set(row.id, row);
+  }
+
+  const relatedSourceIds = new Set<string>();
+  const modalityBySource = new Map<string, ExplorationArticleEvidenceInput["modality"]>();
+  if (Array.isArray(evidenceValue)) for (const value of evidenceValue) {
+    const row = object(value);
+    if (typeof row.source_observation_id !== "string" || typeof row.claim_id !== "string" || !claimIds.has(row.claim_id)) continue;
+    relatedSourceIds.add(row.source_observation_id);
+    const modality = modalities.get(row.claim_id);
+    if (modality && (!modalityBySource.has(row.source_observation_id) || modality !== "CONFIRMED")) modalityBySource.set(row.source_observation_id, modality);
+  }
+
+  const discoveryRows = Array.isArray(discoveryValue) ? discoveryValue.map(object) : [];
+  for (const row of discoveryRows) if (typeof row.source_observation_id === "string") relatedSourceIds.add(row.source_observation_id);
+
+  const result = new Map<string, ExplorationArticleEvidenceInput>();
+  for (const sourceId of relatedSourceIds) {
+    const source = sourceRows.get(sourceId);
+    const discovery = discoveryRows.find((row) => row.source_observation_id === sourceId);
+    const metadata = object(source?.metadata);
+    const discoveryMetadata = object(discovery?.metadata);
+    const extractionStatus = source && (metadata.article_extraction_status === "EXTRACTED" || metadata.article_enrichment === "EXTRACTED")
+      ? "EXTRACTED"
+      : discovery?.article_extraction_status === "EXTRACTED" ? "EXTRACTED"
+      : typeof metadata.article_extraction_status === "string" ? metadata.article_extraction_status
+      : typeof discovery?.article_extraction_status === "string" ? discovery.article_extraction_status
+      : "NOT_EXTRACTED";
+    const articleText = extractionStatus === "EXTRACTED"
+      ? (typeof metadata.article_content_excerpt === "string" ? metadata.article_content_excerpt : typeof source?.excerpt === "string" ? source.excerpt : typeof discovery?.article_content_excerpt === "string" ? discovery.article_content_excerpt : null)
+      : null;
+    const canonicalUrl = typeof source?.canonical_url === "string" ? source.canonical_url : typeof discovery?.article_final_url === "string" ? discovery.article_final_url : typeof discovery?.resolved_publisher_url === "string" ? discovery.resolved_publisher_url : typeof discovery?.canonical_url === "string" ? discovery.canonical_url : "";
+    const publisherName = typeof source?.information_source_id === "string"
+      ? sourceNames.get(source.information_source_id) ?? (typeof discovery?.source_canonical_name === "string" ? discovery.source_canonical_name : "")
+      : typeof discovery?.source_canonical_name === "string" ? discovery.source_canonical_name : "";
+    const publishedAt = typeof source?.published_at === "string" ? source.published_at : typeof discovery?.published_at === "string" ? discovery.published_at : null;
+    const observedAt = typeof source?.observed_at === "string" ? source.observed_at : typeof discovery?.last_observed_at === "string" ? discovery.last_observed_at : null;
+    const contentFingerprint = typeof source?.content_fingerprint === "string" ? source.content_fingerprint : typeof discovery?.content_fingerprint === "string" ? discovery.content_fingerprint : "";
+    const sourceTitle = typeof source?.title === "string" ? source.title : typeof discovery?.title === "string" ? discovery.title : "";
+    if (!canonicalUrl || !contentFingerprint || (!articleText && !sourceTitle)) continue;
+    result.set(sourceId, {
+      source_observation_id: sourceId,
+      publisher_name: publisherName,
+      canonical_url: canonicalUrl,
+      published_at: publishedAt,
+      observed_at: observedAt,
+      extraction_status: extractionStatus,
+      article_text: articleText,
+      content_fingerprint: contentFingerprint,
+      modality: modalityBySource.get(sourceId) ?? (typeof discoveryMetadata.claim_modality === "string" && ["CONFIRMED", "RUMOR", "PREDICTION", "DENIAL", "OPINION", "UNKNOWN"].includes(discoveryMetadata.claim_modality) ? discoveryMetadata.claim_modality as ExplorationArticleEvidenceInput["modality"] : "UNKNOWN"),
+      verified: false,
+    });
+  }
+  return [...result.values()].sort((left, right) => (right.published_at ?? "").localeCompare(left.published_at ?? "") || left.source_observation_id.localeCompare(right.source_observation_id));
+}
+
 function candidateFromRow(row: Record<string, unknown>, editorialRanking?: CandidateEvidenceInput["candidate"]["editorial_ranking"]): CandidateEvidenceInput["candidate"] {
   return {
     id: string(row.id), story_cluster_id: string(row.story_cluster_id), ranking_date: string(row.ranking_date),
@@ -190,6 +292,11 @@ function jobFromRow(row: Record<string, unknown>): GenerationJob {
     repair_attempted: bool(row.repair_attempted), creative_brief_id: typeof row.creative_brief_id === "string" ? row.creative_brief_id : null,
     last_error_category: typeof row.last_error_category === "string" ? row.last_error_category : null,
     created_at: string(row.created_at), updated_at: string(row.updated_at), completed_at: typeof row.completed_at === "string" ? row.completed_at : null,
+    ...(row.generation_intent === "EXPLORATION" ? { generation_intent: "EXPLORATION" as const } : { generation_intent: "STANDARD" as const }),
+    exploration_fingerprint: typeof row.exploration_fingerprint === "string" ? row.exploration_fingerprint : null,
+    input_tokens: number(row.input_tokens) ?? 0, output_tokens: number(row.output_tokens) ?? 0,
+    provider_calls: number(row.provider_calls) ?? 0, retry_count: number(row.retry_count) ?? 0,
+    estimated_cost_usd: number(row.estimated_cost_usd),
   };
 }
 
@@ -228,14 +335,35 @@ export function createRestGenerationRepository(options: RestRepositoryOptions): 
       const candidate = candidateFromRow(candidateRow, editorialRanking);
       const clusterRow = await getOne(`/story_clusters?select=id,canonical_title,status,first_seen_at,last_seen_at&id=eq.${encodeURIComponent(candidate.story_cluster_id)}&limit=1`);
       if (!clusterRow) return null;
-      const [postRows, sourceRows, m8Claims, m8Evidence, m8Observations, m8InformationSources] = await Promise.all([
+      const [postRows, sourceRows, m8Claims, discoveryRows] = await Promise.all([
         request(`/story_cluster_posts?select=raw_post_id,raw_posts(id,source_account_id,caption,permalink,published_at,media_type,source_accounts(username,region))&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&order=raw_post_id.asc`),
         request(`/story_cluster_sources?select=information_source_id,first_cited_post_id,citation_count,evidence_text,information_sources(canonical_name,entity_type,reliability_score)&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&order=information_source_id.asc`),
         request(`/story_claims?select=id,grounding_status,claim_scope,claim_modality&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&limit=2000`, {}, "app_private"),
-        request("/claim_evidence?select=claim_id,source_observation_id,editorial_role,relation,is_grounding,evidence_text&limit=5000", {}, "app_private"),
-        request("/source_observations?select=id,information_source_id,editorial_role,canonical_url,title,published_at,metadata&limit=5000", {}, "app_private"),
-        request("/information_sources?select=id,canonical_name,entity_type,reliability_score&limit=500", {}),
+        request(`/discovery_observations?select=id,source_observation_id,provider_id,source_canonical_name,canonical_url,article_final_url,resolved_publisher_url,title,article_extraction_status,article_content_excerpt,published_at,last_observed_at,content_fingerprint,metadata&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&order=published_at.desc.nullslast&limit=100`, {}, "app_private"),
       ]);
+      const claimIds = Array.isArray(m8Claims) ? m8Claims.map(object).map((row) => string(row.id)).filter(Boolean) : [];
+      const claimFilter = claimIds.length > 0 ? `&claim_id=in.(${claimIds.map(encodeURIComponent).join(",")})` : "&claim_id=eq.__none__";
+      const m8Evidence = await request(`/claim_evidence?select=claim_id,source_observation_id,editorial_role,relation,is_grounding,evidence_text${claimFilter}`, {}, "app_private");
+      const observationIds = new Set<string>();
+      if (Array.isArray(m8Evidence)) for (const value of m8Evidence) {
+        const id = object(value).source_observation_id;
+        if (typeof id === "string") observationIds.add(id);
+      }
+      if (Array.isArray(discoveryRows)) for (const value of discoveryRows) {
+        const id = object(value).source_observation_id;
+        if (typeof id === "string") observationIds.add(id);
+      }
+      const observationFilter = [...observationIds].map(encodeURIComponent).join(",");
+      const m8Observations = observationFilter
+        ? await request(`/source_observations?select=id,information_source_id,editorial_role,external_id,canonical_url,title,excerpt,published_at,observed_at,content_fingerprint,metadata&id=in.(${observationFilter})`, {}, "app_private")
+        : [];
+      const informationSourceIds = Array.isArray(m8Observations)
+        ? [...new Set(m8Observations.map(object).map((row) => string(row.information_source_id)).filter(Boolean))]
+        : [];
+      const informationSourceFilter = informationSourceIds.map(encodeURIComponent).join(",");
+      const m8InformationSources = informationSourceFilter
+        ? await request(`/information_sources?select=id,canonical_name,entity_type,reliability_score&id=in.(${informationSourceFilter})`)
+        : [];
       const posts = Array.isArray(postRows) ? postRows.map((row) => {
         const value = object(row); const post = object(value.raw_posts); const account = object(post.source_accounts);
         return { raw_post_id: string(post.id || value.raw_post_id), source_account_id: string(post.source_account_id), account_username: string(account.username), region: string(account.region), caption: typeof post.caption === "string" ? post.caption : null, permalink: typeof post.permalink === "string" ? post.permalink : null, published_at: string(post.published_at), media_type: string(post.media_type) };
@@ -246,7 +374,8 @@ export function createRestGenerationRepository(options: RestRepositoryOptions): 
       }).filter((source) => source.source_id) : [];
       const m8Sources = m8GroundedSources(m8Claims, m8Evidence, m8Observations, m8InformationSources);
       const sources = [...legacySources, ...m8Sources.filter((source) => !legacySources.some((legacy) => legacy.source_id === source.source_id))];
-      return { candidate, story: { id: string(clusterRow.id), canonical_title: typeof clusterRow.canonical_title === "string" ? clusterRow.canonical_title : null, status: string(clusterRow.status), first_seen_at: string(clusterRow.first_seen_at), last_seen_at: string(clusterRow.last_seen_at) }, posts, sources };
+      const explorationArticles = m8ExplorationArticles(m8Claims, m8Evidence, m8Observations, m8InformationSources, discoveryRows);
+      return { candidate, story: { id: string(clusterRow.id), canonical_title: typeof clusterRow.canonical_title === "string" ? clusterRow.canonical_title : null, status: string(clusterRow.status), first_seen_at: string(clusterRow.first_seen_at), last_seen_at: string(clusterRow.last_seen_at) }, posts, sources, exploration_articles: explorationArticles };
     },
     async getActiveConfig() {
       const row = await getOne("/creative_generation_configs?is_active=eq.true&order=effective_from.desc&limit=1");
@@ -257,12 +386,29 @@ export function createRestGenerationRepository(options: RestRepositoryOptions): 
       const row = await getOne(`/creative_briefs?select=*&candidate_id=eq.${encodeURIComponent(candidateId)}&input_fingerprint=eq.${encodeURIComponent(inputFingerprint)}&status=eq.READY&limit=1`);
       return row ? row as unknown as StoredCreativeBrief : null;
     },
+    async findExplorationBrief(explorationFingerprint) {
+      const row = await getOne(`/creative_briefs?select=*&exploration_fingerprint=eq.${encodeURIComponent(explorationFingerprint)}&status=in.(DRAFT,SELECTED,BRIEF_READY,DESIGNING,READY,PUBLISHED)&limit=1`);
+      return row ? row as unknown as StoredCreativeBrief : null;
+    },
+    async findExistingBriefForStory(storyClusterId, publisherUrls) {
+      void publisherUrls;
+      const candidates = await request(`/content_candidates?select=id&story_cluster_id=eq.${encodeURIComponent(storyClusterId)}&limit=1000`);
+      const candidateIds = Array.isArray(candidates) ? candidates.map(object).map((row) => string(row.id)).filter(Boolean) : [];
+      if (candidateIds.length === 0) return null;
+      const candidateFilter = candidateIds.map(encodeURIComponent).join(",");
+      const row = await getOne(`/creative_briefs?select=*&candidate_id=in.(${candidateFilter})&status=in.(DRAFT,SELECTED,BRIEF_READY,DESIGNING,READY,PUBLISHED)&order=generated_at.desc.nullslast,created_at.desc&limit=1`);
+      return row ? row as unknown as StoredCreativeBrief : null;
+    },
     async getCreativeBrief(creativeBriefId) {
       const row = await getOne(`/creative_briefs?select=*&id=eq.${encodeURIComponent(creativeBriefId)}&status=eq.READY&limit=1`);
       return row ? row as unknown as StoredCreativeBrief : null;
     },
     async getJob(candidateId, inputFingerprint) {
       const row = await getOne(`/creative_generation_jobs?select=*&candidate_id=eq.${encodeURIComponent(candidateId)}&input_fingerprint=eq.${encodeURIComponent(inputFingerprint)}&limit=1`, "app_private");
+      return row ? jobFromRow(row) : null;
+    },
+    async getJobById(jobId) {
+      const row = await getOne(`/creative_generation_jobs?select=*&id=eq.${encodeURIComponent(jobId)}&limit=1`, "app_private");
       return row ? jobFromRow(row) : null;
     },
     async insertJob(input) {
@@ -274,6 +420,21 @@ export function createRestGenerationRepository(options: RestRepositoryOptions): 
         if (!existing) throw new Error("GENERATION_JOB_INSERT_FAILED");
         return existing;
       }
+    },
+    async reserveExplorationJob(input) {
+      const value = await request("/rpc/reserve_editorial_exploration_generation", {
+        method: "POST",
+        body: JSON.stringify({
+          p_candidate_id: input.candidate_id,
+          p_exploration_fingerprint: input.exploration_fingerprint,
+          p_trigger_type: input.trigger_type,
+          p_at: input.now.toISOString(),
+          p_daily_limit: input.daily_limit,
+        }),
+      });
+      const row = Array.isArray(value) ? object(value[0]) : object(value);
+      const status = row.status === "RESERVED" || row.status === "EXISTING" || row.status === "DAILY_LIMIT" ? row.status : "DAILY_LIMIT";
+      return { status, ...(typeof row.job_id === "string" ? { job_id: row.job_id } : {}) };
     },
     async acquireLease(jobId, leaseOwner, now, leaseUntil) {
       const value = await request("/rpc/try_acquire_creative_generation_job", { method: "POST", body: JSON.stringify({ p_job_id: jobId, p_lease_owner: leaseOwner, p_now: now.toISOString(), p_lease_until: leaseUntil.toISOString() }) });
@@ -315,6 +476,28 @@ export function createRestGenerationRepository(options: RestRepositoryOptions): 
         const candidateId = candidateByStory.get(string(row.story_cluster_id));
         return candidateId ? [candidateId] : [];
       });
+    },
+    async listExplorationCandidateIds(at) {
+      const cutoff = new Date(at.getTime() - 72 * 60 * 60 * 1000).toISOString();
+      const observations = await request(`/discovery_observations?select=story_cluster_id,published_at&story_cluster_id=not.is.null&published_at=gte.${encodeURIComponent(cutoff)}&published_at=lte.${encodeURIComponent(at.toISOString())}&order=published_at.desc&limit=1000`, {}, "app_private");
+      const storyIds: string[] = [];
+      const seenStories = new Set<string>();
+      if (Array.isArray(observations)) for (const value of observations) {
+        const row = object(value);
+        if (typeof row.story_cluster_id === "string" && !seenStories.has(row.story_cluster_id)) {
+          seenStories.add(row.story_cluster_id);
+          storyIds.push(row.story_cluster_id);
+        }
+      }
+      if (storyIds.length === 0) return [];
+      const inFilter = `(${storyIds.map(encodeURIComponent).join(",")})`;
+      const candidates = await request(`/content_candidates?select=id,story_cluster_id&ranking_date=eq.${encodeURIComponent(businessDate(at, "Asia/Seoul"))}&story_cluster_id=in.${inFilter}&limit=1000`);
+      const candidateByStory = new Map<string, string>();
+      if (Array.isArray(candidates)) for (const value of candidates) {
+        const row = object(value);
+        if (typeof row.story_cluster_id === "string" && typeof row.id === "string") candidateByStory.set(row.story_cluster_id, row.id);
+      }
+      return storyIds.flatMap((storyId) => candidateByStory.has(storyId) ? [candidateByStory.get(storyId)!] : []);
     },
     async getPipelineState(candidateId) {
       const value = await request(`/creative_pipeline_sync_state?select=notion_page_id,production_status,revision&candidate_id=eq.${encodeURIComponent(candidateId)}&order=revision.desc&limit=1`, {}, "app_private");

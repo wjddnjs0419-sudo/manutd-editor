@@ -97,6 +97,17 @@ def source_pages(snapshot: dict[str,Any]) -> tuple[list[str],list[str]]:
     sources = snapshot.get("sources")
     if not isinstance(sources,list):
         raise ValueError("M9_BRIEF_SOURCES_MISSING")
+    sources = list(sources)
+    articles = snapshot.get("exploration_articles")
+    if isinstance(articles, list):
+        for article in articles:
+            if not isinstance(article, dict):
+                continue
+            sources.append({
+                "canonical_url": article.get("canonical_url"),
+                "canonical_name": article.get("publisher_name"),
+                "editorial_role": "DISCOVERY_COMMUNITY",
+            })
     scored:list[tuple[int,int,str,bool]] = []
     for index,source in enumerate(sources):
         if not isinstance(source,dict):continue
@@ -167,7 +178,7 @@ def build_request(
         "_provenance":{
             "brief_id":brief.get("id"),
             "subject_names":subjects,
-            "source_type":"creative_briefs.evidence_snapshot.sources",
+            "source_type":"creative_briefs.evidence_snapshot.sources_and_exploration_articles",
             "google_news_original_urls":google_original_urls[:20],
             "requires_human_photo_review":True,
             "auto_publish":False,

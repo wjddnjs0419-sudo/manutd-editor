@@ -3,12 +3,13 @@ import { classifierPrompt, generationPrompt, repairPrompt } from "./prompts.ts";
 import type {
   AiClassification,
 } from "./classifier.ts";
-import type { ContentMode, CreativeBriefOutput, MatchPhase } from "./types.ts";
+import type { ContentMode, CreativeBriefOutput, GenerationIntent, MatchPhase } from "./types.ts";
 
 export interface ProviderPromptInput {
   readonly content_mode: ContentMode;
   readonly match_phase: MatchPhase | null;
   readonly evidence_snapshot: unknown;
+  readonly generation_intent?: GenerationIntent;
 }
 
 export interface CreativeGenerationProvider {
@@ -16,6 +17,14 @@ export interface CreativeGenerationProvider {
   generate(input: ProviderPromptInput): Promise<CreativeBriefOutput>;
   repair(input: ProviderPromptInput, output: CreativeBriefOutput, errors: readonly string[]): Promise<CreativeBriefOutput>;
   configure?(config: GenerationConfig): void;
+  getUsageStats?(): ProviderUsageStats;
+}
+
+export interface ProviderUsageStats {
+  readonly provider_calls: number;
+  readonly input_tokens: number;
+  readonly output_tokens: number;
+  readonly retry_count: number;
 }
 
 export interface OpenAIProviderOptions {
@@ -182,6 +191,19 @@ function parseOutput<T>(body: unknown): T {
   }
 }
 
+function tokenUsage(body: unknown): { input_tokens: number; output_tokens: number } {
+  if (!body || typeof body !== "object") return { input_tokens: 0, output_tokens: 0 };
+  const usage = (body as Record<string, unknown>).usage;
+  if (!usage || typeof usage !== "object") return { input_tokens: 0, output_tokens: 0 };
+  const value = usage as Record<string, unknown>;
+  const input = value.input_tokens ?? value.prompt_tokens;
+  const output = value.output_tokens ?? value.completion_tokens;
+  return {
+    input_tokens: typeof input === "number" && input >= 0 ? input : 0,
+    output_tokens: typeof output === "number" && output >= 0 ? output : 0,
+  };
+}
+
 function retryAfterMilliseconds(headers: Headers): number {
   const value = headers.get("retry-after");
   if (!value) return 0;
@@ -217,12 +239,17 @@ export function createOpenAIProvider(options: OpenAIProviderOptions) {
   const maxRetries = Math.max(0, options.maxRetries ?? 2);
   const timeoutMs = options.timeoutMs ?? 30_000;
   const baseUrl = options.baseUrl ?? "https://api.openai.com/v1/responses";
+  let providerCalls = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let retryCount = 0;
 
   async function request<T>(body: Record<string, unknown>): Promise<T> {
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
+        providerCalls += 1;
         const response = await fetchImpl(baseUrl, {
           method: "POST",
           headers: { authorization: `Bearer ${options.apiKey}`, "content-type": "application/json" },
@@ -236,14 +263,19 @@ export function createOpenAIProvider(options: OpenAIProviderOptions) {
           } catch {
             throw new ProviderError("MALFORMED_PROVIDER_RESPONSE", response.status);
           }
+          const usage = tokenUsage(parsed);
+          inputTokens += usage.input_tokens;
+          outputTokens += usage.output_tokens;
           return parseOutput<T>(parsed);
         }
         const retryable = response.status === 429 || response.status >= 500;
         if (!retryable || attempt === maxRetries) throw new ProviderError("FAILED_PROVIDER", response.status);
+        retryCount += 1;
         await sleep(retryAfterMilliseconds(response.headers) || Math.min(1000 * (2 ** attempt), 5000));
       } catch (error) {
         if (error instanceof ProviderError) throw error;
         if (attempt === maxRetries) throw new ProviderError(error instanceof DOMException && error.name === "AbortError" ? "PROVIDER_TIMEOUT" : "FAILED_PROVIDER");
+        retryCount += 1;
         await sleep(Math.min(1000 * (2 ** attempt), 5000));
       } finally {
         clearTimeout(timer);
@@ -253,6 +285,9 @@ export function createOpenAIProvider(options: OpenAIProviderOptions) {
   }
 
   return {
+    getUsageStats(): ProviderUsageStats {
+      return { provider_calls: providerCalls, input_tokens: inputTokens, output_tokens: outputTokens, retry_count: retryCount };
+    },
     configure(config: GenerationConfig) {
       const configured = config.generation_config;
       if (typeof configured.model === "string" && configured.model.trim()) model = configured.model;
@@ -263,10 +298,10 @@ export function createOpenAIProvider(options: OpenAIProviderOptions) {
       return await request<AiClassification>(requestBody(config.model, config.reasoning, classifierPrompt(text), "content_classification", CLASSIFIER_SCHEMA, 500));
     },
     async generate(input: ProviderPromptInput): Promise<CreativeBriefOutput> {
-      return await request<CreativeBriefOutput>(requestBody(model, reasoning, generationPrompt(input.content_mode, input.match_phase, input.evidence_snapshot), "creative_brief", CREATIVE_SCHEMA, maxOutputTokens));
+      return await request<CreativeBriefOutput>(requestBody(model, reasoning, generationPrompt(input.content_mode, input.match_phase, input.evidence_snapshot, input.generation_intent), "creative_brief", CREATIVE_SCHEMA, maxOutputTokens));
     },
     async repair(input: ProviderPromptInput, output: CreativeBriefOutput, errors: readonly string[]): Promise<CreativeBriefOutput> {
-      return await request<CreativeBriefOutput>(requestBody(model, reasoning, repairPrompt(input.content_mode, input.match_phase, input.evidence_snapshot, output, errors), "creative_brief_repair", CREATIVE_SCHEMA, maxOutputTokens));
+      return await request<CreativeBriefOutput>(requestBody(model, reasoning, repairPrompt(input.content_mode, input.match_phase, input.evidence_snapshot, output, errors, input.generation_intent), "creative_brief_repair", CREATIVE_SCHEMA, maxOutputTokens));
     },
   };
 }

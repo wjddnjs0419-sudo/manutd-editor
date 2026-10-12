@@ -1,6 +1,7 @@
 export type ContentMode = "NEWS_UPDATE" | "ANALYSIS_CONTEXT" | "MATCH_CONTENT";
 export type MatchPhase = "PRE_MATCH" | "LIVE" | "POST_MATCH";
 export type GenerationQuality = "FULL" | "PARTIAL";
+export type GenerationIntent = "STANDARD" | "EXPLORATION";
 
 export type JsonObject = { [key: string]: JsonValue };
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
@@ -36,6 +37,26 @@ export interface CandidateEvidenceInput {
   };
   readonly posts: readonly EvidencePostInput[];
   readonly sources: readonly EvidenceSourceInput[];
+  readonly exploration_articles?: readonly ExplorationArticleEvidenceInput[];
+}
+
+/** Publisher-page article evidence for review-only generation; this is never VERIFIED fact evidence. */
+export interface ExplorationArticleEvidenceInput {
+  readonly source_observation_id: string;
+  readonly publisher_name: string;
+  readonly canonical_url: string;
+  readonly published_at: string | null;
+  readonly observed_at?: string | null;
+  readonly extraction_status: string;
+  readonly article_text: string | null;
+  readonly content_fingerprint: string;
+  readonly modality?: "CONFIRMED" | "RUMOR" | "PREDICTION" | "DENIAL" | "OPINION" | "UNKNOWN";
+  readonly verified?: false;
+}
+
+export interface ExplorationArticleEvidence extends ExplorationArticleEvidenceInput {
+  readonly evidence_id: `article:${string}`;
+  readonly verified: false;
 }
 
 export interface EvidencePostInput {
@@ -83,6 +104,7 @@ export interface EvidenceSnapshot {
   readonly story: CandidateEvidenceInput["story"];
   readonly posts: readonly EvidencePost[];
   readonly sources: readonly EvidenceSource[];
+  readonly exploration_articles?: readonly ExplorationArticleEvidence[];
   readonly score_evidence: Readonly<Record<string, JsonValue>>;
   readonly evidence_ids: readonly string[];
 }

@@ -8,6 +8,8 @@ import type {
 import { validateManutdEditorDraft } from "../_shared/editorial-style/validator.ts";
 import type { ManutdEditorCarouselDraft } from "../_shared/editorial-style/types.ts";
 import { validPublisherUrl, verifiedNewsSources } from "./evidence.ts";
+import { assessExplorationArticle, DEFAULT_EXPLORATION_CONFIG, type ExplorationConfig } from "./exploration.ts";
+import type { GenerationIntent, ExplorationArticleEvidence } from "./types.ts";
 
 export interface QualityGateConfig {
   readonly min_slides: number;
@@ -18,6 +20,7 @@ export interface QualityGateConfig {
   readonly style_profile?: string;
   readonly style_version?: string;
   readonly enable_style_validator?: boolean;
+  readonly exploration_config?: ExplorationConfig;
 }
 
 export interface ValidationError {
@@ -72,7 +75,7 @@ function unsupportedConfirmation(modality: string | undefined, value: string): b
   if (modality === "CONFIRMED") return false;
   const confirmation = /(?:이적|영입|합류|계약).{0,12}(?:확정|성사|완료|공식 발표)|(?:transfer|signing|deal).{0,20}(?:confirmed|completed|officially signed)/iu;
   if (!confirmation.test(value)) return false;
-  return !/(?:아직|현재까지|결코|not|never|isn't|is not).{0,10}(?:확정|성사|완료|confirmed|completed)|(?:확정|성사|완료|confirmed|completed).{0,8}(?:아니|않|되지 않|not)/iu.test(value);
+  return !/(?:아직|현재까지|결코|not|never|isn't|is not).{0,10}(?:확정|성사|완료|confirmed|completed)|(?:확정|성사|완료|confirmed|completed).{0,16}(?:아닙|아니|않|되지 않|불발|취소|not)/iu.test(value);
 }
 
 function styleDraft(value: CreativeBriefOutput, evidence: EvidenceSnapshot): ManutdEditorCarouselDraft {
@@ -107,6 +110,8 @@ export function validateCreativeBrief(
   value: unknown,
   evidence: EvidenceSnapshot,
   config: QualityGateConfig,
+  intent: GenerationIntent = "STANDARD",
+  now: Date = new Date(),
 ): ValidationResult {
   const errors: ValidationError[] = [];
   if (!object(value)) return { valid: false, errors: [error("SCHEMA_INVALID", "root")] };
@@ -181,7 +186,7 @@ export function validateCreativeBrief(
     });
   }
 
-  if (mode === "NEWS_UPDATE") {
+  if (mode === "NEWS_UPDATE" && intent === "STANDARD") {
     const reliableSources = verifiedNewsSources(evidence);
     if (reliableSources.length === 0) errors.push(error("NEWS_EVIDENCE_BLOCKED", "sources"));
     const strictEvidenceIds = new Set<string>(reliableSources.map((source) => source.evidence_id));
@@ -222,6 +227,8 @@ export function validateCreativeBrief(
     }
   }
 
+  if (intent === "EXPLORATION") validateExplorationOutput(output, evidence, config, now, errors);
+
   if (config.enable_style_validator === true) {
     if (output.style_profile !== config.style_profile || output.style_version !== config.style_version) {
       errors.push(error("STYLE_IDENTITY", "style_profile"));
@@ -233,19 +240,102 @@ export function validateCreativeBrief(
   return { valid: errors.length === 0, errors };
 }
 
+function validateExplorationOutput(
+  output: Record<string, unknown>,
+  evidence: EvidenceSnapshot,
+  config: QualityGateConfig,
+  now: Date,
+  errors: ValidationError[],
+): void {
+  const policy = config.exploration_config ?? DEFAULT_EXPLORATION_CONFIG;
+  const eligibleArticles = (evidence.exploration_articles ?? []).filter((article) =>
+    article.verified === false && assessExplorationArticle(article, now, policy).eligible
+  );
+  if (eligibleArticles.length === 0) {
+    errors.push(error("EXPLORATION_EVIDENCE_REQUIRED", "evidence_snapshot.exploration_articles"));
+    return;
+  }
+  const articleById = new Map<string, ExplorationArticleEvidence>(eligibleArticles.map((article) => [article.evidence_id, article]));
+  const claims = Array.isArray(output.slides)
+    ? output.slides.flatMap((slide) => object(slide) && Array.isArray(slide.claims) ? slide.claims.filter(object).map((claim) => ({ slide, claim })) : [])
+    : [];
+  const referencedArticleIds = new Set<string>();
+
+  for (const { slide, claim } of claims) {
+    const refs = Array.isArray(claim.evidence_ids) ? claim.evidence_ids.filter((id): id is string => typeof id === "string") : [];
+    const articleRefs = refs.map((id) => articleById.get(id)).filter((article): article is ExplorationArticleEvidence => Boolean(article));
+    if (articleRefs.length === 0) {
+      errors.push(error("EXPLORATION_CLAIM_NOT_ARTICLE_GROUNDED", "slides.claims.evidence_ids"));
+      continue;
+    }
+    const claimText = safeText(claim.text);
+    const slideText = [slide.headline, slide.body, slide.highlight, slide.closing_line].map(safeText).join(" ");
+    for (const article of articleRefs) {
+      referencedArticleIds.add(article.evidence_id);
+      if (!/보도|전했|밝혔|따르면|reported|reports?|according to/iu.test(claimText)) {
+        errors.push(error("EXPLORATION_ATTRIBUTION_MISSING", "slides.claims.text"));
+      }
+      if (!modalityPreserved(article.modality, claimText) || !modalityPreserved(article.modality, slideText)) {
+        errors.push(error("EXPLORATION_MODALITY_LOST", "slides"));
+      }
+      if (unsupportedConfirmation(article.modality, claimText) || unsupportedConfirmation(article.modality, slideText)) {
+        errors.push(error("EXPLORATION_MODALITY_OVERRIDDEN", "slides"));
+      }
+    }
+  }
+
+  const outputSources = Array.isArray(output.sources) ? output.sources.filter(object) : [];
+  const citedArticles: ExplorationArticleEvidence[] = [];
+  for (const source of outputSources) {
+    const article = articleById.get(safeText(source.evidence_id));
+    if (!article || !referencedArticleIds.has(article.evidence_id)) continue;
+    if (!validPublisherUrl(source.url) || source.url !== article.canonical_url) {
+      errors.push(error("EXPLORATION_SOURCE_URL_MISSING", "sources.url"));
+      continue;
+    }
+    if (!safeText(source.label).includes(article.publisher_name)) errors.push(error("EXPLORATION_SOURCE_LABEL_MISMATCH", "sources.label"));
+    citedArticles.push(article);
+  }
+  if (citedArticles.length === 0) errors.push(error("EXPLORATION_SOURCE_CITATION_MISSING", "sources"));
+
+  const slides = Array.isArray(output.slides) ? output.slides.filter(object) : [];
+  const slideCopy = slides.flatMap((slide) => [slide.headline, slide.body, slide.highlight, slide.closing_line].map(safeText)).join(" ");
+  const caption = object(output.caption) ? `${safeText(output.caption.body)} ${safeText(output.caption.cta)}` : "";
+  for (const article of citedArticles) {
+    if (!slideCopy.includes(article.publisher_name) || !slideCopy.includes(article.canonical_url)) errors.push(error("EXPLORATION_SLIDE_CITATION_MISSING", "slides"));
+    if (!caption.includes(article.publisher_name) || !caption.includes(article.canonical_url)) errors.push(error("EXPLORATION_CAPTION_CITATION_MISSING", "caption"));
+    if (!modalityPreserved(article.modality, caption)) errors.push(error("EXPLORATION_MODALITY_LOST", "caption"));
+    if (unsupportedConfirmation(article.modality, caption)) errors.push(error("EXPLORATION_MODALITY_OVERRIDDEN", "caption"));
+  }
+  const hashtagCount = caption.match(/(?:^|\s)#[\p{L}\p{N}_]+/gu)?.length ?? 0;
+  if (hashtagCount > policy.maxHashtags) errors.push(error("EXPLORATION_HASHTAG_LIMIT", "caption"));
+  if (!nonblank(output.editor_warning)) errors.push(error("EXPLORATION_REVIEW_NOTE_MISSING", "editor_warning"));
+}
+
+export function validateExplorationDraft(
+  value: unknown,
+  evidence: EvidenceSnapshot,
+  config: QualityGateConfig,
+  now: Date = new Date(),
+): ValidationResult {
+  return validateCreativeBrief(value, evidence, config, "EXPLORATION", now);
+}
+
 export async function generateWithOneRepair(
   provider: RepairProvider,
   output: unknown,
   input: ProviderPromptInput,
   evidence: EvidenceSnapshot,
   config: QualityGateConfig,
+  intent: GenerationIntent = "STANDARD",
+  now: Date = new Date(),
 ): Promise<RepairResult> {
-  const first = validateCreativeBrief(output, evidence, config);
+  const first = validateCreativeBrief(output, evidence, config, intent, now);
   if (first.valid) return { ok: true, output: output as CreativeBriefOutput, validation: first, repair_attempted: false };
   if (config.max_repair_attempts < 1) return { ok: false, validation: first, repair_attempted: false };
   try {
     const repaired = await provider.repair(input, output as CreativeBriefOutput, first.errors.map((entry) => entry.code));
-    const second = validateCreativeBrief(repaired, evidence, config);
+    const second = validateCreativeBrief(repaired, evidence, config, intent, now);
     return { ok: second.valid, output: second.valid ? repaired : undefined, validation: second, repair_attempted: true };
   } catch {
     return { ok: false, validation: { valid: false, errors: [...first.errors, error("REPAIR_FAILED", "root")] }, repair_attempted: true };

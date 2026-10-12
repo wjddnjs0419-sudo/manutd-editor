@@ -12,7 +12,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from m9_preview_workflow import (
     brief_slides, checked_media, prepared_render_job, split_hook, job_key, run_preview,
-    SupabaseGateway, RemoteError, TelegramGateway,
+    SupabaseGateway, RemoteError, TelegramGateway, validate_preview_status,
 )
 
 def find_font() -> Path | None:
@@ -124,7 +124,22 @@ class M9IntegrationContracts(unittest.TestCase):
         self.assertEqual(p["cover_line_one"], "맨유 경기 종료")
         self.assertEqual(p["cover_line_two"], "결과는 무승부")
         self.assertEqual(p["body_paragraphs"], ["전반전이 종료됐다.", "후반전도 종료됐다."])
+        self.assertEqual(len(p["body_slides"]), 1)
         self.assertEqual(p["cover_photo_source"], self.media["cover"]["source_url"])
+
+    def test_draft_preview_requires_explicit_opt_in_and_exploration_intent(self):
+        draft = {**self.brief, "status": "DRAFT", "generation_metadata": {"generation_intent": "EXPLORATION"}}
+        with self.assertRaisesRegex(ValueError, "M9_DRAFT_PREVIEW_REQUIRES_OPT_IN"):
+            validate_preview_status(draft)
+        validate_preview_status(draft, allow_draft_preview=True)
+        with self.assertRaisesRegex(ValueError, "M9_DRAFT_EXPLORATION_REQUIRED"):
+            validate_preview_status({**draft, "generation_metadata": {}}, allow_draft_preview=True)
+
+    def test_draft_preview_cannot_send_telegram(self):
+        draft = {**self.brief, "status": "DRAFT", "generation_metadata": {"generation_intent": "EXPLORATION"}}
+        with self.assertRaisesRegex(ValueError, "M9_DRAFT_TELEGRAM_SEND_NOT_SUPPORTED"):
+            run_preview(draft, {}, self.root, self.root / "out", Path("unused"), None,
+                        None, None, send=True, allow_draft_preview=True)
 
     def test_refuses_tampered_media_bytes(self):
         import hashlib
@@ -210,6 +225,25 @@ class M9IntegrationContracts(unittest.TestCase):
                              cta_file=self.root / "cta.png")
         self.assertEqual(result["status"], "LOCAL_PREVIEW_ONLY")
         self.assertTrue((self.root / "local" / "slide_03_cta.png").is_file())
+
+    @unittest.skipUnless(find_font(), "M9_TEST_FONT needed")
+    def test_exploration_preview_renders_every_content_slide_and_cta(self):
+        brief = {**self.brief, "status": "DRAFT", "generation_metadata": {"generation_intent": "EXPLORATION"},
+                 "evidence_snapshot": {"exploration_articles": [{"published_at": "2026-10-12T09:00:00Z"}]},
+                 "slides_json": {"slides": [
+                     {"slide_number": 1, "headline": "맨유의 이적설", "body": ""},
+                     {"slide_number": 2, "headline": "보도 내용", "body": "BBC Sport는 맨유의 관심을 보도했다."},
+                     {"slide_number": 3, "headline": "확정은 아니다", "body": "구단은 영입을 확정하지 않았다."},
+                 ]}}
+        result = run_preview(brief, self.media, self.root, self.root / "exploration",
+                             self.font, None, None, None, send=False,
+                             cta_file=self.root / "cta.png", body_font_file=self.font,
+                             allow_draft_preview=True)
+        self.assertEqual(result["status"], "LOCAL_PREVIEW_ONLY")
+        self.assertEqual(result["rendered"], [
+            "slide_01_cover_news.png", "slide_02_body_news.png", "slide_03_body_news.png",
+        ])
+        self.assertTrue((self.root / "exploration" / "slide_04_cta.png").is_file())
 
 
 class M9RemoteSignContract(unittest.TestCase):

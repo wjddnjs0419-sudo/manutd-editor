@@ -90,6 +90,18 @@ class BriefToRequest(unittest.TestCase):
         self.assertEqual(result["_provenance"]["google_news_original_urls"],
                          ["https://news.google.com/rss/articles/CBM123456789ABCD"])
 
+    def test_exploration_article_url_is_eligible_for_explicit_private_preview(self):
+        x=brief()
+        x["evidence_snapshot"]={"sources":[],"exploration_articles":[{
+            "publisher_name":"The Athletic",
+            "canonical_url":"https://www.theathletic.com/football/123/manchester-united-story",
+            "published_at":"2026-10-12T09:00:00Z",
+            "verified":False,
+        }]}
+        result=build_request(x,["i.guim.co.uk"])
+        self.assertEqual(result["publisher_article_urls"],["https://www.theathletic.com/football/123/manchester-united-story"])
+        self.assertEqual(result["_provenance"]["source_type"],"creative_briefs.evidence_snapshot.sources_and_exploration_articles")
+
     def test_protects_short_english_name_boundaries(self):
         self.assertEqual(recognized_people("Freddie scored his first goal"),[])
         self.assertEqual(recognized_people("Fred criticizes Erik ten Hag"),["Fred","Erik ten Hag"])

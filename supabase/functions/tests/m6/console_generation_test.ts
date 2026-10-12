@@ -28,6 +28,28 @@ Deno.test("console card generation rejects a failed or stale canonical response"
   );
 });
 
+Deno.test("console accepts an Exploration DRAFT only when the request carries explicit intent", async () => {
+  let invocation: unknown;
+  const brief = { id: "brief-draft", candidate_id: "candidate-1", status: "DRAFT", evidence_snapshot: { story: { id: "story-1" } } };
+  const result = await invokeCanonicalCarousel("candidate-1", {
+    invoke: async (input) => { invocation = input; return { status: "DRAFT", creative_brief_id: "brief-draft" }; },
+    loadBrief: async () => brief,
+  }, "story-1", "EXPLORATION");
+  assertEquals(invocation, { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" });
+  assertEquals(result, brief);
+});
+
+Deno.test("console exposes the article-evidence reason returned by canonical generation", async () => {
+  await assertRejects(
+    () => invokeCanonicalCarousel("candidate-1", {
+      invoke: async () => ({ status: "BLOCKED_EVIDENCE", error_codes: ["ARTICLE_BODY_TOO_SHORT"] }),
+      loadBrief: async () => null,
+    }, "story-1", "EXPLORATION"),
+    Error,
+    "CREATIVE_GENERATION_BLOCKED:ARTICLE_BODY_TOO_SHORT",
+  );
+});
+
 Deno.test("console card generation refuses a brief belonging to a different candidate", async () => {
   await assertRejects(
     () => invokeCanonicalCarousel("candidate-selected", {

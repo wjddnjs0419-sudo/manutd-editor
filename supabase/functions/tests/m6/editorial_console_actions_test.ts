@@ -68,6 +68,7 @@ Deno.test("parses compact callback actions and rejects stale-shaped payloads", (
   assertEquals(parseConsoleCallback("unknown:action"), null);
   assertEquals(parseConsoleCallback("ideas:trending:1"), { type: "OPEN_TRENDING", page: 1 });
   assertEquals(parseConsoleCallback("discovery:more"), { type: "DISCOVER_MORE" });
+  assertEquals(parseConsoleCallback("draft:preview:brief123"), { type: "PREVIEW_DRAFT", token: "brief123" });
 });
 
 Deno.test("allows stale callbacks only for actions that re-resolve canonical story state", () => {
@@ -77,6 +78,7 @@ Deno.test("allows stale callbacks only for actions that re-resolve canonical sto
   assertEquals(canHandleStaleConsoleCallback({ type: "SKIP_STORY", token: story.id }), true);
   assertEquals(canHandleStaleConsoleCallback({ type: "SELECT_DRAFT", token: "brief-1" }), false);
   assertEquals(canHandleStaleConsoleCallback({ type: "EDIT_DRAFT", token: "brief-1" }), false);
+  assertEquals(canHandleStaleConsoleCallback({ type: "PREVIEW_DRAFT", token: "brief-1" }), false);
 });
 
 Deno.test("natural-language console intents resolve to the same business actions as buttons", () => {
@@ -212,6 +214,42 @@ Deno.test("card generation explains when a linked URL has not passed the news gr
   assertEquals(calls, 0);
   assert(result.view.text.includes("링크는 연결돼 있지만"));
   assert(result.view.text.includes("팩트 검증 기준"));
+});
+
+Deno.test("Exploration mode lets a selected non-eligible story reach canonical article-evidence checks", async () => {
+  let calls = 0;
+  const unsupported = { ...story, news_eligible: false, information_gap_score: 0, hook_strength: 0, evidence: [] };
+  const result = await dispatchEditorialConsoleAction(
+    { type: "GENERATE_CAROUSEL", token: story.id },
+    state({ view: "DETAIL", story_id: story.id }),
+    dependencies({ explorationEnabled: true, getStoryByToken: async () => unsupported, generateCarousel: async () => { calls += 1; return draft; } }),
+  );
+  assertEquals(calls, 1);
+  assertEquals(result.next_state.view, "DRAFT");
+  assert(result.view.text.includes("📱 카드뉴스 초안"));
+});
+
+Deno.test("Exploration reports a clear reason when article text is missing", async () => {
+  const unsupported = { ...story, news_eligible: false, evidence: [] };
+  const result = await dispatchEditorialConsoleAction(
+    { type: "GENERATE_CAROUSEL", token: story.id },
+    state({ view: "DETAIL", story_id: story.id }),
+    dependencies({ explorationEnabled: true, getStoryByToken: async () => unsupported, generateCarousel: async () => { throw new Error("CREATIVE_GENERATION_BLOCKED:ARTICLE_NOT_EXTRACTED"); } }),
+  );
+  assert(result.view.text.includes("기사 본문을 가져오지 못해 초안을 만들지 않았습니다"));
+  assertEquals(result.event.action, "CREATIVE_GENERATION_BLOCKED");
+});
+
+Deno.test("DRAFT preview button dispatches an upload-only workflow for the current brief", async () => {
+  let dispatched = "";
+  const result = await dispatchEditorialConsoleAction(
+    { type: "PREVIEW_DRAFT", token: "brief123" },
+    state({ view: "DRAFT", brief_id: "brief-123" }),
+    dependencies({ previewDraft: async (briefId) => { dispatched = briefId; return { workflow_url: "https://github.com/owner/repo/actions/workflows/m9-private-preview.yml" }; } }),
+  );
+  assertEquals(dispatched, "brief-123");
+  assertEquals(result.event.action, "DRAFT_PREVIEW_DISPATCHED");
+  assert(result.view.text.includes("Actions에서 확인"));
 });
 
 Deno.test("back navigation returns from evidence and draft to the current story list safely", async () => {

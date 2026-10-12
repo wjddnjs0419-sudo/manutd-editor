@@ -20,6 +20,16 @@ Deno.test("requires invoke secret and accepts one generation trigger", async () 
   assertEquals(response.status, 200);
   assertEquals((await response.json()).status, "READY");
   assertEquals(calls.length, 1);
+  assertEquals(calls[0], { candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" });
+});
+
+Deno.test("accepts only the explicit Exploration intent and keeps the trigger contract", async () => {
+  const calls: unknown[] = [];
+  const handler = createCreativeGenerationHandler({ collectorSecret: "secret", run: async (trigger) => { calls.push(trigger); return { status: "DRAFT", candidate_id: trigger.candidate_id }; } });
+  const response = await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }));
+  assertEquals(response.status, 200);
+  assertEquals(calls[0], { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" });
+  assertEquals((await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "BYPASS" }))).status, 400);
 });
 
 Deno.test("rejects invalid bodies and unauthorized callers", async () => {

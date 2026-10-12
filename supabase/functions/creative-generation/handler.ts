@@ -37,7 +37,8 @@ async function requestedTrigger(request: Request): Promise<GenerationTrigger> {
   const object = value as Record<string, unknown>;
   if (typeof object.candidate_id !== "string" || object.candidate_id.trim() === "") throw new InvalidRequestError();
   if (object.trigger_type !== "AUTO_PRIORITY" && object.trigger_type !== "NOTION_SELECTED" && object.trigger_type !== "MANUAL") throw new InvalidRequestError();
-  return { candidate_id: object.candidate_id, trigger_type: object.trigger_type };
+  if (object.generation_intent !== undefined && object.generation_intent !== "STANDARD" && object.generation_intent !== "EXPLORATION") throw new InvalidRequestError();
+  return { candidate_id: object.candidate_id, trigger_type: object.trigger_type, ...(object.generation_intent ? { generation_intent: object.generation_intent } : {}) };
 }
 
 export function createCreativeGenerationHandler(

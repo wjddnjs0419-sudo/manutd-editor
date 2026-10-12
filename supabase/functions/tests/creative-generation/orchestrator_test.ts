@@ -3,6 +3,7 @@ import { runCreativeGeneration, type GenerationDependencies } from "../../creati
 import type { GenerationRepository, GenerationJob, StoredCreativeBrief, CreativeBriefInsert } from "../../creative-generation/repository.ts";
 import type { CandidateEvidenceInput, CreativeBriefOutput, EvidenceSnapshot } from "../../creative-generation/types.ts";
 import type { GenerationConfig } from "../../creative-generation/config.ts";
+import { DEFAULT_EXPLORATION_CONFIG } from "../../creative-generation/exploration.ts";
 
 const config = {
   id: "config-1",
@@ -50,11 +51,40 @@ class MemoryRepository implements GenerationRepository {
   leaseOwners = new Set<string>();
   config: unknown = config;
   requestedRankingDate = "";
+  dailyExplorationLimit = 10;
   async getCandidateEvidence() { return this.candidate; }
   async getActiveConfig() { return this.config; }
   async findReadyBrief(candidateId: string, fingerprint: string) { return this.briefs.find((brief) => brief.candidate_id === candidateId && brief.input_fingerprint === fingerprint && brief.status === "READY") ?? null; }
+  async findExplorationBrief(fingerprint: string) { return this.briefs.find((brief) => brief.exploration_fingerprint === fingerprint && (brief.status === "DRAFT" || brief.status === "READY")) ?? null; }
+  async findExistingBriefForStory(storyClusterId: string, urls: readonly string[]) {
+    const wanted = new Set(urls);
+    return this.briefs.find((brief) => {
+      if (brief.status !== "DRAFT" && brief.status !== "READY") return false;
+      if (brief.evidence_snapshot && typeof brief.evidence_snapshot === "object") {
+        const snapshot = brief.evidence_snapshot as EvidenceSnapshot;
+        if (snapshot.story.id === storyClusterId && snapshot.sources.some((source) => source.canonical_url && wanted.has(source.canonical_url))) return true;
+        if (snapshot.story.id === storyClusterId && (snapshot.exploration_articles ?? []).some((article) => wanted.has(article.canonical_url))) return true;
+      }
+      return false;
+    }) ?? null;
+  }
   async getJob(candidateId: string, fingerprint: string) { return this.jobs.find((job) => job.candidate_id === candidateId && job.input_fingerprint === fingerprint) ?? null; }
+  async getJobById(jobId: string) { return this.jobs.find((job) => job.id === jobId) ?? null; }
   async insertJob(input: Omit<GenerationJob, "id">) { const existing = this.jobs.find((job) => job.candidate_id === input.candidate_id && job.input_fingerprint === input.input_fingerprint); if (existing) return existing; const job = { ...input, id: `job-${this.jobs.length + 1}` }; this.jobs.push(job); return job; }
+  async reserveExplorationJob(input: { candidate_id: string; exploration_fingerprint: string; trigger_type: GenerationJob["trigger_type"]; now: Date; daily_limit: number }) {
+    const existing = this.jobs.find((job) => job.exploration_fingerprint === input.exploration_fingerprint);
+    if (existing) {
+      if (["FAILED_PROVIDER", "FAILED_VALIDATION", "BLOCKED_EVIDENCE", "CLASSIFICATION_UNCERTAIN"].includes(existing.status)) {
+        Object.assign(existing, { candidate_id: input.candidate_id, trigger_type: input.trigger_type, status: "QUEUED", lease_owner: null, lease_expires_at: null, last_error_category: null, completed_at: null, created_at: input.now.toISOString() });
+        return { status: "RESERVED" as const, job_id: existing.id };
+      }
+      return { status: "EXISTING" as const, job_id: existing.id };
+    }
+    const reserved = this.jobs.filter((job) => job.generation_intent === "EXPLORATION" && ["QUEUED", "GENERATING", "DRAFT", "READY"].includes(job.status)).length;
+    if (reserved >= Math.min(input.daily_limit, this.dailyExplorationLimit)) return { status: "DAILY_LIMIT" as const };
+    const job = await this.insertJob({ candidate_id: input.candidate_id, input_fingerprint: input.exploration_fingerprint, exploration_fingerprint: input.exploration_fingerprint, generation_intent: "EXPLORATION", trigger_type: input.trigger_type, status: "QUEUED", lease_owner: null, lease_expires_at: null, attempt_count: 0, repair_attempted: false, creative_brief_id: null, last_error_category: null, created_at: input.now.toISOString(), updated_at: input.now.toISOString(), completed_at: null });
+    return { status: "RESERVED" as const, job_id: job.id };
+  }
   async acquireLease(jobId: string) { if (this.leaseOwners.has(jobId)) return false; this.leaseOwners.add(jobId); return true; }
   async updateJob(jobId: string, patch: Partial<GenerationJob>) { const job = this.jobs.find((entry) => entry.id === jobId)!; Object.assign(job, patch); }
   async nextRevision(candidateId: string) { return Math.max(0, ...this.briefs.filter((brief) => brief.candidate_id === candidateId).map((brief) => brief.version)) + 1; }
@@ -166,6 +196,201 @@ Deno.test("AUTO_PRIORITY does not require M4 flags when M8 rank is eligible", as
   repository.candidate = evidence({ candidate: { ...repository.candidate.candidate, first_mover_flag: null, must_cover_flag: null } });
   const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" }, dependencies(repository));
   assertEquals(result.status, "READY");
+});
+
+function explorationCandidate(overrides: Partial<CandidateEvidenceInput> = {}): CandidateEvidenceInput {
+  const body = "BBC Sport reports Manchester United are considering a move for the player, but no agreement has been reached. This remains a rumor and the club has not confirmed a transfer. " + "The article says the report is based on current interest and describes no completed negotiations. ".repeat(5);
+  return evidence({
+    candidate: { ...evidence().candidate, editorial_ranking: { ...evidence().candidate.editorial_ranking!, news_eligible: false } },
+    story: { ...evidence().story, canonical_title: "Manchester United transfer report", status: "ACTIVE" },
+    exploration_articles: [{
+      source_observation_id: "observation-1",
+      publisher_name: "BBC Sport",
+      canonical_url: "https://bbc.test/article/1",
+      published_at: "2026-09-18T09:00:00Z",
+      observed_at: "2026-09-18T09:01:00Z",
+      extraction_status: "EXTRACTED",
+      article_text: body,
+      content_fingerprint: "exploration-article-1",
+      modality: "RUMOR",
+      verified: false,
+    }],
+    ...overrides,
+  });
+}
+
+function explorationOutput(mode: CreativeBriefOutput["content_mode"]): CreativeBriefOutput {
+  const report = "BBC Sport 보도에 따르면 맨유의 관심은 아직 루머 단계이며 영입이 확정된 것은 아닙니다.";
+  return {
+    ...output,
+    content_mode: mode,
+    match_phase: mode === "MATCH_CONTENT" ? "LIVE" : null,
+    hooks: [1, 2, 3].map((id) => ({ id: `hook-${id}`, text: `BBC Sport 보도: 맨유 관심 루머 ${id}` })),
+    slides: Array.from({ length: 3 }, (_, index) => ({
+      slide_number: index + 1,
+      purpose: index === 0 ? "HOOK" : "DETAIL",
+      headline: `BBC Sport 보도: 맨유 관심 루머 ${index + 1}`,
+      body: `${report} https://bbc.test/article/1`,
+      claims: [{ claim_id: `claim-${index + 1}`, type: "FACT" as const, text: report, evidence_ids: ["article:observation-1"] }],
+      visual_direction: { subject: "Manchester United", image_type: "photo", layout_intent: "clear", stat_emphasis: null, text_hierarchy: ["headline", "body"] },
+    })),
+    caption: { body: `${report} https://bbc.test/article/1 #ManUtd #MUFC`, cta: "의견을 남겨주세요" },
+    sources: [{ evidence_id: "article:observation-1", label: "BBC Sport", url: "https://bbc.test/article/1" }],
+    editor_warning: "미승인 출처 보도입니다. 편집자가 원문과 사실을 확인해야 합니다.",
+  };
+}
+
+Deno.test("Exploration is disabled unless the explicit feature flag is enabled", async () => {
+  const repository = new MemoryRepository();
+  let providerCalls = 0;
+  const deps = {
+    ...dependencies(repository),
+    provider: {
+      ...dependencies(repository).provider,
+      classify: async () => { providerCalls += 1; return { content_mode: "ANALYSIS_CONTEXT" as const, match_phase: null, confidence: 0.95, reason_code: "MODEL" }; },
+      generate: async () => { providerCalls += 1; return output; },
+    },
+    explorationConfig: DEFAULT_EXPLORATION_CONFIG,
+  } as unknown as GenerationDependencies;
+  const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" } as never, deps);
+  assertEquals(result.status, "EXPLORATION_DISABLED");
+  assertEquals(providerCalls, 0);
+});
+
+Deno.test("Exploration intent always saves all content modes as DRAFT", async () => {
+  for (const mode of ["NEWS_UPDATE", "ANALYSIS_CONTEXT", "MATCH_CONTENT"] as const) {
+    const repository = new MemoryRepository();
+    repository.candidate = explorationCandidate();
+    const deps = {
+      ...dependencies(repository),
+      explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
+      provider: { ...dependencies(repository).provider, classify: async () => ({ content_mode: mode, match_phase: mode === "MATCH_CONTENT" ? "LIVE" as const : null, confidence: 0.95, reason_code: "MODEL" }), generate: async () => explorationOutput(mode) },
+    } as unknown as GenerationDependencies;
+    const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" } as never, deps);
+    assertEquals(result.status, "DRAFT", mode);
+    assertEquals(repository.briefs[0]?.status, "DRAFT", mode);
+  }
+});
+
+Deno.test("Exploration blocks missing article body and archived stories before any provider call", async () => {
+  for (const candidate of [
+    explorationCandidate({ exploration_articles: [{ ...explorationCandidate().exploration_articles![0]!, article_text: null }] }),
+    explorationCandidate({ story: { ...explorationCandidate().story, status: "ARCHIVED" } }),
+  ]) {
+    const repository = new MemoryRepository();
+    repository.candidate = candidate;
+    let providerCalls = 0;
+    const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, dependencies(repository, {
+      explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
+      provider: { ...dependencies(repository).provider, classify: async () => { providerCalls += 1; return { content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }; }, generate: async () => { providerCalls += 1; return explorationOutput("ANALYSIS_CONTEXT"); } },
+    }));
+    assertEquals(result.status, "BLOCKED_EVIDENCE");
+    assertEquals(providerCalls, 0);
+  }
+});
+
+Deno.test("Exploration remains DRAFT for a fresh article attached to a STALE story", async () => {
+  const repository = new MemoryRepository();
+  repository.candidate = explorationCandidate({ story: { ...explorationCandidate().story, status: "STALE" } });
+  const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, dependencies(repository, {
+    explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
+    provider: { ...dependencies(repository).provider, classify: async () => ({ content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }), generate: async () => explorationOutput("ANALYSIS_CONTEXT") },
+  }));
+  assertEquals(result.status, "DRAFT");
+});
+
+Deno.test("historical Exploration is available only through one-story MANUAL review", async () => {
+  const older = explorationCandidate({ exploration_articles: [{ ...explorationCandidate().exploration_articles![0]!, published_at: "2026-09-01T09:00:00Z" }] });
+  const automaticRepository = new MemoryRepository();
+  automaticRepository.candidate = older;
+  let automaticCalls = 0;
+  const autoResult = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY", generation_intent: "EXPLORATION" }, dependencies(automaticRepository, {
+    explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
+    provider: { ...dependencies(automaticRepository).provider, classify: async () => { automaticCalls += 1; return { content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }; } },
+  }));
+  assertEquals(autoResult.status, "BLOCKED_EVIDENCE");
+  assertEquals(automaticCalls, 0);
+
+  const manualRepository = new MemoryRepository();
+  manualRepository.candidate = older;
+  const manualResult = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, dependencies(manualRepository, {
+    explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
+    provider: { ...dependencies(manualRepository).provider, classify: async () => ({ content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }), generate: async () => explorationOutput("ANALYSIS_CONTEXT") },
+  }));
+  assertEquals(manualResult.status, "DRAFT");
+  assertEquals((manualRepository.briefs[0]?.generation_metadata as Record<string, unknown>).trigger_type, "MANUAL");
+  assertEquals((manualRepository.briefs[0]?.generation_metadata as Record<string, unknown>).historical_review, true);
+  assertEquals((manualRepository.briefs[0]?.evidence_snapshot as EvidenceSnapshot).exploration_articles?.[0]?.published_at, "2026-09-01T09:00:00Z");
+});
+
+Deno.test("story-level fingerprint prevents duplicate drafts across candidate dates", async () => {
+  const repository = new MemoryRepository();
+  repository.candidate = explorationCandidate();
+  let generations = 0;
+  const deps = dependencies(repository, {
+    explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
+    provider: { ...dependencies(repository).provider, classify: async () => ({ content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }), generate: async () => { generations += 1; return explorationOutput("ANALYSIS_CONTEXT"); } },
+  });
+  assertEquals((await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, deps)).status, "DRAFT");
+  repository.candidate = explorationCandidate({ candidate: { ...explorationCandidate().candidate, id: "candidate-next-day", ranking_date: "2026-09-19" } });
+  const repeated = await runCreativeGeneration({ candidate_id: "candidate-next-day", trigger_type: "AUTO_PRIORITY", generation_intent: "EXPLORATION" }, deps);
+  assertEquals(repeated.status, "NOOP");
+  assertEquals(generations, 1);
+  assertEquals(repository.briefs[0]?.status, "DRAFT");
+});
+
+Deno.test("existing READY brief for the same article is reused without demotion", async () => {
+  const repository = new MemoryRepository();
+  repository.candidate = explorationCandidate({ sources: [{
+    source_id: "verified-bbc", canonical_name: "BBC Sport", entity_type: "MEDIA_OUTLET", reliability_score: 10,
+    evidence_text: "BBC Sport reported the rumor.", first_cited_post_id: null, citation_count: 1,
+    claim_id: "claim-bbc", editorial_role: "FACT_INDEPENDENT", relation: "SUPPORTS", is_grounding: true,
+    claim_scope: "PUBLISHER_REPORT", claim_modality: "RUMOR", canonical_url: "https://bbc.test/article/1", verified: true,
+  }] });
+  const readySnapshot = (await import("../../creative-generation/evidence.ts")).buildEvidenceSnapshot(repository.candidate);
+  repository.briefs.push({ id: "ready-existing", candidate_id: "candidate-1", version: 1, status: "READY", evidence_snapshot: readySnapshot, input_fingerprint: "previous", slides_json: {}, design_json: {}, caption_draft: "", cta: "", headline: "", angle: "", format: "INSTAGRAM_CAROUSEL", slide_count: 3, content_mode: "NEWS_UPDATE", match_phase: null, generation_config_id: "config-1", hooks_json: [], grounding_json: {}, generation_metadata: {}, generation_quality: "FULL", model_name: "model", generated_at: "2026-09-18T09:30:00Z" } as StoredCreativeBrief);
+  const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, dependencies(repository, { explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true } }));
+  assertEquals(result.status, "NOOP");
+  assertEquals(repository.briefs[0]?.status, "READY");
+  assertEquals(repository.briefs.length, 1);
+});
+
+Deno.test("daily Exploration cap is enforced before provider calls", async () => {
+  const repository = new MemoryRepository();
+  repository.dailyExplorationLimit = 1;
+  repository.candidate = explorationCandidate();
+  const deps = dependencies(repository, {
+    explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true, maxDraftsPerDay: 1 },
+    provider: { ...dependencies(repository).provider, classify: async () => ({ content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }), generate: async () => explorationOutput("ANALYSIS_CONTEXT") },
+  });
+  assertEquals((await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, deps)).status, "DRAFT");
+  repository.candidate = explorationCandidate({ candidate: { ...explorationCandidate().candidate, id: "candidate-2", story_cluster_id: "cluster-2" }, story: { ...explorationCandidate().story, id: "cluster-2" } });
+  let calls = 0;
+  const cappedDeps = { ...deps, provider: { ...deps.provider, classify: async () => { calls += 1; return { content_mode: "ANALYSIS_CONTEXT" as const, match_phase: null, confidence: 0.95, reason_code: "MODEL" }; } } } as unknown as GenerationDependencies;
+  assertEquals((await runCreativeGeneration({ candidate_id: "candidate-2", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, cappedDeps)).status, "DAILY_LIMIT");
+  assertEquals(calls, 0);
+});
+
+Deno.test("provider calls and token-based cost are stored on both the brief and generation job", async () => {
+  const repository = new MemoryRepository();
+  repository.candidate = explorationCandidate();
+  let providerCalls = 0;
+  const provider = {
+    classify: async () => { providerCalls += 1; return { content_mode: "ANALYSIS_CONTEXT" as const, match_phase: null, confidence: 0.95, reason_code: "MODEL" }; },
+    generate: async () => { providerCalls += 1; return explorationOutput("ANALYSIS_CONTEXT"); },
+    repair: async () => explorationOutput("ANALYSIS_CONTEXT"),
+    getUsageStats: () => ({ provider_calls: providerCalls, input_tokens: providerCalls * 1_000, output_tokens: providerCalls * 2_000, retry_count: providerCalls > 0 ? 1 : 0 }),
+  };
+  const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, dependencies(repository, {
+    explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true, inputCostPerMillionUsd: 1, outputCostPerMillionUsd: 2 },
+    provider,
+  }));
+  assertEquals(result.status, "DRAFT");
+  assertEquals(repository.briefs[0]?.provider_calls, 1);
+  assertEquals(repository.briefs[0]?.input_tokens, 1_000);
+  assertEquals(repository.briefs[0]?.output_tokens, 2_000);
+  assertEquals(repository.briefs[0]?.estimated_cost_usd, 0.005);
+  assertEquals(repository.jobs[0]?.retry_count, 1);
 });
 
 Deno.test("manual NEWS_UPDATE with verified report but noneligible rank saves a review draft", async () => {

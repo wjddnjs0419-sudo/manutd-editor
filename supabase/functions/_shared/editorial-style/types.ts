@@ -26,6 +26,7 @@ export interface ManutdEditorCarouselDraft {
   style_version: string;
   story_id: string;
   creative_brief_id: string | null;
+  brief_status?: "DRAFT" | "READY" | "SELECTED";
   slides: EditorialSlide[];
   caption: EditorialCaption;
   editor_warning: string | null;
@@ -68,4 +69,3 @@ export interface StyleValidationResult {
   valid: boolean;
   errors: StyleValidationError[];
 }
-
