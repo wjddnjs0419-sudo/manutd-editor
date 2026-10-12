@@ -149,7 +149,7 @@ def prepared_render_job(brief: dict[str, Any], media: dict[str, Any]) -> dict[st
             "body_paragraphs": [line.strip() for line in body_text.splitlines() if line.strip()] or [body_text.strip()],
             "body_highlight": slide.get("highlight") or "",
         })
-    return {
+    prepared = {
         "article_url": cover["article_url"],
         "article_published_at": published_at or brief.get("generated_at") or brief.get("created_at") or "",
         "eyebrow": media.get("eyebrow") or "■  NEWS  |  맨유 에디터",
@@ -168,6 +168,18 @@ def prepared_render_job(brief: dict[str, Any], media: dict[str, Any]) -> dict[st
         "cover_source_article_url": cover["article_url"],
         "body_source_article_url": body_media["article_url"],
     }
+    for role, source in (("cover", cover), ("body", body_media)):
+        for field in ("crop", "faces", "quality", "analysis_ms", "review_required", "review_flags"):
+            if field in source:
+                prepared[f"{role}_{field}"] = source[field]
+        for field in (f"{role}_focus_x", f"{role}_focus_y"):
+            if field in source:
+                prepared[field] = source[field]
+            elif field in media:
+                prepared[field] = media[field]
+            elif field in brief:
+                prepared[field] = brief[field]
+    return prepared
 
 
 def validate_preview_status(brief: dict[str, Any], allow_draft_preview: bool = False) -> None:
@@ -288,7 +300,8 @@ class SupabaseGateway:
             raise RuntimeError("M9_STATE_TRANSITION_CONFLICT")
 
     def upload_png(self, object_path: str, data: bytes) -> None:
-        if not re.fullmatch(r"previews/[a-f0-9-]+/slide_0[1-5]\.png", object_path):
+        # Existing M9 capacity is one cover plus up to five body pages.
+        if not re.fullmatch(r"previews/[a-f0-9-]+/slide_0[1-6]\.png", object_path):
             raise ValueError("M9_INVALID_STORAGE_PATH")
         if not data.startswith(b"\x89PNG\r\n\x1a\n") or len(data) > MAX_BYTES:
             raise ValueError("M9_INVALID_PNG")

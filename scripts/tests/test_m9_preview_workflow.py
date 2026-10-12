@@ -20,6 +20,7 @@ def find_font() -> Path | None:
         os.getenv("M9_TEST_FONT"),
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
         "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+        "/System/Library/Fonts/AppleSDGothicNeo.ttc",
     ]:
         if path and Path(path).is_file():
             return Path(path)
@@ -126,6 +127,33 @@ class M9IntegrationContracts(unittest.TestCase):
         self.assertEqual(p["body_paragraphs"], ["전반전이 종료됐다.", "후반전도 종료됐다."])
         self.assertEqual(len(p["body_slides"]), 1)
         self.assertEqual(p["cover_photo_source"], self.media["cover"]["source_url"])
+
+    def test_prepared_render_job_carries_crop_quality_faces_and_manual_focus(self):
+        crop = {"x": 0.1, "y": 0.0, "width": 0.6, "height": 1.0, "scale": 1.0,
+                "focus_x": 0.4, "focus_y": 0.5, "review_required": False, "flags": []}
+        face = {"x": 0.2, "y": 0.2, "width": 0.1, "height": 0.1, "confidence": 0.9}
+        self.media["cover"].update({
+            "crop": crop, "faces": [face], "quality": {"crop_scale": 1.0},
+            "review_required": False, "review_flags": [], "cover_focus_x": 0.7,
+            "cover_focus_y": 0.4,
+        })
+        self.media["body"].update({
+            "crop": crop, "faces": [face], "quality": {"crop_scale": 1.2},
+            "review_required": True, "review_flags": ["MANUAL_FOCUS"],
+            "body_focus_x": 0.3, "body_focus_y": 0.6,
+        })
+        p = prepared_render_job(self.brief, self.media)
+        self.assertEqual(p["cover_crop"], crop)
+        self.assertEqual(p["cover_faces"], [face])
+        self.assertEqual(p["cover_quality"], {"crop_scale": 1.0})
+        self.assertEqual(p["cover_focus_x"], 0.7)
+        self.assertEqual(p["cover_focus_y"], 0.4)
+        self.assertEqual(p["body_crop"], crop)
+        self.assertEqual(p["body_faces"], [face])
+        self.assertEqual(p["body_quality"], {"crop_scale": 1.2})
+        self.assertEqual(p["body_review_flags"], ["MANUAL_FOCUS"])
+        self.assertEqual(p["body_focus_x"], 0.3)
+        self.assertEqual(p["body_focus_y"], 0.6)
 
     def test_draft_preview_requires_explicit_opt_in_and_exploration_intent(self):
         draft = {**self.brief, "status": "DRAFT", "generation_metadata": {"generation_intent": "EXPLORATION"}}
@@ -247,6 +275,21 @@ class M9IntegrationContracts(unittest.TestCase):
 
 
 class M9RemoteSignContract(unittest.TestCase):
+    def test_upload_guard_allows_cover_plus_five_body_pages_only(self):
+        class UploadHttp:
+            def request(self, method, url, headers, body=None):
+                assert method == "POST"
+                assert url.endswith("/slide_06.png")
+                assert headers["content-type"] == "image/png"
+                return b""
+
+        sup = SupabaseGateway("https://abc.supabase.co", "mock-role-key", UploadHttp())
+        sup.upload_png("previews/72bf1111-ae15-45ca-a812-3c1e2ee37a10/slide_06.png",
+                       b"\x89PNG\r\n\x1a\nvalid")
+        with self.assertRaisesRegex(ValueError, "M9_INVALID_STORAGE_PATH"):
+            sup.upload_png("previews/72bf1111-ae15-45ca-a812-3c1e2ee37a10/slide_07.png",
+                           b"\x89PNG\r\n\x1a\nvalid")
+
     def test_signer_handles_relative_private_storage_signed_url(self):
         class FakeHttp:
             def request(self, method, url, headers, body=None):

@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from PIL import Image
+from PIL import ImageDraw
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from m9_render_news_deck import SIZE, render
@@ -18,6 +19,7 @@ def find_font() -> Path | None:
         os.environ.get("M9_TEST_FONT"),
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
         "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+        "/System/Library/Fonts/AppleSDGothicNeo.ttc",
     ]:
         if p and Path(p).is_file():
             return Path(p)
@@ -88,6 +90,101 @@ class M9RenderSmoke(unittest.TestCase):
         self.data["cover_photo"] = "../outside.jpg"
         with self.assertRaisesRegex(ValueError, "escapes job directory"):
             render(self.data, self.root, self.root / "out", self.font, None, None)
+
+    @staticmethod
+    def crop(x: float) -> dict:
+        return {
+            "x": x, "y": 0.0, "width": 2 / 3, "height": 1.0,
+            "scale": 0.9, "focus_x": x + 1 / 3, "focus_y": 0.5,
+            "review_required": False, "flags": [],
+        }
+
+    def paint_cover_markers(self) -> None:
+        image = Image.new("RGB", (1800, 1500), "#234567")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, 599, 1499), fill="#e00000")
+        draw.rectangle((600, 0, 1199, 1499), fill="#00d000")
+        draw.rectangle((1200, 0, 1799, 1499), fill="#0000e0")
+        image.save(self.root / "cover.jpg", quality=100)
+
+    def test_render_uses_crop_rectangle_not_center_fit(self) -> None:
+        self.paint_cover_markers()
+        self.data["cover_crop"] = self.crop(0.0)
+        out = self.root / "crop-out"
+        report = render(self.data, self.root, out, self.font, None, None)
+        with Image.open(out / report["slides"][0]["file"]) as page:
+            self.assertEqual(page.size, SIZE)
+            self.assertLess(page.getpixel((8, 8))[1], 60)
+        self.assertEqual(report["photos"]["cover"]["crop"]["x"], 0.0)
+
+    def test_manual_cover_and_body_focus_override_detection(self) -> None:
+        cover_faces = [{"x": 0.72, "y": 0.35, "width": 0.10, "height": 0.12, "confidence": 0.94}]
+        body_faces = [{"x": 0.20, "y": 0.35, "width": 0.10, "height": 0.12, "confidence": 0.92}]
+        self.data.update({
+            "cover_crop": self.crop(0.0), "cover_faces": cover_faces,
+            "body_crop": self.crop(1 / 3), "body_faces": body_faces,
+            "cover_focus_x": 0.80, "cover_focus_y": 0.50,
+            "body_focus_x": 0.20, "body_focus_y": 0.50,
+        })
+        report = render(self.data, self.root, self.root / "manual", self.font, None, None)
+        cover = report["photos"]["cover"]
+        body = report["photos"]["body"]
+        self.assertAlmostEqual(cover["crop"]["x"], 0.4, places=3)
+        self.assertAlmostEqual(body["crop"]["x"], 0.0, places=3)
+        self.assertIn("MANUAL_FOCUS", cover["review_flags"])
+        self.assertIn("MANUAL_FOCUS", body["review_flags"])
+        self.assertTrue(cover["quality_measurements"]["crop_scale"] < 2.0)
+
+    def test_manual_focus_bounds_and_body_text_overlap(self) -> None:
+        self.data.update({
+            "body_crop": self.crop(1 / 6),
+            "body_faces": [{"x": 0.20, "y": 0.12, "width": 0.14, "height": 0.10, "confidence": 0.94}],
+            "body_focus_x": 0.5, "body_focus_y": 1.01,
+        })
+        with self.assertRaisesRegex(ValueError, "M9_MANUAL_FOCUS_OUT_OF_BOUNDS"):
+            render(self.data, self.root, self.root / "invalid-focus", self.font, None, None)
+
+        self.data["body_focus_y"] = 0.5
+        baseline = render(self.data, self.root, self.root / "overlap", self.font, None, None)
+        baseline_bounds = baseline["photos"]["body"]["text_bounds"]
+        self.assertTrue(baseline["photos"]["body"]["text_overlap"])
+        self.assertIn("FACE_OVERLAPS_BODY_TEXT", baseline["photos"]["body"]["review_flags"])
+        self.assertEqual(baseline_bounds[0]["origin"], [80, 168])
+
+        self.data["body_focus_x"] = 0.65
+        moved_crop = render(self.data, self.root, self.root / "manual-moved", self.font, None, None)
+        self.assertEqual(moved_crop["photos"]["body"]["text_bounds"], baseline_bounds)
+
+    def test_contact_sheet_crop_audit_and_manifest_order(self) -> None:
+        self.paint_cover_markers()
+        self.data.update({
+            "cover_crop": self.crop(0.0), "cover_faces": [],
+            "body_crop": self.crop(1 / 3), "body_faces": [],
+            "body_slides": [
+                {"body_headline": "두 번째", "body_paragraphs": ["두 번째 본문"]},
+                {"body_headline": "세 번째", "body_paragraphs": ["세 번째 본문"]},
+            ],
+        })
+        out = self.root / "audited"
+        cta_bytes = (self.root / "cta.png").read_bytes()
+        report = render(self.data, self.root, out, self.font, None, self.root / "cta.png")
+        self.assertEqual([page["kind"] for page in report["slides"]],
+                         ["COVER_NEWS", "BODY_NEWS", "BODY_NEWS", "CTA"])
+        self.assertEqual([page["file"] for page in report["slides"]],
+                         report["review_artifacts"]["contact_sheet_pages"])
+        self.assertEqual((out / report["slides"][-1]["file"]).read_bytes(), cta_bytes)
+        for page in report["slides"]:
+            with Image.open(out / page["file"]) as image:
+                self.assertEqual(image.size, SIZE)
+        for artifact in ("contact_sheet.png", "crop_audit.png"):
+            self.assertTrue((out / artifact).is_file())
+            with Image.open(out / artifact) as image:
+                self.assertGreater(image.width, 0)
+                self.assertGreater(image.height, 0)
+        manifest = json.loads((out / "manifest.json").read_text())
+        self.assertEqual(manifest["slides"], report["slides"])
+        self.assertEqual(manifest["photos"]["cover"]["faces"], [])
+        self.assertIn("quality_thresholds", manifest["photos"]["cover"])
 
 
 if __name__ == "__main__":
