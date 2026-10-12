@@ -172,3 +172,30 @@ name and an explicit report marker inside the claim text, with the tested exampl
 `[publisher_name] 보도에 따르면 …`. It leaves the quality gate unchanged. Tests
 assert this instruction for every Exploration content mode. This latest prompt
 revision has not been deployed, and no further paid call has been made.
+
+## Approved v37 live verification — 2026-10-12
+
+The claim-attribution prompt correction was deployed to Production project
+`byymtttpwmllqvggnddm` as creative-generation v37. Returned runtime source files
+were compared against the deployment bundle and matched. Exactly one manual
+request was sent for the existing BBC candidate at 14:03:29–14:03:54 UTC.
+Request ID `602c95cd-53e1-402a-972d-9889f4f1511e`; no automatic retry.
+
+The function returned HTTP 200 / DRAFT with brief
+`6a8048cc-ebbb-4a74-9948-f5c868661276`. A read-only Production DB join confirms
+job and brief are both DRAFT, content mode ANALYSIS_CONTEXT, five slides and one
+source saved, with a 414-character caption. Production function logs tie the
+DRAFT result to deployment v37.
+
+This request added 22,855 input tokens and 2,580 output tokens, zero retries, and
+$0.076670 estimated cost at the configured accounting rates. Job cumulative totals
+are 5 provider calls, 71,097 input / 8,583 output tokens and $0.245190 estimated
+cost. A brief was saved. No image rendering, Storage upload, or Telegram delivery
+was requested or performed.
+
+Outcome: the current end-to-end Creative Generation path now reaches an actual
+DRAFT for this article. The historical v32 FAILED_PROVIDER itself remains
+unattributable: v32 persisted only the generic category and its logs contain no
+upstream status or exception. The successful v37 request demonstrates that the
+same Production provider path and configured credentials can now generate and
+pass the quality gate; it cannot reconstruct the specific earlier exception.
