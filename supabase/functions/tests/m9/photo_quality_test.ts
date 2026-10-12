@@ -95,7 +95,9 @@ Deno.test("selects current subject-relevant article photo and flags reuse rights
   assertEquals(picked.selected?.can_auto_publish,false);
   assertEquals(picked.selected?.requires_review,true);
   assert(picked.selected?.flags.includes("REUSE_RIGHTS_UNVERIFIED"));
-  assertEquals(picked.shortlist.length,2);
+  assertEquals(picked.shortlist.length,3);
+  assert(picked.shortlist.some(x=>x.candidate.image_url==="https://images.example.org/tiny.jpg"));
+  assert((picked.shortlist.find(x=>x.candidate.image_url.endsWith("tiny.jpg"))?.projected_crop_scale ?? 0)>2);
 });
 Deno.test("unknown subject never becomes automatically selected",()=>{
   const selected=selectPublisherPhoto([candidate({caption:"Unrelated photo",image_url:"https://images.example.org/a.jpg"})],[valid(2000,1500)],["Bruno Fernandes"],"PLAYER_PROFILE");
@@ -126,6 +128,19 @@ Deno.test("bad probe vector lengths rejected, no fake successful results",()=>{
 
 Deno.test("landscape 1600x900 projects to 1.5x for the 4:5 crop",()=>{
   assertEquals(projectedCropScale(1600,900),1.5);
+});
+
+Deno.test("portrait 1.5x and over-2x candidates remain visible to Python crop gates",()=>{
+  const candidates=[
+    candidate({image_url:"https://images.example.org/portrait-720.jpg"}),
+    candidate({image_url:"https://images.example.org/tiny-512.jpg"}),
+  ];
+  const selected=selectPublisherPhoto(candidates,[valid(720,900),valid(512,640)],
+    ["Bruno Fernandes"],"COVER_NEWS",new Date("2026-10-11T12:00:00Z"));
+  assertEquals(selected.status,"CANDIDATES_FOR_REVIEW");
+  assertEquals(selected.shortlist.length,2);
+  assertEquals(selected.shortlist.find(x=>x.candidate.image_url.endsWith("portrait-720.jpg"))?.projected_crop_scale,1.5);
+  assert((selected.shortlist.find(x=>x.candidate.image_url.endsWith("tiny-512.jpg"))?.projected_crop_scale ?? 0)>2);
 });
 
 Deno.test("native 1080x1350 projects to 1x",()=>{

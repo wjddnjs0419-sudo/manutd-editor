@@ -187,7 +187,10 @@ export function matchPhotoSubject(candidate: PhotoCandidate, aliases: readonly s
   return "UNCONFIRMED";
 }
 
-function isCoverOrBodyUsable(w:number,h:number): boolean {return w>=960 && h>=640;}
+// Resolution and exact 4:5 crop scale are enforced after the full image reaches
+// Python. Keep low-resolution candidates (including >2x cases) in the bounded
+// shortlist so the crop gate can report the precise rejection reason.
+function isCoverOrBodyUsable(w:number,h:number): boolean {return w>0 && h>0;}
 function isProfileUsable(w:number,h:number): boolean {return w>=650 && h>=950;}
 
 /** Effective target enlargement after taking the required 4:5 source crop. */
