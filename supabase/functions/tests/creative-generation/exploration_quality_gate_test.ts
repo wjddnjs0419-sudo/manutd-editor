@@ -26,7 +26,7 @@ const evidence: EvidenceSnapshot = {
   evidence_ids: [articleId],
 };
 
-const config: QualityGateConfig = { min_slides: 3, max_slides: 5, hook_count: 3, max_repair_attempts: 1, require_visual_direction: true };
+const config: QualityGateConfig = { min_slides: 3, max_slides: 5, hook_count: 3, max_repair_attempts: 1, require_visual_direction: true, style_profile: "manutd_editor", style_version: "manutd-editor-v1", enable_style_validator: true };
 
 function validExplorationOutput(overrides: Partial<CreativeBriefOutput> = {}): CreativeBriefOutput {
   const report = "BBC Sport 보도에 따르면 맨유의 관심은 아직 루머 단계이며 영입이 확정된 것은 아닙니다.";
@@ -37,6 +37,8 @@ function validExplorationOutput(overrides: Partial<CreativeBriefOutput> = {}): C
   ];
   return {
     schema_version: "1.0",
+    style_profile: "manutd_editor",
+    style_version: "manutd-editor-v1",
     content_mode: "NEWS_UPDATE",
     match_phase: null,
     generation_quality: "FULL",
@@ -45,9 +47,11 @@ function validExplorationOutput(overrides: Partial<CreativeBriefOutput> = {}): C
     hooks: [1, 2, 3].map((id) => ({ id: `hook-${id}`, text: `BBC Sport 보도: 맨유 관심은 아직 루머 ${id}` })),
     slides: Array.from({ length: 3 }, (_, index) => ({
       slide_number: index + 1,
+      index: index + 1,
+      role: (["HOOK", "CONTEXT", "KEY_FACT"] as const)[index],
       purpose: index === 0 ? "HOOK" : "DETAIL",
       headline: `BBC Sport 보도: ${index === 0 ? "맨유 관심은 아직 루머" : index === 1 ? "논의는 초기 단계" : "영입 합의는 나오지 않았다"}`,
-      body: `${slideClaims[index] ?? report} https://bbc.test/article/1`,
+      body: index === 0 ? "" : `${slideClaims[index] ?? report} https://bbc.test/article/1`,
       claims: [{ claim_id: `claim-${index + 1}`, type: "FACT" as const, text: slideClaims[index] ?? report, evidence_ids: [articleId] }],
       visual_direction: { subject: "Manchester United", image_type: "photo", layout_intent: "clear", stat_emphasis: null, text_hierarchy: ["headline", "body"] },
     })),
@@ -102,4 +106,21 @@ Deno.test("Exploration DRAFT rejects exact duplicate slide copy used to pad a ca
   const result = validateExplorationDraft!(output, evidence, config, new Date("2026-10-12T10:00:00Z"));
   assert(result.errors.some((entry) => entry.code === "EXPLORATION_DUPLICATE_SLIDE_COPY"));
   assert(result.errors.some((entry) => entry.code === "EXPLORATION_DUPLICATE_CLAIM"));
+});
+
+
+Deno.test("Exploration DRAFT rejects nonsequential indexes and roles outside its contract", () => {
+  const validateExplorationDraft = (qualityGate as unknown as { validateExplorationDraft?: (value: unknown, evidence: EvidenceSnapshot, config: QualityGateConfig, now?: Date) => { valid: boolean; errors: readonly { code: string }[] } }).validateExplorationDraft;
+  const base = validExplorationOutput();
+  const result = validateExplorationDraft!({
+    ...base,
+    slides: base.slides.map((slide, index) => ({
+      ...slide,
+      index: index === 0 ? 0 : index + 1,
+      role: index === 1 ? "IMPLICATION" as const : (["HOOK", "CONTEXT", "KEY_FACT"] as const)[index],
+    })),
+  }, evidence, config, new Date("2026-10-12T10:00:00Z"));
+  assertEquals(result.valid, false);
+  assertEquals(result.errors.filter((entry) => entry.code === "STYLE_SLIDE_INDEX").length, 1);
+  assertEquals(result.errors.filter((entry) => entry.code === "STYLE_ROLE_ORDER").length, 1);
 });
