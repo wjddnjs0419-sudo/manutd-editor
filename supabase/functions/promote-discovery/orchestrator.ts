@@ -132,15 +132,28 @@ export async function promoteDiscovery(options: PromoteDiscoveryOptions): Promis
     const times = items.map(eventTime).filter(Number.isFinite);
     const firstSeenAt = iso(Math.min(...times));
     const lastSeenAt = iso(Math.max(...times));
-    const story = await options.repository.upsertStory({
-      canonicalTitle: cluster.representativeTitle,
-      summary: items[0]!.excerpt,
-      topic,
-      firstSeenAt: existing ? new Date(Math.min(Date.parse(existing.firstSeenAt), Date.parse(firstSeenAt))).toISOString() : firstSeenAt,
-      lastSeenAt: existing ? new Date(Math.max(Date.parse(existing.lastSeenAt), Date.parse(lastSeenAt))).toISOString() : lastSeenAt,
-      promotionKey: existing?.promotionKey ?? key,
-      signature: signatureFor(existing, topic, items),
-    });
+    const assignedStoryIds = new Set(items.map((item) => item.storyClusterId).filter((id): id is string => Boolean(id)));
+    let story: { id: string; created: boolean };
+    if (options.promotionJobId && assignedStoryIds.size > 0) {
+      const assignedStoryId = assignedStoryIds.values().next().value as string;
+      const assignedStory = stories.find((candidate) => candidate.id === assignedStoryId);
+      if (assignedStoryIds.size !== 1 || !assignedStory || !safeStoryMatch(assignedStory, key, items)) {
+        throw new Error("PROMOTION_JOB_STORY_MISMATCH");
+      }
+      // A one-row repair job may attach source evidence to its existing story,
+      // but must not refresh status, title, timestamps or signatures.
+      story = { id: assignedStory.id, created: false };
+    } else {
+      story = await options.repository.upsertStory({
+        canonicalTitle: cluster.representativeTitle,
+        summary: items[0]!.excerpt,
+        topic,
+        firstSeenAt: existing ? new Date(Math.min(Date.parse(existing.firstSeenAt), Date.parse(firstSeenAt))).toISOString() : firstSeenAt,
+        lastSeenAt: existing ? new Date(Math.max(Date.parse(existing.lastSeenAt), Date.parse(lastSeenAt))).toISOString() : lastSeenAt,
+        promotionKey: existing?.promotionKey ?? key,
+        signature: signatureFor(existing, topic, items),
+      });
+    }
     if (story.created) storiesCreated += 1;
     else storiesUpdated += 1;
     affectedStoryIds.add(story.id);

@@ -178,7 +178,12 @@ export function createDiscoveryPromotionRepository(options: RepositoryOptions): 
       return { id: inserted.id, created: true };
     },
     async assignObservation(observationId, storyClusterId, sourceObservationId, promotionJobId) {
-      await request(`/rest/v1/discovery_observations?id=eq.${encodeURIComponent(observationId)}&story_cluster_id=is.null`, { method: "PATCH", headers: { prefer: "return=minimal" }, body: JSON.stringify({ story_cluster_id: storyClusterId, source_observation_id: sourceObservationId, ...(promotionJobId ? { promotion_job_id: promotionJobId } : {}) }) }, "app_private");
+      const query = new URLSearchParams({
+        id: `eq.${observationId}`,
+        source_observation_id: "is.null",
+        or: `(story_cluster_id.is.null,story_cluster_id.eq.${storyClusterId})`,
+      });
+      await request(`/rest/v1/discovery_observations?${query}`, { method: "PATCH", headers: { prefer: "return=minimal" }, body: JSON.stringify({ story_cluster_id: storyClusterId, source_observation_id: sourceObservationId, ...(promotionJobId ? { promotion_job_id: promotionJobId } : {}) }) }, "app_private");
     },
     async ensureSourceObservation(item) {
       const isGoogleNews = item.providerId === "google-news";

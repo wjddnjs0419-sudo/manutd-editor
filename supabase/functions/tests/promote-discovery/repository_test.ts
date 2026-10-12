@@ -74,6 +74,9 @@ Deno.test("promotion retry re-reads observations already assigned by the same jo
   assertEquals(rows[0]?.storyClusterId, "story-1");
   const patch = requests.find((item) => item.method === "PATCH");
   assertEquals(patch?.body, { story_cluster_id: "story-1", source_observation_id: "source-observation-1", promotion_job_id: promotionJobId });
+  const patchQuery = new URL(patch!.url).searchParams;
+  assertEquals(patchQuery.get("source_observation_id"), "is.null");
+  assertEquals(decodeURIComponent(patchQuery.get("or") ?? ""), "(story_cluster_id.is.null,story_cluster_id.eq.story-1)");
 });
 
 Deno.test("Google publisher provenance reaches M8 source observations without replacing discovery identity", async () => {

@@ -42,7 +42,7 @@ function repository(
   return {
     calls,
     claims,
-    async listFreshUnassigned() { return observations.filter((item) => item.storyClusterId === null); },
+    async listFreshUnassigned(_asOf, _limit, promotionJobId) { return observations.filter((item) => item.storyClusterId === null || (promotionJobId !== undefined && item.storyClusterId !== null)); },
     async listStories() { return stories; },
     async upsertStory(input) {
       calls.push("upsertStory");
@@ -98,6 +98,39 @@ Deno.test("promotion attaches fresh observations to an existing safe story", asy
     sourceObservationId: "source-observation-1",
     status: "DISCOVERY_ONLY",
   });
+});
+
+Deno.test("manual linking of an existing story source preserves its story metadata", async () => {
+  const item = observation({
+    providerId: "feed-1-bbc-sport",
+    sourceCanonicalName: "BBC Sport",
+    sourceRole: "FACT_INDEPENDENT",
+    externalId: "bbc-article-1",
+    canonicalUrl: "https://www.bbc.co.uk/sport/football/articles/c62e9g09e781o",
+    title: "Boos, anguish & fading belief - 'worrying day' for under-pressure Carrick",
+    excerpt: "Solanke scores in added time as 10-man Spurs draw with Man Utd. Manchester United failed to beat opponents reduced to 10 men.",
+    contentFingerprint: "bbc-article-fingerprint",
+    storyClusterId: "story-existing",
+    publisherCanonicalUrl: "https://www.bbc.co.uk/sport/football/articles/c62e9g09e781o",
+  });
+  const existing: PromotionStory = {
+    id: "story-existing",
+    canonicalTitle: "Boos, anguish & fading belief - 'worrying day' for under-pressure Carrick",
+    summary: "Keep existing summary",
+    topic: "MANCHESTER_UNITED",
+    firstSeenAt: "2026-10-10T20:54:46.000Z",
+    lastSeenAt: "2026-10-10T20:54:52.000Z",
+    promotionKey: null,
+    signature: { existing: true },
+  };
+  const repo = repository([item], [existing]);
+  await promoteDiscovery({
+    asOf: "2026-10-12T09:00:00.000Z",
+    repository: repo,
+    promotionJobId: "99999999-9999-4999-8999-999999999999",
+  });
+  assertEquals(repo.calls.some((call) => call === "upsertStory"), false);
+  assertEquals(repo.calls.some((call) => call === "assign:observation-1:story-existing:source-observation-1"), true);
 });
 
 Deno.test("promotion creates one canonical story and is idempotent on repeat runs", async () => {
