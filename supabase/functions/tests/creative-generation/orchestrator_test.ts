@@ -4,6 +4,7 @@ import type { GenerationRepository, GenerationJob, StoredCreativeBrief, Creative
 import type { CandidateEvidenceInput, CreativeBriefOutput, EvidenceSnapshot } from "../../creative-generation/types.ts";
 import type { GenerationConfig } from "../../creative-generation/config.ts";
 import { DEFAULT_EXPLORATION_CONFIG } from "../../creative-generation/exploration.ts";
+import { ProviderError } from "../../creative-generation/provider.ts";
 
 const EXPLORATION_COST_CONFIG = {
   ...DEFAULT_EXPLORATION_CONFIG,
@@ -206,6 +207,8 @@ Deno.test("returns FAILED_VALIDATION and FAILED_PROVIDER safely", async () => {
   assertEquals(invalid.status, "FAILED_VALIDATION");
   const providerFailure = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" }, dependencies(new MemoryRepository(), { provider: { ...dependencies(repository).provider, generate: async () => { throw new Error("provider detail"); } } }));
   assertEquals(providerFailure.status, "FAILED_PROVIDER");
+  const providerHttpFailure = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" }, dependencies(new MemoryRepository(), { provider: { ...dependencies(repository).provider, generate: async () => { throw new ProviderError("FAILED_PROVIDER", 429); } } }));
+  assertEquals(providerHttpFailure.provider_failure, { category: "FAILED_PROVIDER", http_status: 429 });
 });
 
 Deno.test("AUTO_PRIORITY requires an eligible editorial ranking", async () => {

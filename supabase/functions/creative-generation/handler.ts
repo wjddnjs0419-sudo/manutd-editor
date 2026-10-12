@@ -64,8 +64,16 @@ export function createCreativeGenerationHandler(
     }
     try {
       const result = await dependencies.run(await requestedTrigger(request));
-      log({ requestId: id, event: "creative_generation_completed", status: result.status });
-      return json({ request_id: id, status: result.status, candidate_id: result.candidate_id, creative_brief_id: result.creative_brief_id ?? null, revision: result.revision ?? null, input_fingerprint: result.input_fingerprint ?? null, error_codes: result.error_codes ?? [] }, result.status === "CONCURRENT" ? 202 : 200);
+      log({
+        requestId: id,
+        event: "creative_generation_completed",
+        status: result.status,
+        ...(result.provider_failure ? {
+          providerFailureCategory: result.provider_failure.category,
+          ...(result.provider_failure.http_status === undefined ? {} : { providerHttpStatus: result.provider_failure.http_status }),
+        } : {}),
+      });
+      return json({ request_id: id, status: result.status, candidate_id: result.candidate_id, creative_brief_id: result.creative_brief_id ?? null, revision: result.revision ?? null, input_fingerprint: result.input_fingerprint ?? null, error_codes: result.error_codes ?? [], ...(result.provider_failure ? { provider_failure: result.provider_failure } : {}) }, result.status === "CONCURRENT" ? 202 : 200);
     } catch (error) {
       if (error instanceof InvalidRequestError) return json({ request_id: id, error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, 400);
       log({ requestId: id, event: "creative_generation_failed", code: "CREATIVE_GENERATION_FAILED" });

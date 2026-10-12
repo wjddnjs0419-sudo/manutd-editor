@@ -44,3 +44,22 @@ Deno.test("rejects invalid bodies and unauthorized callers", async () => {
   assertEquals((await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" }, "wrong"))).status, 401);
   assertEquals((await handler(request("GET", undefined))).status, 405);
 });
+
+Deno.test("returns and logs only sanitized provider failure diagnostics", async () => {
+  const logs: Record<string, unknown>[] = [];
+  const handler = createCreativeGenerationHandler({
+    collectorSecret: "secret",
+    run: async () => ({
+      status: "FAILED_PROVIDER",
+      candidate_id: "candidate-1",
+      provider_failure: { category: "FAILED_PROVIDER", http_status: 429 },
+    }),
+    requestId: () => "request-2",
+    log: (entry) => logs.push(entry),
+  });
+
+  const response = await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "MANUAL" }));
+  const body = await response.json();
+  assertEquals(body.provider_failure, { category: "FAILED_PROVIDER", http_status: 429 });
+  assertEquals(logs, [{ requestId: "request-2", event: "creative_generation_completed", status: "FAILED_PROVIDER", providerFailureCategory: "FAILED_PROVIDER", providerHttpStatus: 429 }]);
+});
