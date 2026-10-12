@@ -52,7 +52,7 @@ Deno.test("returns and logs only sanitized provider failure diagnostics", async 
     run: async () => ({
       status: "FAILED_PROVIDER",
       candidate_id: "candidate-1",
-      provider_failure: { category: "FAILED_PROVIDER", http_status: 429 },
+      provider_failure: { category: "FAILED_PROVIDER", code: "HTTP_QUOTA", http_status: 429 },
     }),
     requestId: () => "request-2",
     log: (entry) => logs.push(entry),
@@ -60,6 +60,6 @@ Deno.test("returns and logs only sanitized provider failure diagnostics", async 
 
   const response = await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "MANUAL" }));
   const body = await response.json();
-  assertEquals(body.provider_failure, { category: "FAILED_PROVIDER", http_status: 429 });
-  assertEquals(logs, [{ requestId: "request-2", event: "creative_generation_completed", status: "FAILED_PROVIDER", providerFailureCategory: "FAILED_PROVIDER", providerHttpStatus: 429 }]);
+  assertEquals(body.provider_failure, { category: "FAILED_PROVIDER", code: "HTTP_QUOTA", http_status: 429 });
+  assertEquals(logs, [{ requestId: "request-2", event: "creative_generation_completed", status: "FAILED_PROVIDER", providerFailureCategory: "FAILED_PROVIDER", providerFailureCode: "HTTP_QUOTA", providerHttpStatus: 429 }]);
 });

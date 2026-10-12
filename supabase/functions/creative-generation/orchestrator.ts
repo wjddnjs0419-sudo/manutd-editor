@@ -5,7 +5,7 @@ import { canonicalJson, hashGenerationInput, sha256 } from "./fingerprint.ts";
 import { generateWithOneRepair } from "./quality_gate.ts";
 import { businessDate } from "../_shared/m6/business_date.ts";
 import { assessExplorationSnapshot, DEFAULT_EXPLORATION_CONFIG, explorationFingerprint, explorationSlideBounds, type ExplorationConfig } from "./exploration.ts";
-import { ProviderError, type CreativeGenerationProvider, type ProviderErrorCategory, type ProviderUsageStats } from "./provider.ts";
+import { ProviderError, type CreativeGenerationProvider, type ProviderErrorCategory, type ProviderFailureCode, type ProviderUsageStats } from "./provider.ts";
 import type { GenerationRepository, GenerationJob, StoredCreativeBrief, TriggerType } from "./repository.ts";
 import type { CandidateEvidenceInput, ContentMode, CreativeBriefOutput, EvidenceSnapshot, ExplorationArticleEvidenceInput, GenerationIntent } from "./types.ts";
 
@@ -25,7 +25,7 @@ export interface GenerationResult {
   readonly revision?: number;
   readonly input_fingerprint?: string;
   readonly error_codes?: readonly string[];
-  readonly provider_failure?: { readonly category: ProviderErrorCategory; readonly http_status?: number };
+  readonly provider_failure?: { readonly category: ProviderErrorCategory; readonly code?: ProviderFailureCode; readonly http_status?: number };
 }
 
 export interface GenerationDependencies {
@@ -224,7 +224,7 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
     generated = await dependencies.provider.generate(providerInput);
   } catch (error) {
     const providerFailure = error instanceof ProviderError
-      ? { category: error.category, ...(error.status === undefined ? {} : { http_status: error.status }) }
+      ? { category: error.category, code: error.code, ...(error.status === undefined ? {} : { http_status: error.status }) }
       : { category: "FAILED_PROVIDER" as const };
     await dependencies.repository.updateJob(job.id, { status: "FAILED_PROVIDER", last_error_category: "FAILED_PROVIDER", completed_at: runAt.toISOString(), lease_owner: null, lease_expires_at: null, ...currentUsage() });
     return { status: "FAILED_PROVIDER", candidate_id: trigger.candidate_id, input_fingerprint: fingerprint, error_codes: ["FAILED_PROVIDER"], provider_failure: providerFailure };

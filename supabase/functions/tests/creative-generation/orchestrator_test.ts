@@ -208,7 +208,7 @@ Deno.test("returns FAILED_VALIDATION and FAILED_PROVIDER safely", async () => {
   const providerFailure = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" }, dependencies(new MemoryRepository(), { provider: { ...dependencies(repository).provider, generate: async () => { throw new Error("provider detail"); } } }));
   assertEquals(providerFailure.status, "FAILED_PROVIDER");
   const providerHttpFailure = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" }, dependencies(new MemoryRepository(), { provider: { ...dependencies(repository).provider, generate: async () => { throw new ProviderError("FAILED_PROVIDER", 429); } } }));
-  assertEquals(providerHttpFailure.provider_failure, { category: "FAILED_PROVIDER", http_status: 429 });
+  assertEquals(providerHttpFailure.provider_failure, { category: "FAILED_PROVIDER", code: "HTTP_USAGE_LIMIT", http_status: 429 });
 });
 
 Deno.test("AUTO_PRIORITY requires an eligible editorial ranking", async () => {

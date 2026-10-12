@@ -70,6 +70,7 @@ export function createCreativeGenerationHandler(
         status: result.status,
         ...(result.provider_failure ? {
           providerFailureCategory: result.provider_failure.category,
+          ...(result.provider_failure.code === undefined ? {} : { providerFailureCode: result.provider_failure.code }),
           ...(result.provider_failure.http_status === undefined ? {} : { providerHttpStatus: result.provider_failure.http_status }),
         } : {}),
       });

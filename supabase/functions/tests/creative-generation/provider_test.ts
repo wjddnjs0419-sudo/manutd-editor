@@ -158,3 +158,65 @@ Deno.test("supports a request-scoped zero-retry limit for the Exploration classi
   assertEquals(attempts, 1);
   assertEquals(provider.getUsageStats().retry_count, 0);
 });
+
+Deno.test("classifies HTTP failures using status and allowlisted quota code only", async () => {
+  for (const [status, upstreamCode, expected] of [
+    [401, "secret-key", "HTTP_AUTH"], [403, "secret", "HTTP_AUTH"],
+    [404, "model_not_found", "HTTP_MODEL"], [400, "secret", "HTTP_REQUEST"],
+    [422, "secret", "HTTP_REQUEST"], [429, "insufficient_quota", "HTTP_QUOTA"],
+    [429, "rate_limit_exceeded", "HTTP_RATE_LIMIT"], [429, "sensitive unknown code", "HTTP_USAGE_LIMIT"], [500, "secret", "HTTP_SERVER"],
+    [503, "secret", "HTTP_SERVER"], [418, "secret", "HTTP_OTHER"],
+  ] as const) {
+    const provider = createOpenAIProvider({ apiKey: "sensitive-key", maxRetries: 0,
+      fetchImpl: async () => response({ error: { code: upstreamCode, message: "sensitive article and output" } }, status) });
+    const error = await assertRejects(() => provider.generate(input));
+    assertEquals((error as unknown as { code: string }).code, expected);
+    assertEquals((error as unknown as { status: number }).status, status);
+    assert(!JSON.stringify(error).includes("sensitive"));
+    assert(error instanceof Error);
+    assert(!error.message.includes("secret"));
+  }
+});
+
+Deno.test("distinguishes transport and response parsing failures without raw diagnostics", async () => {
+  for (const [fetchImpl, expected, status] of [
+    [async () => { throw new TypeError("sensitive network detail"); }, "NETWORK", undefined],
+    [async () => { throw new Error("sensitive unknown detail"); }, "UNKNOWN", undefined],
+    [async () => {
+      const result = response({});
+      result.json = () => Promise.reject(new TypeError("sensitive body transport detail"));
+      return result;
+    }, "NETWORK", undefined],
+    [async () => new Response("sensitive invalid JSON"), "INVALID_RESPONSE_JSON", 200],
+    [async () => response({ output_text: "sensitive invalid JSON", usage: { input_tokens: 12, output_tokens: 3 } }), "INVALID_OUTPUT_JSON", 200],
+    [async () => response({ output: [] }), "MISSING_OUTPUT", 200],
+  ] as const) {
+    const provider = createOpenAIProvider({ apiKey: "test", maxRetries: 0, fetchImpl });
+    const error = await assertRejects(() => provider.generate(input));
+    assertEquals((error as unknown as { code: string }).code, expected);
+    assertEquals((error as unknown as { status?: number }).status, status);
+    assert(!JSON.stringify(error).includes("sensitive"));
+    if (expected === "INVALID_OUTPUT_JSON") assertEquals(provider.getUsageStats().output_tokens, 3);
+  }
+});
+
+Deno.test("classifies deadline during fetch or body read as timeout without Exploration retry", async () => {
+  for (const bodyRead of [false, true]) {
+    const provider = createOpenAIProvider({ apiKey: "test", timeoutMs: 5,
+      fetchImpl: (_url, init) => {
+        const pending = new Promise<never>((_resolve, reject) => {
+          init!.signal!.addEventListener("abort", () => reject(new DOMException("sensitive timeout", "AbortError")), { once: true });
+        });
+        if (!bodyRead) return pending;
+        const result = response({});
+        result.json = () => pending;
+        return Promise.resolve(result);
+      },
+    });
+    const error = await assertRejects(() => provider.generate({ ...input, generation_intent: "EXPLORATION" }));
+    assertEquals((error as unknown as { category: string }).category, "PROVIDER_TIMEOUT");
+    assertEquals((error as unknown as { code: string }).code, "TIMEOUT");
+    assertEquals(provider.getUsageStats().provider_calls, 1);
+    assertEquals(provider.getUsageStats().retry_count, 0);
+  }
+});
