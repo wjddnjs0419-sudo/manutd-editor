@@ -20,7 +20,7 @@
 
 ## Existing gaps that remain intentionally outside the worker
 
-- M6 article generation is synchronous in the Supabase Edge Function. It is cloud-side and does not need the MacBook, but it is not a separate queued OpenAI job. The saved DRAFT is handed to M9 by a second explicit Telegram preview action.
+- M6 article generation is synchronous in the Supabase Edge Function. It is cloud-side and does not need the MacBook, but it is not a separate queued OpenAI job. After saving an Exploration DRAFT, the same owner request hands it to M9; the manual preview action remains available if dispatch failed or an operator needs a controlled re-run.
 - The M9 worker does not invoke OpenAI. OpenAI generation remains in the existing Creative Generation path and runs only when the owner requests a carousel. The worker records the saved brief's provider usage; it cannot create a brief if that upstream function is unavailable.
 - The private Storage bucket and fixed CTA must exist in the test Supabase project. The repository contains the M9 job/RPC migrations, but this task did not apply migrations to any remote project.
 - Code changes in a Draft PR are not live in the Supabase Telegram edge function or the default-branch workflow until a separate deployment/merge. Neither happened here.
