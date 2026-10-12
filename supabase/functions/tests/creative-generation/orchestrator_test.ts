@@ -337,6 +337,71 @@ Deno.test("Exploration gives the classifier a zero-retry request budget", async 
   assertEquals(classifierOptions, { maxRetries: 0 });
 });
 
+Deno.test("manual analysis override requires an existing uncertain Exploration job", async () => {
+  const repository = new MemoryRepository();
+  repository.candidate = explorationCandidate();
+  let providerCalls = 0;
+  const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION", content_mode_override: "ANALYSIS_CONTEXT" }, dependencies(repository, {
+    explorationConfig: EXPLORATION_COST_CONFIG,
+    provider: {
+      ...dependencies(repository).provider,
+      classify: async () => { providerCalls += 1; return { content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }; },
+      generate: async () => { providerCalls += 1; return explorationOutput("ANALYSIS_CONTEXT"); },
+    },
+  }));
+  assertEquals(result.status, "FAILED_VALIDATION");
+  assertEquals(result.error_codes, ["MANUAL_MODE_OVERRIDE_REQUIRES_UNCERTAIN_JOB"]);
+  assertEquals(providerCalls, 0);
+  assertEquals(repository.jobs.length, 0);
+});
+
+Deno.test("manual analysis override resumes an uncertain Exploration without repeating classification or losing usage", async () => {
+  const repository = new MemoryRepository();
+  repository.candidate = explorationCandidate({ posts: [] });
+  const usage = { provider_calls: 0, input_tokens: 0, output_tokens: 0, retry_count: 0 };
+  let classifierCalls = 0;
+  let generationCalls = 0;
+  const deps = dependencies(repository, {
+    explorationConfig: EXPLORATION_COST_CONFIG,
+    provider: {
+      ...dependencies(repository).provider,
+      getUsageStats: () => ({ ...usage }),
+      classify: async () => {
+        classifierCalls += 1;
+        usage.provider_calls += 1;
+        usage.input_tokens += 2_721;
+        usage.output_tokens += 63;
+        return { content_mode: "ANALYSIS_CONTEXT" as const, match_phase: null, confidence: 0.2, reason_code: "WEAK" };
+      },
+      generate: async () => {
+        generationCalls += 1;
+        usage.provider_calls += 1;
+        usage.input_tokens += 1_200;
+        usage.output_tokens += 1_500;
+        return explorationOutput("ANALYSIS_CONTEXT");
+      },
+    },
+  });
+  const first = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, deps);
+  assertEquals(first.status, "CLASSIFICATION_UNCERTAIN");
+  assertEquals(repository.jobs[0]?.provider_calls, 1);
+  repository.leaseOwners.clear();
+
+  const resumed = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION", content_mode_override: "ANALYSIS_CONTEXT" } as never, deps);
+
+  assertEquals(resumed.status, "DRAFT");
+  assertEquals(classifierCalls, 1);
+  assertEquals(generationCalls, 1);
+  assertEquals(repository.jobs[0]?.provider_calls, 2);
+  assertEquals(repository.jobs[0]?.input_tokens, 3_921);
+  assertEquals(repository.jobs[0]?.output_tokens, 1_563);
+  assertEquals(repository.jobs[0]?.estimated_cost_usd, 0.007047);
+  assertEquals(repository.briefs[0]?.provider_calls, 2);
+  assertEquals(repository.briefs[0]?.input_tokens, 3_921);
+  assertEquals(repository.briefs[0]?.output_tokens, 1_563);
+  assertEquals(repository.briefs[0]?.estimated_cost_usd, 0.007047);
+});
+
 Deno.test("Exploration fails validation without a paid repair request", async () => {
   const repository = new MemoryRepository();
   repository.candidate = explorationCandidate();

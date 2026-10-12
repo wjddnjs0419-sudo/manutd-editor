@@ -13,6 +13,7 @@ export interface GenerationTrigger {
   readonly candidate_id: string;
   readonly trigger_type: TriggerType;
   readonly generation_intent?: GenerationIntent;
+  readonly content_mode_override?: "ANALYSIS_CONTEXT";
 }
 
 export type GenerationStatus = "READY" | "DRAFT" | "NOOP" | "CONCURRENT" | "DAILY_LIMIT" | "NOT_ELIGIBLE" | "EXPLORATION_DISABLED" | "EXPLORATION_COST_RATES_REQUIRED" | "BLOCKED_EVIDENCE" | "CLASSIFICATION_UNCERTAIN" | "FAILED_VALIDATION" | "FAILED_PROVIDER";
@@ -93,6 +94,9 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
   const now = dependencies.now ?? (() => new Date());
   const runAt = now();
   const intent = trigger.generation_intent ?? "STANDARD";
+  if (trigger.content_mode_override && (intent !== "EXPLORATION" || trigger.trigger_type !== "MANUAL" || trigger.content_mode_override !== "ANALYSIS_CONTEXT")) {
+    return { status: "FAILED_VALIDATION", candidate_id: trigger.candidate_id, error_codes: ["MANUAL_EXPLORATION_MODE_OVERRIDE_INVALID"] };
+  }
   const explorationConfig = dependencies.explorationConfig ?? DEFAULT_EXPLORATION_CONFIG;
   const reviewConfig = intent === "EXPLORATION" && trigger.trigger_type === "MANUAL"
     ? { ...explorationConfig, allowHistoricalReview: true }
@@ -106,6 +110,7 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
   let fingerprint: string | null = null;
   let job: GenerationJob | null = null;
   let leaseAcquired = false;
+  let manualModeOverride = false;
   let historicalReview = false;
   let eligibleExplorationArticles: readonly ExplorationArticleEvidenceInput[] = snapshot.exploration_articles ?? [];
   if (intent === "EXPLORATION") {
@@ -124,6 +129,13 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
     if (![explorationConfig.inputCostPerMillionUsd, explorationConfig.outputCostPerMillionUsd]
       .every((rate) => typeof rate === "number" && Number.isFinite(rate) && rate >= 0)) {
       return { status: "EXPLORATION_COST_RATES_REQUIRED", candidate_id: trigger.candidate_id };
+    }
+    if (trigger.content_mode_override) {
+      const previousJob = await dependencies.repository.getJob(trigger.candidate_id, fingerprint);
+      if (!dependencies.repository.reserveExplorationJob || previousJob?.status !== "CLASSIFICATION_UNCERTAIN" || previousJob.attempt_count < 1) {
+        return { status: "FAILED_VALIDATION", candidate_id: trigger.candidate_id, input_fingerprint: fingerprint, error_codes: ["MANUAL_MODE_OVERRIDE_REQUIRES_UNCERTAIN_JOB"] };
+      }
+      manualModeOverride = true;
     }
     if (dependencies.repository.reserveExplorationJob) {
       const reservation = await dependencies.repository.reserveExplorationJob({ candidate_id: trigger.candidate_id, exploration_fingerprint: fingerprint, trigger_type: trigger.trigger_type, now: runAt, daily_limit: explorationConfig.maxDraftsPerDay });
@@ -145,13 +157,35 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
   const config = validateGenerationConfig(rawConfig);
   dependencies.provider.configure?.(config);
   const usageBefore = readProviderUsage(dependencies.provider);
-  const currentUsage = () => usageDelta(usageBefore, readProviderUsage(dependencies.provider), explorationConfig);
-  const classification = await classifyWithFallback(
-    evidenceText(snapshot, intent),
-    config.classifier_config,
-    dependencies.provider,
-    intent === "EXPLORATION" ? { maxRetries: 0 } : undefined,
-  );
+  const previousUsage = {
+    provider_calls: job?.provider_calls ?? 0,
+    input_tokens: job?.input_tokens ?? 0,
+    output_tokens: job?.output_tokens ?? 0,
+    retry_count: job?.retry_count ?? 0,
+    estimated_cost_usd: job?.estimated_cost_usd ?? null,
+  };
+  const currentUsage = () => {
+    const delta = usageDelta(usageBefore, readProviderUsage(dependencies.provider), explorationConfig);
+    const previousHasUsage = previousUsage.provider_calls > 0 || previousUsage.input_tokens > 0 || previousUsage.output_tokens > 0;
+    const estimatedCost = previousUsage.estimated_cost_usd === null
+      ? previousHasUsage ? null : delta.estimated_cost_usd
+      : delta.estimated_cost_usd === null ? null : Number((previousUsage.estimated_cost_usd + delta.estimated_cost_usd).toFixed(6));
+    return {
+      provider_calls: previousUsage.provider_calls + delta.provider_calls,
+      input_tokens: previousUsage.input_tokens + delta.input_tokens,
+      output_tokens: previousUsage.output_tokens + delta.output_tokens,
+      retry_count: previousUsage.retry_count + delta.retry_count,
+      estimated_cost_usd: estimatedCost,
+    };
+  };
+  const classification = manualModeOverride
+    ? { source: "MANUAL_SELECTION" as const, content_mode: "ANALYSIS_CONTEXT" as const, match_phase: null, confidence: 1, reason_code: "MANUAL_EXPLORATION_ANALYSIS" }
+    : await classifyWithFallback(
+      evidenceText(snapshot, intent),
+      config.classifier_config,
+      dependencies.provider,
+      intent === "EXPLORATION" ? { maxRetries: 0 } : undefined,
+    );
   if (classification.source === "UNCERTAIN" || !classification.content_mode) {
     fingerprint ??= await uncertainFingerprint(trigger.candidate_id, snapshot, config);
     const existing = intent === "EXPLORATION"
@@ -202,7 +236,7 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
   const briefStatus = intent === "EXPLORATION" ? "DRAFT" : mode === "NEWS_UPDATE" && trigger.trigger_type !== "AUTO_PRIORITY" && !rankingEligible ? "DRAFT" : "READY";
   const brief = await dependencies.repository.insertCreativeBrief({
     candidate_id: trigger.candidate_id, version: revision, headline: output.hooks[0]?.text ?? output.angle, angle: output.angle, format: "INSTAGRAM_CAROUSEL", slide_count: output.slides.length,
-    slides_json: { slides: output.slides, sources: output.sources, key_takeaway: output.key_takeaway, editor_warning: output.editor_warning ?? null, internal_grounding: output.internal_grounding ?? null, ...(intent === "EXPLORATION" ? { exploration_articles: eligibleExplorationArticles } : {}) }, design_json: { slides: output.slides.map((slide) => ({ slide_number: slide.slide_number, visual_direction: slide.visual_direction })) }, caption_draft: output.caption.body, cta: output.caption.cta, status: briefStatus, content_mode: output.content_mode, match_phase: output.match_phase, generation_config_id: config.id, input_fingerprint: fingerprint, evidence_snapshot: snapshot, hooks_json: output.hooks, grounding_json: { claims: output.slides.flatMap((slide) => slide.claims), internal_grounding: output.internal_grounding ?? null }, generation_metadata: { config_version: config.version, classifier_config_version: config.classifier_config.version, classification_source: classification.source, trigger_type: trigger.trigger_type, ...(intent === "EXPLORATION" ? { generation_intent: intent, exploration_fingerprint: fingerprint, ...(historicalReview ? { historical_review: true } : {}) } : {}), ranking_eligible: rankingEligible, provider_usage: usage }, generation_quality: output.generation_quality, model_name: String(config.generation_config.model), generated_at: runAt.toISOString(),
+    slides_json: { slides: output.slides, sources: output.sources, key_takeaway: output.key_takeaway, editor_warning: output.editor_warning ?? null, internal_grounding: output.internal_grounding ?? null, ...(intent === "EXPLORATION" ? { exploration_articles: eligibleExplorationArticles } : {}) }, design_json: { slides: output.slides.map((slide) => ({ slide_number: slide.slide_number, visual_direction: slide.visual_direction })) }, caption_draft: output.caption.body, cta: output.caption.cta, status: briefStatus, content_mode: output.content_mode, match_phase: output.match_phase, generation_config_id: config.id, input_fingerprint: fingerprint, evidence_snapshot: snapshot, hooks_json: output.hooks, grounding_json: { claims: output.slides.flatMap((slide) => slide.claims), internal_grounding: output.internal_grounding ?? null }, generation_metadata: { config_version: config.version, classifier_config_version: config.classifier_config.version, classification_source: classification.source, ...(manualModeOverride ? { content_mode_override: "ANALYSIS_CONTEXT" } : {}), trigger_type: trigger.trigger_type, ...(intent === "EXPLORATION" ? { generation_intent: intent, exploration_fingerprint: fingerprint, ...(historicalReview ? { historical_review: true } : {}) } : {}), ranking_eligible: rankingEligible, provider_usage: usage }, generation_quality: output.generation_quality, model_name: String(config.generation_config.model), generated_at: runAt.toISOString(),
     style_profile: output.style_profile ?? (qualityConfig(config, intent, reviewConfig, mode).style_profile === "manutd_editor" ? "manutd_editor" : undefined), style_version: output.style_version ?? qualityConfig(config, intent, reviewConfig, mode).style_version,
     ...(intent === "EXPLORATION" ? { exploration_fingerprint: fingerprint } : {}), provider_calls: usage.provider_calls, input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, estimated_cost_usd: usage.estimated_cost_usd,
   });

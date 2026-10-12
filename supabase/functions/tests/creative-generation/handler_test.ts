@@ -30,6 +30,12 @@ Deno.test("accepts only the explicit Exploration intent and keeps the trigger co
   assertEquals(response.status, 200);
   assertEquals(calls[0], { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" });
   assertEquals((await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "BYPASS" }))).status, 400);
+
+  const override = await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION", content_mode_override: "ANALYSIS_CONTEXT" }));
+  assertEquals(override.status, 200);
+  assertEquals(calls[1], { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION", content_mode_override: "ANALYSIS_CONTEXT" });
+  assertEquals((await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY", generation_intent: "EXPLORATION", content_mode_override: "ANALYSIS_CONTEXT" }))).status, 400);
+  assertEquals((await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION", content_mode_override: "NEWS_UPDATE" }))).status, 400);
 });
 
 Deno.test("rejects invalid bodies and unauthorized callers", async () => {
