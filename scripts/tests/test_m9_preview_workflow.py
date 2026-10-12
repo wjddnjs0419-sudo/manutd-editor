@@ -12,7 +12,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from m9_preview_workflow import (
     brief_slides, checked_media, prepared_render_job, split_hook, job_key, run_preview,
-    SupabaseGateway, RemoteError, TelegramGateway, validate_preview_status,
+    SupabaseGateway, RemoteError, TelegramGateway, telegram_text_chunks, validate_preview_status,
 )
 
 def find_font() -> Path | None:
@@ -40,6 +40,11 @@ def make_brief() -> dict:
         ]},
         "hooks_json": [{"id": "hook_1", "text": "맨유 경기 종료\n결과는 무승부"}],
         "caption_draft": "맨유 경기 최종 결과",
+        "content_mode": "NEWS_UPDATE",
+        "evidence_snapshot": {
+            "story": {"id": "2c2c2c2c-cccc-4ccc-8ccc-cccccccccccc"},
+            "exploration_articles": [{"publisher_name": "TEAMtalk", "canonical_url": "https://www.teamtalk.com/manchester-united/news/1"}],
+        },
     }
 
 
@@ -47,10 +52,19 @@ class FakeGateway:
     def __init__(self):
         self.claimed: set[str] = set()
         self.changes: list[tuple[str, str]] = []
+        self.patches: list[dict] = []
         self.uploaded: list[tuple[str, bytes]] = []
         self.signed: list[str] = []
         self.state: dict[str, str] = {}
         self.fail_sign = False
+        self.fail_verify = False
+        self.verified: list[str] = []
+
+    def ensure_private_bucket(self):
+        self.private_bucket_checked = True
+
+    def get_preview(self, key):
+        return {"id": "a9a9a9a9-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}
 
     def claim(self, key, brief_id, media):
         if key in self.claimed:
@@ -63,11 +77,19 @@ class FakeGateway:
             raise RuntimeError("M9_STATE_TRANSITION_CONFLICT")
         self.state[key] = next_status
         self.changes.append((previous, next_status))
+        self.patches.append(patch or {})
 
     def upload_png(self, path, data):
         assert data.startswith(b"\x89PNG\r\n\x1a\n")
         assert path.startswith("previews/") and path.endswith(".png")
         self.uploaded.append((path, data))
+
+    def verify_uploaded_png(self, path, data):
+        import hashlib
+        self.verified.append(path)
+        if self.fail_verify:
+            raise ValueError("M9_STORAGE_SHA256_MISMATCH")
+        return hashlib.sha256(data).hexdigest()
 
     def signed_url(self, path):
         self.signed.append(path)
@@ -78,14 +100,24 @@ class FakeGateway:
 
 class FakeTelegram:
     def __init__(self, *, uncertain=False):
-        self.calls: list[tuple[str, list[str], str]] = []
+        self.calls: list[tuple[str, list[tuple[str, bytes]]]] = []
+        self.text_calls: list[tuple[str, str]] = []
         self.uncertain = uncertain
 
     def send_album(self, chat_id, urls, caption):
-        self.calls.append((chat_id, urls, caption))
+        raise AssertionError("PNG originals should be delivered as documents")
+
+    def send_png_documents(self, chat_id, documents):
+        self.calls.append((chat_id, documents))
         if self.uncertain:
             raise RuntimeError("M9_TELEGRAM_AMBIGUOUS_RESPONSE")
-        return [701, 702, 703]
+        return list(range(701, 701 + len(documents)))
+
+    def send_text(self, chat_id, text):
+        self.text_calls.append((chat_id, text))
+        if self.uncertain:
+            raise RuntimeError("M9_TELEGRAM_AMBIGUOUS_RESPONSE")
+        return [704]
 
 
 class M9IntegrationContracts(unittest.TestCase):
@@ -127,6 +159,13 @@ class M9IntegrationContracts(unittest.TestCase):
         self.assertEqual(p["body_paragraphs"], ["전반전이 종료됐다.", "후반전도 종료됐다."])
         self.assertEqual(len(p["body_slides"]), 1)
         self.assertEqual(p["cover_photo_source"], self.media["cover"]["source_url"])
+
+    def test_caption_split_respects_telegram_utf16_limit_without_losing_text(self):
+        original = "📋 캡션\n" + ("맨유⚽ " * 1600)
+        chunks = telegram_text_chunks(original)
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual("".join(chunks), original.strip())
+        self.assertTrue(all(len(chunk.encode("utf-16-le")) // 2 <= 4096 for chunk in chunks))
 
     def test_maps_page_media_and_preserves_legacy_cover_body_aliases(self):
         self.brief["slides_json"]["slides"].append({
@@ -200,7 +239,7 @@ class M9IntegrationContracts(unittest.TestCase):
 
     def test_draft_preview_cannot_send_telegram(self):
         draft = {**self.brief, "status": "DRAFT", "generation_metadata": {"generation_intent": "EXPLORATION"}}
-        with self.assertRaisesRegex(ValueError, "M9_DRAFT_TELEGRAM_SEND_NOT_SUPPORTED"):
+        with self.assertRaisesRegex(ValueError, "M9_DRAFT_TELEGRAM_SEND_REQUIRES_OWNER_OPT_IN"):
             run_preview(draft, {}, self.root, self.root / "out", Path("unused"), None,
                         None, None, send=True, allow_draft_preview=True)
 
@@ -234,17 +273,33 @@ class M9IntegrationContracts(unittest.TestCase):
         self.assertEqual(job_key(self.brief, self.media), job_key(self.brief, self.media))
 
     @unittest.skipUnless(find_font(), "M9_TEST_FONT needed")
-    def test_full_pipeline_uploads_only_two_pngs_uses_existing_cta_then_sends_three(self):
+    def test_full_pipeline_sends_copyable_caption_separately_from_ordered_album(self):
         store, tel = FakeGateway(), FakeTelegram()
         result = run_preview(self.brief, self.media, self.root, self.root / "out",
                              self.font, None, store, tel, send=True, chat_id="321",
                              cta_file=self.root / "cta.png")
         self.assertEqual(result["status"], "SENT")
-        self.assertEqual(result["telegram_message_ids"], [701, 702, 703])
-        self.assertEqual(len(store.uploaded), 2)
-        self.assertEqual(store.signed[-1], "assets/cta.png")
+        self.assertEqual(result["telegram_message_ids"], [701, 702, 703, 704])
+        self.assertEqual(len(store.uploaded), 3)
+        self.assertEqual(store.uploaded[-1][0].endswith("/slide_03.png"), True)
+        self.assertEqual(store.verified, [path for path, _ in store.uploaded])
+        self.assertTrue(store.private_bucket_checked)
         self.assertEqual(len(tel.calls), 1)
         self.assertEqual(len(tel.calls[0][1]), 3)
+        self.assertEqual([name for name, _ in tel.calls[0][1]], ["slide_01.png", "slide_02.png", "slide_03.png"])
+        self.assertEqual([data for _, data in tel.calls[0][1]], [data for _, data in store.uploaded])
+        self.assertEqual(tel.text_calls, [
+            ("321", "🔒 비공개 Storage 업로드와 PNG SHA-256 검증을 마쳤습니다. 이제 전체 카드뉴스와 캡션을 전달합니다."),
+            ("321", "📋 Instagram 캡션 (복사)\n\n맨유 경기 최종 결과"),
+        ])
+        manifest = store.patches[1]["rendered_manifest"]
+        self.assertEqual(manifest["job_id"], "a9a9a9a9-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+        self.assertEqual(manifest["story_cluster_id"], "2c2c2c2c-cccc-4ccc-8ccc-cccccccccccc")
+        self.assertEqual(manifest["source_publisher"], "TEAMtalk")
+        self.assertEqual(manifest["source_url"], "https://www.teamtalk.com/manchester-united/news/1")
+        self.assertEqual(manifest["slide_count"], 3)
+        self.assertEqual(manifest["slides"][-1]["kind"], "CTA")
+        self.assertEqual(store.patches[-1]["rendered_manifest"]["status"], "SENT")
         self.assertEqual(store.changes, [
             ("CLAIMED", "RENDERED"), ("RENDERED", "UPLOADED"),
             ("UPLOADED", "SENDING"), ("SENDING", "SENT")
@@ -253,22 +308,36 @@ class M9IntegrationContracts(unittest.TestCase):
                          (self.root / "out" / "slide_03_cta.png").read_bytes())
 
     @unittest.skipUnless(find_font(), "M9_TEST_FONT needed")
+    def test_explicit_owner_opt_in_allows_exploration_draft_review_send(self):
+        draft = {**self.brief, "status": "DRAFT", "content_mode": "NEWS_UPDATE",
+                 "generation_metadata": {"generation_intent": "EXPLORATION"}}
+        store, tel = FakeGateway(), FakeTelegram()
+        result = run_preview(draft, self.media, self.root, self.root / "draft-send",
+                             self.font, None, store, tel, send=True, chat_id="321",
+                             cta_file=self.root / "cta.png", allow_draft_preview=True,
+                             allow_draft_telegram_send=True)
+        self.assertEqual(result["status"], "SENT")
+        self.assertEqual(len(tel.calls), 1)
+
+    @unittest.skipUnless(find_font(), "M9_TEST_FONT needed")
     def test_retry_same_brief_and_photos_fails_before_any_second_send(self):
         store, tel = FakeGateway(), FakeTelegram()
         call = lambda: run_preview(self.brief, self.media, self.root, self.root / "out",
-                                   self.font, None, store, tel, send=True, chat_id="321")
+                                   self.font, None, store, tel, send=True, chat_id="321",
+                                   cta_file=self.root / "cta.png")
         call()
         with self.assertRaisesRegex(ValueError, "M9_JOB_ALREADY_CLAIMED_NO_RETRY"):
             call()
         self.assertEqual(len(tel.calls), 1)
 
     @unittest.skipUnless(find_font(), "M9_TEST_FONT needed")
-    def test_signed_url_failure_prevents_any_telegram_send(self):
+    def test_storage_sha_failure_prevents_any_telegram_send(self):
         store, tel = FakeGateway(), FakeTelegram()
-        store.fail_sign = True
-        with self.assertRaisesRegex(ValueError, "M9_SIGN_RESPONSE_INVALID"):
+        store.fail_verify = True
+        with self.assertRaisesRegex(ValueError, "M9_STORAGE_SHA256_MISMATCH"):
             run_preview(self.brief, self.media, self.root, self.root / "out",
-                        self.font, None, store, tel, send=True, chat_id="321")
+                        self.font, None, store, tel, send=True, chat_id="321",
+                        cta_file=self.root / "cta.png")
         self.assertEqual(len(tel.calls), 0)
         self.assertEqual(store.state[job_key(self.brief, self.media)], "FAILED")
 
@@ -277,7 +346,8 @@ class M9IntegrationContracts(unittest.TestCase):
         store, tel = FakeGateway(), FakeTelegram(uncertain=True)
         with self.assertRaisesRegex(RuntimeError, "M9_TELEGRAM_AMBIGUOUS_RESPONSE"):
             run_preview(self.brief, self.media, self.root, self.root / "out",
-                        self.font, None, store, tel, send=True, chat_id="321")
+                        self.font, None, store, tel, send=True, chat_id="321",
+                        cta_file=self.root / "cta.png")
         self.assertEqual(store.state[job_key(self.brief, self.media)], "SEND_UNCERTAIN")
         self.assertEqual(len(tel.calls), 1)
 
@@ -311,19 +381,19 @@ class M9IntegrationContracts(unittest.TestCase):
 
 
 class M9RemoteSignContract(unittest.TestCase):
-    def test_upload_guard_allows_cover_plus_five_body_pages_only(self):
+    def test_upload_guard_allows_six_news_pages_plus_cta(self):
         class UploadHttp:
             def request(self, method, url, headers, body=None):
                 assert method == "POST"
-                assert url.endswith("/slide_06.png")
+                assert url.endswith("/slide_07.png")
                 assert headers["content-type"] == "image/png"
                 return b""
 
         sup = SupabaseGateway("https://abc.supabase.co", "mock-role-key", UploadHttp())
-        sup.upload_png("previews/72bf1111-ae15-45ca-a812-3c1e2ee37a10/slide_06.png",
+        sup.upload_png("previews/72bf1111-ae15-45ca-a812-3c1e2ee37a10/slide_07.png",
                        b"\x89PNG\r\n\x1a\nvalid")
         with self.assertRaisesRegex(ValueError, "M9_INVALID_STORAGE_PATH"):
-            sup.upload_png("previews/72bf1111-ae15-45ca-a812-3c1e2ee37a10/slide_07.png",
+            sup.upload_png("previews/72bf1111-ae15-45ca-a812-3c1e2ee37a10/slide_08.png",
                            b"\x89PNG\r\n\x1a\nvalid")
 
     def test_signer_handles_relative_private_storage_signed_url(self):
@@ -336,6 +406,25 @@ class M9RemoteSignContract(unittest.TestCase):
         sup = SupabaseGateway("https://abc.supabase.co", "mock-role-key", FakeHttp())
         self.assertEqual(sup.signed_url("assets/cta.png"),
             "https://abc.supabase.co/storage/v1/object/sign/manutd-card-assets/assets/cta.png?token=123")
+
+    def test_telegram_receives_ordered_png_documents_as_exact_multipart_bytes(self):
+        class TelegramHttp:
+            def request(self, method, url, headers, body=None):
+                self.request_row = (method, url, headers, body)
+                return b'{"ok":true,"result":[{"message_id":11},{"message_id":12}]}'
+        transport=TelegramHttp()
+        telegram=TelegramGateway("mock-token",transport)
+        payloads=[("slide_01.png",b"\x89PNG\r\n\x1a\ncover"),("slide_02.png",b"\x89PNG\r\n\x1a\ncta")]
+        self.assertEqual(telegram.send_png_documents("321",payloads),[11,12])
+        method,url,headers,body=transport.request_row
+        self.assertEqual(method,"POST")
+        self.assertTrue(url.endswith("/sendMediaGroup"))
+        self.assertIn("multipart/form-data; boundary=",headers["content-type"])
+        self.assertIn(b'"type":"document"',body)
+        self.assertIn(b'"media":"attach://document1"',body)
+        self.assertIn(b'filename="slide_01.png"',body)
+        self.assertIn(payloads[0][1],body)
+        self.assertIn(payloads[1][1],body)
 
     def test_http_409_duplicate_claim_is_converted_to_no_retry(self):
         class ConflictHttp:

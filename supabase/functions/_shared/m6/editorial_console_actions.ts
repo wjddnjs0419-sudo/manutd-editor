@@ -64,7 +64,7 @@ export interface ConsoleActionDependencies {
   skipStory: (story: CanonicalStory) => Promise<void>;
   generateCarousel: (story: CanonicalStory) => Promise<ManutdEditorCarouselDraft>;
   explorationEnabled?: boolean;
-  previewDraft?: (briefId: string) => Promise<{ workflow_url: string }>;
+  previewDraft?: (briefId: string, freshlyGenerated?: boolean) => Promise<{ workflow_url: string }>;
   selectDraft: (briefId: string) => Promise<void>;
 }
 
@@ -234,7 +234,26 @@ export async function dispatchEditorialConsoleAction(action: ConsoleAction, stat
     }
     try {
       const draft = await dependencies.generateCarousel(story);
-      return { view: renderCarouselDraft(draft, story.title), next_state: { ...state, view: "DRAFT", story_id: story.id, story_fingerprint: story.story_fingerprint, brief_id: draft.creative_brief_id, state_version: state.state_version + 1 }, event: { action: "CREATIVE_GENERATION_COMPLETED", status: "COMPLETED", metadata: { story_id: story.id, candidate_id: story.candidate_id, brief_id: draft.creative_brief_id } } };
+      let view = renderCarouselDraft(draft, story.title);
+      let previewWorkflow: string | null = null;
+      let previewDispatchFailed = false;
+      if ((draft.brief_status === "DRAFT" || draft.brief_status === "SELECTED") &&
+          draft.creative_brief_id && dependencies.previewDraft) {
+        try {
+          previewWorkflow = (await dependencies.previewDraft(draft.creative_brief_id, true)).workflow_url;
+          view = {
+            ...view,
+            text: `${view.text}\n\n📨 DRAFT 원고 생성이 끝나 사진 처리·렌더링·비공개 저장 작업을 접수했습니다. 완료되면 이 Telegram으로 카드뉴스 전체와 캡션을 보내드립니다.\n${previewWorkflow}`,
+          };
+        } catch {
+          previewDispatchFailed = true;
+          view = {
+            ...view,
+            text: `${view.text}\n\n⚠️ DRAFT 원고는 저장됐지만 사진·렌더링 작업을 접수하지 못했습니다. 연결 설정을 확인한 뒤 비공개 미리보기를 눌러 다시 요청할 수 있습니다.`,
+          };
+        }
+      }
+      return { view, next_state: { ...state, view: "DRAFT", story_id: story.id, story_fingerprint: story.story_fingerprint, brief_id: draft.creative_brief_id, state_version: state.state_version + 1 }, event: { action: "CREATIVE_GENERATION_COMPLETED", status: "COMPLETED", metadata: { story_id: story.id, candidate_id: story.candidate_id, brief_id: draft.creative_brief_id, preview_workflow_dispatched: previewWorkflow !== null, preview_dispatch_failed: previewDispatchFailed } } };
     } catch (generationError) {
       const message = generationError instanceof Error ? generationError.message : "";
       if (message.startsWith("CREATIVE_GENERATION_BLOCKED:")) {
@@ -263,7 +282,7 @@ export async function dispatchEditorialConsoleAction(action: ConsoleAction, stat
     if (!dependencies.previewDraft) return safeError("DRAFT 미리보기 연결이 설정되지 않았습니다.", state, "DRAFT_PREVIEW_NOT_CONFIGURED");
     try {
       const result = await dependencies.previewDraft(briefId);
-      return { view: { text: `🖼️ 비공개 DRAFT 미리보기 요청을 보냈습니다. 완료되면 Actions에서 확인할 수 있습니다.\n${result.workflow_url}`, inline_keyboard: [[{ text: "◀ 소재로 돌아가기", callback_data: "draft:back:list" }]] }, next_state: { ...state, state_version: state.state_version + 1 }, event: { action: "DRAFT_PREVIEW_DISPATCHED", status: "COMPLETED", metadata: { brief_id: briefId } } };
+      return { view: { text: `🖼️ 비공개 DRAFT 작업을 접수했습니다. 사진 처리·렌더링·비공개 저장이 끝나면 이 Telegram으로 이미지 전체와 캡션을 보내드립니다.\n${result.workflow_url}`, inline_keyboard: [[{ text: "◀ 소재로 돌아가기", callback_data: "draft:back:list" }]] }, next_state: { ...state, state_version: state.state_version + 1 }, event: { action: "DRAFT_PREVIEW_DISPATCHED", status: "COMPLETED", metadata: { brief_id: briefId } } };
     } catch (previewError) {
       const reason = previewError instanceof Error ? previewError.message : "";
       const message = reason === "M9_PREVIEW_DISPATCH_NOT_CONFIGURED"

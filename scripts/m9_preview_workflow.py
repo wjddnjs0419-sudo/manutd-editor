@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """M9 private-review delivery worker.
 
-1. Load an existing creative_briefs row (no AI rewrite).
+1. Load an existing creative_briefs row (generation remains in M6/Creative Generation).
 2. Render supplied, editorially selected real photo files via Pillow.
-3. Claim a unique M9 job, upload only rendered PNGs into private Storage.
-4. Sign both PNGs plus the once-uploaded CTA; optionally send Telegram album.
+3. Claim a unique M9 job, upload every rendered PNG including CTA to private Storage,
+   then verify each download SHA-256 and anonymous read denial.
+4. On an explicit owner-only DRAFT review, send the original PNG bytes as an ordered
+   Telegram document album and the copyable caption separately.
 
 This is a Python-capable WORKER, not a Supabase/Deno Edge Function.
 A Telegram send in flight is never retried: SENDING -> SEND_UNCERTAIN on failure.
@@ -23,6 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +35,7 @@ from m9_content_policy import validate_exploration_slide_count
 BUCKET = "manutd-card-assets"
 CTA_PATH = "assets/cta.png"
 MAX_BYTES = 12 * 1024 * 1024
+MAX_HTTP_RESPONSE_BYTES = 16 * 1024 * 1024
 UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
@@ -279,8 +283,9 @@ class Http:
                 body: bytes | None = None) -> bytes:
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=25) as resp:
-                return resp.read(1024 * 1024)
+            timeout = 120 if url.endswith("/sendMediaGroup") and headers.get("content-type", "").startswith("multipart/form-data") else 25
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read(MAX_HTTP_RESPONSE_BYTES)
         except urllib.error.HTTPError as exc:
             raise RemoteError(exc.code, f"M9_HTTP_{exc.code}") from None
         except (TimeoutError, OSError, urllib.error.URLError):
@@ -317,7 +322,7 @@ class SupabaseGateway:
     def load_brief(self, identifier: str, allow_draft_preview: bool = False) -> dict[str, Any]:
         if not UUID.fullmatch(identifier):
             raise ValueError("M9_BRIEF_ID_INVALID")
-        fields = "id,candidate_id,version,status,generation_metadata,slides_json,hooks_json,caption_draft,cta,generated_at,created_at,evidence_snapshot"
+        fields = "id,candidate_id,version,status,content_mode,generation_metadata,slides_json,hooks_json,caption_draft,cta,generated_at,created_at,evidence_snapshot,provider_calls,input_tokens,output_tokens,estimated_cost_usd,model_name"
         result = self.request("GET", "/rest/v1/creative_briefs?select=" + fields + "&id=eq." + identifier + "&limit=1")
         if not isinstance(result, list) or len(result) != 1:
             raise ValueError("M9_BRIEF_NOT_FOUND")
@@ -356,14 +361,44 @@ class SupabaseGateway:
         if result is not True:
             raise RuntimeError("M9_STATE_TRANSITION_CONFLICT")
 
+    def ensure_private_bucket(self) -> None:
+        result = self.request("GET", "/storage/v1/bucket/" + BUCKET)
+        if not isinstance(result, dict) or result.get("public") is not False:
+            raise ValueError("M9_STORAGE_BUCKET_NOT_PRIVATE")
+
     def upload_png(self, object_path: str, data: bytes) -> None:
-        # Existing M9 capacity is one cover plus up to five body pages.
-        if not re.fullmatch(r"previews/[a-f0-9-]+/slide_0[1-6]\.png", object_path):
+        # Existing M9 content allows up to six news pages plus the fixed CTA.
+        if not re.fullmatch(r"previews/[a-f0-9-]+/slide_0[1-7]\.png", object_path):
             raise ValueError("M9_INVALID_STORAGE_PATH")
         if not data.startswith(b"\x89PNG\r\n\x1a\n") or len(data) > MAX_BYTES:
             raise ValueError("M9_INVALID_PNG")
         self.request("POST", "/storage/v1/object/" + BUCKET + "/" + object_path,
                      data, content_type="image/png", headers={"x-upsert": "false"})
+
+    def verify_uploaded_png(self, object_path: str, expected: bytes) -> str:
+        downloaded = self.download_private_png(object_path)
+        expected_sha = hashlib.sha256(expected).hexdigest()
+        if not isinstance(downloaded, bytes) or hashlib.sha256(downloaded).hexdigest() != expected_sha:
+            raise ValueError("M9_STORAGE_SHA256_MISMATCH")
+        public_url = self.base + "/storage/v1/object/public/" + BUCKET + "/" + object_path
+        try:
+            public_body = self.http.request("GET", public_url, {"accept": "image/png"})
+        except RemoteError as exc:
+            if exc.status in (400, 401, 403, 404):
+                return expected_sha
+            raise ValueError("M9_STORAGE_PUBLIC_ACCESS_CHECK_FAILED") from None
+        if public_body:
+            raise ValueError("M9_STORAGE_PUBLIC_READ_ALLOWED")
+        raise ValueError("M9_STORAGE_PUBLIC_ACCESS_CHECK_FAILED")
+
+    def download_private_png(self, object_path: str) -> bytes:
+        if not re.fullmatch(r"(?:previews/[a-f0-9-]+/slide_0[1-7]\.png|assets/cta\.png)", object_path):
+            raise ValueError("M9_INVALID_STORAGE_PATH")
+        data = self.request("GET", "/storage/v1/object/" + BUCKET + "/" + object_path,
+                            content_type="image/png")
+        if not isinstance(data, bytes) or not data.startswith(b"\x89PNG\r\n\x1a\n") or len(data) > MAX_BYTES:
+            raise ValueError("M9_INVALID_PNG")
+        return data
 
     def signed_url(self, object_path: str) -> str:
         result = self.request("POST", "/storage/v1/object/sign/" + BUCKET + "/" + object_path,
@@ -414,54 +449,219 @@ class TelegramGateway:
             raise RuntimeError("M9_TELEGRAM_AMBIGUOUS_RESPONSE")
         return ids
 
+    def send_text(self, chat_id: str, text: str) -> list[int]:
+        if not re.fullmatch(r"-?\d+", str(chat_id)):
+            raise ValueError("M9_CHAT_ID_INVALID")
+        chunks = telegram_text_chunks(text)
+        ids: list[int] = []
+        endpoint = "https://api.telegram.org/bot" + self.token + "/sendMessage"
+        for chunk in chunks:
+            body = self.http.request("POST", endpoint, {"content-type": "application/json"},
+                                     json_bytes({"chat_id": chat_id, "text": chunk}))
+            try:
+                decoded = json.loads(body)
+            except (ValueError, TypeError):
+                raise RuntimeError("M9_TELEGRAM_AMBIGUOUS_RESPONSE") from None
+            result = decoded.get("result") if isinstance(decoded, dict) else None
+            message_id = result.get("message_id") if isinstance(result, dict) else None
+            if not isinstance(decoded, dict) or decoded.get("ok") is not True or type(message_id) is not int:
+                raise RuntimeError("M9_TELEGRAM_REJECTED")
+            ids.append(message_id)
+        return ids
+
+    def send_png_documents(self, chat_id: str, documents: list[tuple[str, bytes]]) -> list[int]:
+        """Upload PNGs as an ordered document album so Telegram preserves original bytes."""
+        if not re.fullmatch(r"-?\d+", str(chat_id)):
+            raise ValueError("M9_CHAT_ID_INVALID")
+        if not 2 <= len(documents) <= 10 or sum(len(data) for _, data in documents) > 50 * 1024 * 1024:
+            raise ValueError("M9_DOCUMENT_ALBUM_INVALID")
+        media = []
+        for index, (name, data) in enumerate(documents, start=1):
+            if not re.fullmatch(r"slide_0[1-7]\.png", name) or not data.startswith(b"\x89PNG\r\n\x1a\n") or len(data) > MAX_BYTES:
+                raise ValueError("M9_DOCUMENT_ALBUM_INVALID")
+            media.append({"type": "document", "media": f"attach://document{index}"})
+        boundary = "----M9Upload" + uuid.uuid4().hex
+        chunks = [
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat_id}\r\n".encode(),
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"media\"\r\n\r\n".encode(),
+            json_bytes(media) + b"\r\n",
+        ]
+        for index, (name, data) in enumerate(documents, start=1):
+            chunks.extend([
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"document{index}\"; filename=\"{name}\"\r\nContent-Type: image/png\r\n\r\n".encode(),
+                data,
+                b"\r\n",
+            ])
+        chunks.append(f"--{boundary}--\r\n".encode())
+        endpoint = "https://api.telegram.org/bot" + self.token + "/sendMediaGroup"
+        body = self.http.request("POST", endpoint,
+                                 {"content-type": "multipart/form-data; boundary=" + boundary},
+                                 b"".join(chunks))
+        try:
+            decoded = json.loads(body)
+        except (ValueError, TypeError):
+            raise RuntimeError("M9_TELEGRAM_AMBIGUOUS_RESPONSE") from None
+        result = decoded.get("result") if isinstance(decoded, dict) else None
+        ids = [row.get("message_id") for row in result] if isinstance(result, list) else []
+        if not isinstance(decoded, dict) or decoded.get("ok") is not True or len(ids) != len(documents) or any(type(value) is not int for value in ids):
+            raise RuntimeError("M9_TELEGRAM_AMBIGUOUS_RESPONSE")
+        return ids
+
+
+def telegram_text_chunks(text: str, limit: int = 4096) -> list[str]:
+    if not isinstance(text, str) or not text.strip() or limit < 1:
+        raise ValueError("M9_TELEGRAM_TEXT_INVALID")
+    remaining = text.strip()
+    chunks: list[str] = []
+    while len(remaining.encode("utf-16-le")) // 2 > limit:
+        split_at = 0
+        units = 0
+        for index, char in enumerate(remaining):
+            char_units = 2 if ord(char) > 0xFFFF else 1
+            if units + char_units > limit:
+                break
+            units += char_units
+            split_at = index + 1
+        newline = remaining.rfind("\n", max(0, split_at // 2), split_at)
+        space = remaining.rfind(" ", max(0, split_at // 2), split_at)
+        boundary = max(newline, space)
+        if boundary >= 0:
+            split_at = boundary + 1
+        chunk = remaining[:split_at]
+        if not chunk:
+            raise ValueError("M9_TELEGRAM_TEXT_INVALID")
+        chunks.append(chunk)
+        remaining = remaining[split_at:]
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+def preview_caption(brief: dict[str, Any]) -> str:
+    caption = brief.get("caption_draft")
+    if not isinstance(caption, str) or not caption.strip():
+        raise ValueError("M9_CAPTION_REQUIRED")
+    cta = brief.get("cta")
+    if isinstance(cta, str) and cta.strip() and cta.strip() not in caption:
+        caption = caption.rstrip() + "\n\n" + cta.strip()
+    return "📋 Instagram 캡션 (복사)\n\n" + caption.strip()
+
+
+def storage_manifest(brief: dict[str, Any], media: dict[str, Any], rendered: dict[str, Any],
+                     paths: list[str], hashes: list[str], job_id: str,
+                     *, status: str) -> dict[str, Any]:
+    snapshot = brief.get("evidence_snapshot") if isinstance(brief.get("evidence_snapshot"), dict) else {}
+    story = snapshot.get("story") if isinstance(snapshot.get("story"), dict) else {}
+    articles = snapshot.get("exploration_articles") if isinstance(snapshot.get("exploration_articles"), list) else []
+    sources = snapshot.get("sources") if isinstance(snapshot.get("sources"), list) else []
+    article = next((row for row in articles if isinstance(row, dict) and row.get("canonical_url")), {})
+    source = next((row for row in sources if isinstance(row, dict) and row.get("canonical_url")), {})
+    pages = media.get("pages") if isinstance(media.get("pages"), list) else [media.get("cover"), media.get("body")]
+    credits = [row.get("credit") for row in pages if isinstance(row, dict) and isinstance(row.get("credit"), str)]
+    review_flags = {flag for row in pages if isinstance(row, dict)
+                           for flag in (row.get("review_flags") if isinstance(row.get("review_flags"), list) else [])
+                           if isinstance(flag, str)}
+    if any(isinstance(row, dict) and row.get("rights_status") != "VERIFIED" for row in pages):
+        review_flags.add("PHOTO_RIGHTS_UNVERIFIED")
+    summary = rendered.get("photo_summary") if isinstance(rendered.get("photo_summary"), dict) else {}
+    if summary.get("reused_page_count", 0) > 0:
+        review_flags.add("PHOTO_REUSE_REVIEW")
+    if summary.get("photo_shortage"):
+        review_flags.add("PHOTO_SHORTAGE")
+    entries = rendered.get("slides") if isinstance(rendered.get("slides"), list) else []
+    slide_rows = []
+    for order, (path, digest) in enumerate(zip(paths, hashes), start=1):
+        render_row = entries[order - 1] if order <= len(entries) and isinstance(entries[order - 1], dict) else {}
+        slide_rows.append({"slide_order": order, "image_path": path, "sha256": digest,
+                           "kind": render_row.get("kind", "NEWS")})
+    return {
+        "job_id": job_id,
+        "brief_id": brief.get("id"),
+        "story_cluster_id": story.get("id"),
+        "content_mode": brief.get("content_mode"),
+        "status": status,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "slide_count": len(paths),
+        "slides": slide_rows,
+        "image_paths": paths,
+        "caption": preview_caption(brief),
+        "source_url": article.get("canonical_url") or source.get("canonical_url") or media.get("cover", {}).get("article_url"),
+        "source_publisher": article.get("publisher_name") or source.get("canonical_name"),
+        "photo_credits": credits,
+        "render_manifest": rendered,
+        "review_flags": sorted(review_flags),
+        "provider_usage": {key: brief.get(key) for key in
+                            ("provider_calls", "input_tokens", "output_tokens", "estimated_cost_usd", "model_name")},
+    }
+
 
 def run_preview(brief: dict[str, Any], media: dict[str, Any], media_root: Path,
                 output: Path, font_file: Path, logo: Path | None,
                 gateway: SupabaseGateway | None, telegram: TelegramGateway | None,
                 *, send: bool, chat_id: str | None = None, cta_file: Path | None = None,
-                body_font_file: Path | None = None, allow_draft_preview: bool = False) -> dict[str, Any]:
+                body_font_file: Path | None = None, allow_draft_preview: bool = False,
+                allow_draft_telegram_send: bool = False) -> dict[str, Any]:
     validate_preview_status(brief, allow_draft_preview)
-    if brief.get("status") in ("DRAFT", "SELECTED") and send:
-        raise ValueError("M9_DRAFT_TELEGRAM_SEND_NOT_SUPPORTED")
+    if brief.get("status") in ("DRAFT", "SELECTED") and send and not allow_draft_telegram_send:
+        raise ValueError("M9_DRAFT_TELEGRAM_SEND_REQUIRES_OWNER_OPT_IN")
     checked_media(media, media_root)
     key = job_key(brief, media)
     payload = prepared_render_job(brief, media)
     workdir = media_root.resolve()
     output.mkdir(parents=True, exist_ok=True)
     if gateway:
+        gateway.ensure_private_bucket()
         gateway.claim(key, brief["id"], media)
     stage = "CLAIMED"
     try:
         manifest = render(payload, workdir, output, font_file, logo, cta_path=cta_file, body_font_path=body_font_file)
+        all_files = [output / entry["file"] for entry in manifest["slides"]]
         files = [output / entry["file"] for entry in manifest["slides"] if entry["kind"] != "CTA"]
         expected_news_slides = 1 + len(payload.get("body_slides", [])) if payload.get("body_slides") else 2
-        if len(files) != expected_news_slides:
+        if len(files) != expected_news_slides or len(all_files) != expected_news_slides + 1 or manifest["slides"][-1].get("kind") != "CTA":
             raise ValueError("M9_NEWS_SLIDE_COUNT_MISMATCH")
         state = {"job_key": key, "status": "RENDERED", "rendered": [str(x.name) for x in files],
                  "cta_reference": CTA_PATH, "review_only": True}
         if gateway:
+            claimed = gateway.get_preview(key) or {}
+            job_id = claimed.get("id")
+            if not isinstance(job_id, str) or not UUID.fullmatch(job_id):
+                raise ValueError("M9_JOB_ID_MISSING")
             gateway.transition(key, stage, "RENDERED", {"rendered_manifest": manifest})
             stage = "RENDERED"
             unique_dir = str(uuid.uuid5(uuid.NAMESPACE_URL, key))
-            paths = [f"previews/{unique_dir}/slide_0{i}.png" for i in range(1, len(files) + 1)]
-            for path, file in zip(paths, files):
-                gateway.upload_png(path, file.read_bytes())
-            gateway.transition(key, stage, "UPLOADED")
+            paths = [f"previews/{unique_dir}/slide_0{i}.png" for i in range(1, len(all_files) + 1)]
+            hashes: list[str] = []
+            for path, file in zip(paths, all_files):
+                data = file.read_bytes()
+                gateway.upload_png(path, data)
+                hashes.append(gateway.verify_uploaded_png(path, data))
+            full_manifest = storage_manifest(brief, media, manifest, paths, hashes, job_id, status="UPLOADED")
+            gateway.transition(key, stage, "UPLOADED", {"rendered_manifest": full_manifest})
             stage = "UPLOADED"
             state["paths"] = paths
             state["status"] = "UPLOADED"
             if send:
                 if telegram is None or not chat_id:
                     raise ValueError("M9_TELEGRAM_CONFIG_REQUIRED")
-                # Sign all THREE objects BEFORE claiming any Telegram dispatch.
-                signed = [gateway.signed_url(x) for x in [*paths, CTA_PATH]]
-                caption = "맨유 에디터 | 카드뉴스 검토용 미리보기\n" + (
-                    str(brief.get("caption_draft") or "").strip()[:850]
-                ) + "\n\n⚠️ 사진 사용권·디자인 검토 후 게시"
+                caption = preview_caption(brief)
+                try:
+                    telegram.send_text(chat_id, "🔒 비공개 Storage 업로드와 PNG SHA-256 검증을 마쳤습니다. 이제 전체 카드뉴스와 캡션을 전달합니다.")
+                except Exception:
+                    pass  # Status is best-effort; the idempotent deck send remains the authoritative operation.
                 gateway.transition(key, stage, "SENDING")
                 stage = "SENDING"
-                message_ids = telegram.send_album(chat_id, signed, caption)
-                gateway.transition(key, stage, "SENT", {"telegram_message_ids": message_ids})
+                image_ids = telegram.send_png_documents(
+                    chat_id, [(f"slide_{index:02d}.png", file.read_bytes())
+                              for index, file in enumerate(all_files, start=1)]
+                )
+                caption_ids = telegram.send_text(chat_id, caption)
+                message_ids = image_ids + caption_ids
+                sent_manifest = {**full_manifest, "status": "SENT"}
+                gateway.transition(key, stage, "SENT", {
+                    "telegram_message_ids": message_ids,
+                    "rendered_manifest": sent_manifest,
+                })
                 stage = "SENT"
                 state.update({"status": "SENT", "telegram_message_ids": message_ids})
         else:
@@ -487,7 +687,7 @@ def main() -> None:
     cli.add_argument("--out", required=True)
     cli.add_argument("--font", required=True)
     cli.add_argument("--body-font")
-    cli.add_argument("--allow-draft-preview", action="store_true", help="Explicitly allow an Exploration DRAFT/SELECTED brief for private upload-only review")
+    cli.add_argument("--allow-draft-preview", action="store_true", help="Explicitly allow an Exploration DRAFT/SELECTED brief for private owner review")
     cli.add_argument("--logo")
     cli.add_argument("--cta", help="Optional existing CTA PNG for local 3-slide review; never uploaded again")
     cli.add_argument("--upload", action="store_true", help="Upload private PNGs to Supabase")
@@ -516,7 +716,10 @@ def main() -> None:
                          send=args.send_telegram, chat_id=args.chat_id,
                          cta_file=Path(args.cta).resolve() if args.cta else None,
                          body_font_file=Path(args.body_font).resolve() if args.body_font else None,
-                         allow_draft_preview=args.allow_draft_preview)
+                         allow_draft_preview=args.allow_draft_preview,
+                         allow_draft_telegram_send=(args.send_telegram and
+                             os.getenv("M9_ENABLE_TELEGRAM_PREVIEW") == "YES" and
+                             args.chat_id == os.getenv("TELEGRAM_OWNER_USER_ID")))
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

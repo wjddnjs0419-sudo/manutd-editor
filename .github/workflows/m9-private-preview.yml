@@ -14,15 +14,16 @@ on:
         default: "i.guim.co.uk"
         type: string
       mode:
-        description: "First upload preview PNGs, then separately send the already-uploaded album"
+        description: "Upload only, send an existing READY preview, or run one owner-requested DRAFT review end to end"
         required: true
         type: choice
         options:
           - upload_preview
           - send_uploaded
+          - owner_review
         default: upload_preview
       brief_status:
-        description: "READY uses the existing manual preview path. Choose DRAFT only for an Exploration DRAFT/SELECTED private upload review."
+        description: "READY uses the existing manual path. DRAFT requires the isolated m9-e2e-test environment."
         required: true
         type: choice
         options:
@@ -42,12 +43,14 @@ jobs:
     name: "Publisher photos → Pillow PNGs → private Storage → optional Telegram"
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    environment:
+      name: ${{ inputs.brief_status == 'DRAFT' && 'm9-e2e-test' || 'm9-preview' }}
     env:
-      SUPABASE_URL: ${{ secrets.M9_SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.M9_SUPABASE_SERVICE_ROLE_KEY }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.M9_TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_OWNER_USER_ID: ${{ secrets.M9_TELEGRAM_OWNER_USER_ID }}
-      M9_ENABLE_TELEGRAM_PREVIEW: ${{ inputs.mode == 'send_uploaded' && 'YES' || 'NO' }}
+      SUPABASE_URL: ${{ inputs.brief_status == 'DRAFT' && secrets.M9_TEST_SUPABASE_URL || (inputs.brief_status != 'DRAFT' && secrets.M9_SUPABASE_URL) }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ inputs.brief_status == 'DRAFT' && secrets.M9_TEST_SUPABASE_SERVICE_ROLE_KEY || (inputs.brief_status != 'DRAFT' && secrets.M9_SUPABASE_SERVICE_ROLE_KEY) }}
+      TELEGRAM_BOT_TOKEN: ${{ inputs.brief_status == 'DRAFT' && secrets.M9_TEST_TELEGRAM_BOT_TOKEN || (inputs.brief_status != 'DRAFT' && secrets.M9_TELEGRAM_BOT_TOKEN) }}
+      TELEGRAM_OWNER_USER_ID: ${{ inputs.brief_status == 'DRAFT' && secrets.M9_TEST_TELEGRAM_OWNER_USER_ID || (inputs.brief_status != 'DRAFT' && secrets.M9_TELEGRAM_OWNER_USER_ID) }}
+      M9_ENABLE_TELEGRAM_PREVIEW: ${{ (inputs.mode == 'send_uploaded' || inputs.mode == 'owner_review') && 'YES' || 'NO' }}
       M9_ALLOW_DRAFT_PREVIEW: ${{ inputs.brief_status == 'DRAFT' && 'YES' || 'NO' }}
       M9_APPROVED_IMAGE_HOSTS: ${{ inputs.approved_image_hosts }}
       M9_BRIEF_ID: ${{ inputs.brief_id }}
@@ -57,6 +60,7 @@ jobs:
         with:
           python-version: "3.11"
       - uses: denoland/setup-deno@v2
+        if: inputs.mode != 'send_uploaded'
         with:
           deno-version: "v2.x"
       - name: "Verify required environment configuration"
@@ -66,20 +70,31 @@ jobs:
           [[ -n "$SUPABASE_URL" ]] || { echo "M9_SUPABASE_URL secret missing"; exit 1; }
           [[ -n "$SUPABASE_SERVICE_ROLE_KEY" ]] || { echo "M9_SUPABASE_SERVICE_ROLE_KEY secret missing"; exit 1; }
           [[ "$M9_BRIEF_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "Invalid creative brief UUID"; exit 1; }
-          if [[ "$M9_ALLOW_DRAFT_PREVIEW" == "YES" && "${{ inputs.mode }}" != "upload_preview" ]]; then
-            echo "Exploration DRAFT previews support private upload-only mode"
+          if [[ "${{ inputs.mode }}" == "owner_review" && "$M9_ALLOW_DRAFT_PREVIEW" != "YES" ]]; then
+            echo "Owner review mode is only for an Exploration DRAFT"
             exit 1
           fi
-          if [[ "$M9_ENABLE_TELEGRAM_PREVIEW" == "YES" ]]; then
+          if [[ "$M9_ALLOW_DRAFT_PREVIEW" == "YES" && "${{ inputs.mode }}" == "send_uploaded" ]]; then
+            echo "DRAFT deliveries must use the explicit owner_review mode"
+            exit 1
+          fi
+          if [[ "$M9_ENABLE_TELEGRAM_PREVIEW" == "YES" || "$M9_ALLOW_DRAFT_PREVIEW" == "YES" ]]; then
             [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_OWNER_USER_ID" ]] || {
               echo "Telegram preview secrets missing"
               exit 1
             }
+            [[ "$TELEGRAM_OWNER_USER_ID" =~ ^[0-9]+$ ]] || { echo "Invalid Telegram owner ID"; exit 1; }
           fi
-      - name: "Install Pillow"
-        run: python -m pip install --disable-pip-version-check 'Pillow==11.3.0'
+      - name: "Install pinned M9 Pillow and MediaPipe CPU dependencies"
+        if: inputs.mode != 'send_uploaded'
+        run: python -m pip install --disable-pip-version-check -r scripts/requirements-m9-crop.txt
+      - name: "Install MediaPipe Linux runtime libraries"
+        if: inputs.mode != 'send_uploaded'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes libegl1 libgles2
       - name: "Load Pretendard Bold (v1.3.9) for this run only"
-        if: inputs.mode == 'upload_preview'
+        if: inputs.mode != 'send_uploaded'
         shell: bash
         run: |
           set -euo pipefail
@@ -89,7 +104,7 @@ jobs:
             --output "$RUNNER_TEMP/m9/Pretendard-Bold.otf"
           echo "2e91915fab54df71cc9598ebf608b2bdb54c6fe3c066ac61dff0bc44fca71cc7  $RUNNER_TEMP/m9/Pretendard-Bold.otf" | sha256sum --check --status
       - name: "Load Pretendard SemiBold (v1.3.9) for body copy"
-        if: inputs.mode == 'upload_preview'
+        if: inputs.mode != 'send_uploaded'
         shell: bash
         run: |
           set -euo pipefail
@@ -99,12 +114,12 @@ jobs:
             --output "$RUNNER_TEMP/m9/Pretendard-SemiBold.otf"
           echo "c89bc43027dc7cde5726e96223376f8eec09302b2fc1f8147fd5b57cfc376118  $RUNNER_TEMP/m9/Pretendard-SemiBold.otf" | sha256sum --check --status
       - name: "Fetch EXACT approved fixed CTA from private Supabase Storage"
-        if: inputs.mode == 'upload_preview'
+        if: inputs.mode != 'send_uploaded'
         shell: bash
         run: |
           python scripts/m9_fetch_fixed_cta.py --out "$RUNNER_TEMP/m9/cta.png"
       - name: "Create private review deck"
-        if: inputs.mode == 'upload_preview'
+        if: inputs.mode != 'send_uploaded'
         shell: bash
         run: |
           set -euo pipefail
@@ -121,6 +136,9 @@ jobs:
           if [[ "$M9_ALLOW_DRAFT_PREVIEW" == "YES" ]]; then
             arguments+=(--allow-draft-preview)
           fi
+          if [[ "${{ inputs.mode }}" == "owner_review" ]]; then
+            arguments+=(--send-telegram --chat-id "$TELEGRAM_OWNER_USER_ID" --require-draft-owner-review)
+          fi
           python scripts/m9_run_pipeline.py "${arguments[@]}"
       - name: "Send previously uploaded preview to owner"
         if: inputs.mode == 'send_uploaded'
@@ -128,8 +146,16 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/m9_send_uploaded_preview.py --brief-id "$M9_BRIEF_ID" --chat-id "$TELEGRAM_OWNER_USER_ID"
+      - name: "Notify owner if requested DRAFT run fails"
+        if: ${{ failure() && inputs.mode == 'owner_review' }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          python scripts/m9_notify_owner.py \
+            --chat-id "$TELEGRAM_OWNER_USER_ID" \
+            --message "⚠️ 카드뉴스 작업이 실패했거나 Telegram 전달 결과 확인이 필요합니다. 중복 방지를 위해 다시 요청하지 말고 Actions 실행 기록을 확인해 주세요."
       - name: "Report safe status only"
-        if: success() && inputs.mode == 'upload_preview'
+        if: success() && inputs.mode != 'send_uploaded'
         shell: bash
         run: |
           python - <<'PY'

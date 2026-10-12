@@ -41,7 +41,7 @@ export async function dispatchPrivateExplorationPreview(
       },
       body: JSON.stringify({
         ref: options.workflowRef,
-        inputs: { brief_id: brief.id, brief_status: "DRAFT", mode: "upload_preview" },
+        inputs: { brief_id: brief.id, brief_status: "DRAFT", mode: "owner_review" },
       }),
     });
   } catch {

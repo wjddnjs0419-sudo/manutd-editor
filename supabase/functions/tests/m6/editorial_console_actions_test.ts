@@ -161,6 +161,45 @@ Deno.test("card generation action calls the injected canonical service exactly o
   assert(result.view.text.includes(story.title));
 });
 
+Deno.test("one Exploration DRAFT generation request dispatches the private M9 workflow", async () => {
+  let generated = 0;
+  const dispatched: Array<[string, boolean | undefined]> = [];
+  const result = await dispatchEditorialConsoleAction(
+    { type: "GENERATE_CAROUSEL", token: story.id },
+    state({ view: "DETAIL", story_id: story.id }),
+    dependencies({
+      generateCarousel: async () => { generated += 1; return { ...draft, brief_status: "DRAFT" }; },
+      previewDraft: async (briefId, freshlyGenerated) => {
+        dispatched.push([briefId, freshlyGenerated]);
+        return { workflow_url: "https://github.com/owner/repo/actions/workflows/m9-private-preview.yml" };
+      },
+    }),
+  );
+  assertEquals(generated, 1);
+  assertEquals(dispatched, [["brief-1", true]]);
+  assert(result.view.text.includes("사진 처리·렌더링·비공개 저장 작업을 접수했습니다"));
+  assert(result.view.text.includes("m9-private-preview.yml"));
+  assertEquals(result.next_state.brief_id, "brief-1");
+  assertEquals(result.event.metadata?.preview_workflow_dispatched, true);
+});
+
+Deno.test("failed M9 dispatch leaves the generated DRAFT available for manual preview", async () => {
+  const result = await dispatchEditorialConsoleAction(
+    { type: "GENERATE_CAROUSEL", token: story.id },
+    state({ view: "DETAIL", story_id: story.id }),
+    dependencies({
+      generateCarousel: async () => ({ ...draft, brief_status: "DRAFT" }),
+      previewDraft: async () => { throw new Error("dispatch unavailable"); },
+    }),
+  );
+  assert(result.view.text.includes("DRAFT 원고는 저장됐지만"));
+  assert(result.view.text.includes("📱 카드뉴스 초안"));
+  assert(result.view.inline_keyboard.flat().some((button) => button.callback_data.startsWith("draft:preview:")));
+  assertEquals(result.next_state.brief_id, "brief-1");
+  assertEquals(result.event.status, "COMPLETED");
+  assertEquals(result.event.metadata?.preview_dispatch_failed, true);
+});
+
 Deno.test("card generation without a selected story never invokes the canonical generator", async () => {
   let calls = 0;
   const result = await dispatchEditorialConsoleAction({ type: "GENERATE_CAROUSEL", token: null }, state(), dependencies({ generateCarousel: async () => { calls += 1; return draft; } }));
@@ -240,7 +279,7 @@ Deno.test("Exploration reports a clear reason when article text is missing", asy
   assertEquals(result.event.action, "CREATIVE_GENERATION_BLOCKED");
 });
 
-Deno.test("DRAFT preview button dispatches an upload-only workflow for the current brief", async () => {
+Deno.test("DRAFT preview dispatches private delivery for the current brief", async () => {
   let dispatched = "";
   const result = await dispatchEditorialConsoleAction(
     { type: "PREVIEW_DRAFT", token: "brief123" },
@@ -249,7 +288,7 @@ Deno.test("DRAFT preview button dispatches an upload-only workflow for the curre
   );
   assertEquals(dispatched, "brief-123");
   assertEquals(result.event.action, "DRAFT_PREVIEW_DISPATCHED");
-  assert(result.view.text.includes("Actions에서 확인"));
+  assert(result.view.text.includes("이 Telegram으로 이미지 전체와 캡션을 보내드립니다"));
 });
 
 Deno.test("back navigation returns from evidence and draft to the current story list safely", async () => {

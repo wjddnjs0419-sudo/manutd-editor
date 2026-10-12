@@ -7,7 +7,7 @@ const brief = {
   generation_metadata: { generation_intent: "EXPLORATION" },
 };
 
-Deno.test("DRAFT preview dispatch is explicit, private upload-only, and returns the workflow link", async () => {
+Deno.test("DRAFT preview dispatch requests the private owner-review workflow", async () => {
   let requestBody: Record<string, unknown> | null = null;
   let endpoint = "";
   const result = await dispatchPrivateExplorationPreview(brief, {
@@ -21,7 +21,7 @@ Deno.test("DRAFT preview dispatch is explicit, private upload-only, and returns 
     },
   });
   assertEquals(endpoint, "https://api.github.com/repos/wjddnjs0419-sudo/manutd-editor/actions/workflows/m9-private-preview.yml/dispatches");
-  assertEquals(requestBody, { ref: "codex/gnews-resolution-pipeline", inputs: { brief_id: brief.id, brief_status: "DRAFT", mode: "upload_preview" } });
+  assertEquals(requestBody, { ref: "codex/gnews-resolution-pipeline", inputs: { brief_id: brief.id, brief_status: "DRAFT", mode: "owner_review" } });
   assertEquals(result.workflow_url, "https://github.com/wjddnjs0419-sudo/manutd-editor/actions/workflows/m9-private-preview.yml");
 });
 

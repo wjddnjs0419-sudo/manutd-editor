@@ -26,7 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 from m9_source_request_from_brief import build_request
-from m9_preview_workflow import Http, SupabaseGateway, validate_preview_status
+from m9_preview_workflow import Http, SupabaseGateway, TelegramGateway, validate_preview_status
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,6 +36,31 @@ def command(cmd: list[str]) -> None:
                           stderr=subprocess.PIPE, check=False, timeout=240)
     if done.returncode:
         raise RuntimeError("M9_STAGE_FAILED: " + Path(cmd[1]).name if len(cmd)>1 else "M9_STAGE_FAILED")
+
+def content_slide_count(brief: dict) -> int:
+    raw = brief.get("slides_json")
+    slides = raw.get("slides") if isinstance(raw, dict) else raw
+    if not isinstance(slides, list) or not 2 <= len(slides) <= 6:
+        raise ValueError("M9_BRIEF_SLIDE_COUNT_INVALID")
+    return len(slides)
+
+def reviewed_selections_match(result: dict, expected_count: int) -> bool:
+    selections = result.get("selections")
+    if not isinstance(selections, list) or len(selections) != expected_count:
+        return False
+    for expected_number, selection in enumerate(selections, start=1):
+        if not isinstance(selection, dict) or not isinstance(selection.get("selected"), dict):
+            return False
+        if selection.get("slide_number") != expected_number:
+            return False
+        if selection.get("slot") != ("COVER_NEWS" if expected_number == 1 else "BODY_NEWS"):
+            return False
+    return True
+
+def require_exploration_owner_draft(brief: dict) -> None:
+    metadata = brief.get("generation_metadata") if isinstance(brief.get("generation_metadata"), dict) else {}
+    if brief.get("status") not in ("DRAFT", "SELECTED") or metadata.get("generation_intent") != "EXPLORATION":
+        raise ValueError("M9_DRAFT_EXPLORATION_REQUIRED")
 
 def launch(argv: list[str] | None = None) -> Path:
     p = argparse.ArgumentParser()
@@ -47,7 +72,8 @@ def launch(argv: list[str] | None = None) -> Path:
     p.add_argument("--workdir", required=True)
     p.add_argument("--font", required=True)
     p.add_argument("--body-font", help="Optional Pretendard SemiBold font for body copy; defaults to --font")
-    p.add_argument("--allow-draft-preview", action="store_true", help="Explicitly allow an Exploration DRAFT/SELECTED brief for private upload-only review")
+    p.add_argument("--allow-draft-preview", action="store_true", help="Explicitly allow an Exploration DRAFT/SELECTED brief for private owner review")
+    p.add_argument("--require-draft-owner-review", action="store_true", help="Require this run to be an explicit Exploration DRAFT owner delivery")
     p.add_argument("--logo")
     p.add_argument("--cta")
     p.add_argument("--deno", default="deno")
@@ -66,8 +92,21 @@ def launch(argv: list[str] | None = None) -> Path:
     else:
         brief_data = json.loads(Path(args.brief_json).read_text(encoding="utf-8"))
     validate_preview_status(brief_data, args.allow_draft_preview)
-    if brief_data.get("status") in ("DRAFT", "SELECTED") and args.send_telegram:
-        raise ValueError("M9_DRAFT_TELEGRAM_SEND_NOT_SUPPORTED")
+    if args.require_draft_owner_review:
+        require_exploration_owner_draft(brief_data)
+        if not args.allow_draft_preview or not args.send_telegram:
+            raise ValueError("M9_DRAFT_TELEGRAM_SEND_REQUIRES_OWNER_OPT_IN")
+    if args.send_telegram:
+        if os.getenv("M9_ENABLE_TELEGRAM_PREVIEW") != "YES":
+            raise ValueError("M9_TELEGRAM_PREVIEW_DISABLED")
+        if not os.getenv("TELEGRAM_OWNER_USER_ID") or args.chat_id != os.getenv("TELEGRAM_OWNER_USER_ID"):
+            raise ValueError("M9_TELEGRAM_OWNER_CHAT_REQUIRED")
+    if brief_data.get("status") in ("DRAFT", "SELECTED") and args.send_telegram and not args.allow_draft_preview:
+        raise ValueError("M9_DRAFT_TELEGRAM_SEND_REQUIRES_OWNER_OPT_IN")
+    telegram = None
+    if args.send_telegram:
+        telegram = TelegramGateway(os.getenv("TELEGRAM_BOT_TOKEN", ""), Http())
+        telegram.send_text(args.chat_id, "📨 비공개 카드뉴스 작업을 접수했습니다. 기사 원문에 연결된 사진 후보를 수집합니다.")
     if args.request:
         request_path = Path(args.request).resolve()
         request = json.loads(request_path.read_text(encoding="utf-8"))
@@ -85,15 +124,17 @@ def launch(argv: list[str] | None = None) -> Path:
              str(ROOT / "scripts/m9_collect_media.ts"),
              str(request_path), str(candidate_file)])
     result = json.loads(candidate_file.read_text(encoding="utf-8"))
-    if result.get("status") != "CANDIDATES_FOR_REVIEW" or any(
-        not isinstance(s.get("selected"), dict) for s in result.get("selections",[])
-    ) or len(result.get("selections",[])) != 2:
+    if result.get("status") != "CANDIDATES_FOR_REVIEW" or not reviewed_selections_match(
+        result, content_slide_count(brief_data)
+    ):
         raise ValueError("M9_PHOTOS_REQUIRE_REVIEW_BEFORE_RENDER")
     media_dir = root / "photo_sources"
     command([sys.executable, str(ROOT / "scripts/m9_acquire_photos.py"),
              "--candidates", str(candidate_file),
              "--output", str(media_dir),
              "--allowed-hosts", ",".join(hosts)])
+    if telegram:
+        telegram.send_text(args.chat_id, "🖼️ 사진 검토와 MediaPipe CPU 인물 분석을 마쳤습니다. 전체 페이지와 CTA를 렌더링하고 비공개 Storage를 검증합니다.")
     next_command = [
         sys.executable, str(ROOT / "scripts/m9_preview_workflow.py"),
         "--media", str(media_dir / "media.json"),

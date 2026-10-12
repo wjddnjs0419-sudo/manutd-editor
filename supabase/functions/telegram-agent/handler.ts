@@ -1,3 +1,5 @@
+import { parseConsoleCallback, parseConsoleIntent } from "../_shared/m6/editorial_console_actions.ts";
+
 export interface TelegramAgentHandlerDependencies {
   invokeSecret: string;
   webhookSecret?: string;
@@ -10,14 +12,14 @@ interface TelegramUpdate {
   update_id: number;
   message?: {
     from?: { id: number | string };
-    chat: { id: number | string };
+    chat: { id: number | string; type?: string };
     reply_to_message?: { message_id?: number; chat?: { id: number | string }; [key: string]: unknown };
     [key: string]: unknown;
   };
   callback_query?: {
     id: string;
     from: { id: number | string };
-    message?: { message_id?: number; chat: { id: number | string }; [key: string]: unknown };
+    message?: { message_id?: number; chat: { id: number | string; type?: string }; [key: string]: unknown };
     data?: string;
     [key: string]: unknown;
   };
@@ -88,6 +90,22 @@ function fromId(update: TelegramUpdate): string {
   return String(update.message?.from?.id ?? update.callback_query?.from.id ?? "");
 }
 
+function chat(update: TelegramUpdate): { id: string; type: string } | null {
+  const value = update.message?.chat ?? update.callback_query?.message?.chat;
+  return value ? { id: String(value.id), type: value.type ?? "" } : null;
+}
+
+function requiresPrivateOwnerChat(update: TelegramUpdate): boolean {
+  const callbackData = update.callback_query?.data;
+  if (typeof callbackData === "string") {
+    const action = parseConsoleCallback(callbackData);
+    return action?.type === "GENERATE_CAROUSEL" || action?.type === "PREVIEW_DRAFT";
+  }
+  const text = update.message?.text;
+  if (typeof text !== "string") return false;
+  return parseConsoleIntent(text)?.type === "GENERATE_CAROUSEL";
+}
+
 export function createTelegramAgentHandler(
   dependencies: TelegramAgentHandlerDependencies,
 ): (request: Request) => Promise<Response> {
@@ -110,6 +128,11 @@ export function createTelegramAgentHandler(
     if (!isTelegramUpdate(normalized)) return Response.json({ error: { code: "INVALID_REQUEST", message: "Invalid Telegram update" } }, { status: 400 });
     const update = normalized;
     if (fromId(update) !== dependencies.ownerUserId) return Response.json({ error: { code: "FORBIDDEN", message: "Forbidden" } }, { status: 403 });
+    const conversation = chat(update);
+    if (requiresPrivateOwnerChat(update) &&
+        (!conversation || conversation.type !== "private" || conversation.id !== dependencies.ownerUserId)) {
+      return Response.json({ error: { code: "FORBIDDEN", message: "Private owner chat required" } }, { status: 403 });
+    }
     if (dependencies.claimUpdate && !await dependencies.claimUpdate(update)) return Response.json({ status: "ALREADY_PROCESSED" });
     return Response.json(await dependencies.run(update));
   };

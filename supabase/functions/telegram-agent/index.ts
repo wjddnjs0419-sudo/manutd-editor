@@ -422,9 +422,11 @@ async function selectCanonicalDraft(thread: ThreadRow, token: string): Promise<v
   }
 }
 
-async function previewCanonicalDraft(thread: ThreadRow, briefId: string): Promise<{ workflow_url: string }> {
-  const state = await loadConsoleState(thread.id);
-  if (state.brief_id !== briefId) throw new Error("M9_DRAFT_PREVIEW_REQUIRES_EXPLORATION");
+async function previewCanonicalDraft(thread: ThreadRow, briefId: string, freshlyGenerated = false): Promise<{ workflow_url: string }> {
+  if (!freshlyGenerated) {
+    const state = await loadConsoleState(thread.id);
+    if (state.brief_id !== briefId) throw new Error("M9_DRAFT_PREVIEW_REQUIRES_EXPLORATION");
+  }
   const brief = await rowById(`/rest/v1/creative_briefs?select=id,status,generation_metadata&id=eq.${encodeURIComponent(briefId)}&limit=1`);
   if (!brief || typeof brief.id !== "string" || typeof brief.status !== "string") throw new Error("M9_DRAFT_PREVIEW_REQUIRES_EXPLORATION");
   return await dispatchPrivateExplorationPreview({ id: brief.id, status: brief.status, generation_metadata: brief.generation_metadata }, {
@@ -447,7 +449,7 @@ function consoleDependencies(thread: ThreadRow, replyContext: ReplyContext | nul
     skipStory: async (story: CanonicalStory) => await skipCanonicalStory(thread, story),
     generateCarousel: async (story: CanonicalStory) => await generateCanonicalCarousel(story, explorationEnabled),
     explorationEnabled,
-    previewDraft: async (briefId: string) => await previewCanonicalDraft(thread, briefId),
+    previewDraft: async (briefId: string, freshlyGenerated = false) => await previewCanonicalDraft(thread, briefId, freshlyGenerated),
     selectDraft: async (token: string) => await selectCanonicalDraft(thread, token),
   };
 }
@@ -474,6 +476,10 @@ async function runConsoleAction(thread: ThreadRow, incoming: TelegramUpdate, act
   const client = createTelegramClient({ token: botToken });
   const queryId = callbackId(incoming);
   if (queryId) await client.answerCallbackQuery(queryId).catch(() => undefined);
+  if (action.type === "GENERATE_CAROUSEL") {
+    const chatId = telegramChatId(incoming);
+    if (chatId) await client.sendText(chatId, "📝 선택한 기사 원문과 출처를 확인하고 한국어 DRAFT 원고를 생성하는 중입니다.").catch(() => undefined);
+  }
   const state = await loadConsoleState(thread.id);
   const incomingMessageId = callbackMessageId(incoming);
   const staleCallback = incomingMessageId !== null && state.telegram_message_id !== null && incomingMessageId !== state.telegram_message_id;
