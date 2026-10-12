@@ -29,7 +29,15 @@ jobs:
       - name: Install MediaPipe Linux runtime library
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes libegl1
+          sudo apt-get install --no-install-recommends --yes libegl1 libgles2
+
+      - name: Verify MediaPipe Linux runtime linkage
+        run: |
+          library="$(python -c 'from importlib.resources import files; print(files("mediapipe.tasks.c") / "libmediapipe.so")')"
+          ldd "$library" | tee "$RUNNER_TEMP/mediapipe-linkage.txt"
+          if grep -q "not found" "$RUNNER_TEMP/mediapipe-linkage.txt"; then
+            exit 1
+          fi
 
       - name: Verify model and run generated-image CPU smoke
         run: >-
