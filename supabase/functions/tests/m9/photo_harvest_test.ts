@@ -17,7 +17,7 @@ const official='<html><head><script type="application/ld+json">'+
 '{"@type":"NewsArticle","image":{"contentUrl":"https://cdn.example.org/bruno-fernandes-portrait.png","width":1200,"height":1600,"caption":"Bruno Fernandes full-body portrait","dateCreated":"2026-10-10"}}'+
 '</script></head></html>';
 
-Deno.test("harvests real news and official photo candidates once per URL for each template",async()=>{
+Deno.test("harvests article and official photos and selects the stronger cover crop",async()=>{
  const requests:string[]=[];
  const out=await harvestArticlePhotos({
    publisher_article_urls:["https://sports.example.org/bruno"],
@@ -42,7 +42,8 @@ Deno.test("harvests real news and official photo candidates once per URL for eac
  assertEquals(out.candidate_count,2);
  assertEquals(out.probed_count,2);
  assertEquals(out.selections.length,2);
- assertEquals(out.selections[0]?.selected?.candidate.origin,"ARTICLE");
+ assertEquals(out.selections[0]?.selected?.candidate.origin,"OFFICIAL_CLUB");
+ assertEquals(out.selections[0]?.selected?.projected_crop_scale,0.9);
  assertEquals(out.selections[1]?.selected?.candidate.origin,"OFFICIAL_CLUB");
  assertEquals(out.selections[1]?.selected?.probe.height,1600);
  assertEquals(requests.length,4);

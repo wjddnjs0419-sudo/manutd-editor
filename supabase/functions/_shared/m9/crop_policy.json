@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "target_width": 1080,
+  "target_height": 1350,
+  "max_enlargement": 2.0,
+  "scale_bands": {
+    "basic_max": 1.5,
+    "sharpness_max": 1.8,
+    "strict_max": 2.0
+  },
+  "face_detection_min_confidence": 0.5,
+  "dominant_face_area_ratio": 1.75
+}

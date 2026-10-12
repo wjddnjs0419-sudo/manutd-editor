@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1.0.8";
 import {
   inspectImageBytes,allowedPhotoImageUrl,probePhotoImage,matchPhotoSubject,
-  selectPublisherPhoto,shortlistPublisherPhotos,
+  selectPublisherPhoto,shortlistPublisherPhotos,projectedCropScale,
 } from "../../_shared/m9/photo_quality.ts";
 import type { PhotoCandidate } from "../../_shared/m9/article_photo_candidates.ts";
 
@@ -122,4 +122,24 @@ Deno.test("bad probe vector lengths rejected, no fake successful results",()=>{
   try {selectPublisherPhoto([candidate()],[],["Bruno Fernandes"],"COVER_NEWS");}catch{threw=true;}
   assertEquals(threw,true);
   assertEquals(selectPublisherPhoto([candidate()],[{status:"UNAVAILABLE",bytes_read:0,mime_type:null,width:null,height:null}],["Bruno Fernandes"],"COVER_NEWS").status,"NO_SUITABLE_IMAGE");
+});
+
+Deno.test("landscape 1600x900 projects to 1.5x for the 4:5 crop",()=>{
+  assertEquals(projectedCropScale(1600,900),1.5);
+});
+
+Deno.test("native 1080x1350 projects to 1x",()=>{
+  assertEquals(projectedCropScale(1080,1350),1);
+});
+
+Deno.test("candidate ranking rewards projected crop fit instead of landscape orientation",()=>{
+  const landscape=candidate({image_url:"https://images.example.org/landscape.jpg",score:80});
+  const portrait=candidate({image_url:"https://images.example.org/portrait.jpg",score:80});
+  const selected=selectPublisherPhoto(
+    [landscape,portrait],[valid(1600,900),valid(960,1200)],
+    ["Bruno Fernandes"],"COVER_NEWS",new Date("2026-10-11T12:00:00Z"),
+  );
+  assertEquals(selected.selected?.candidate.image_url,"https://images.example.org/portrait.jpg");
+  assertEquals(selected.shortlist[0]?.projected_crop_scale,1.125);
+  assertEquals(selected.shortlist[1]?.projected_crop_scale,1.5);
 });

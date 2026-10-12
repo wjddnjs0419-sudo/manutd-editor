@@ -4,6 +4,7 @@
  * Only small byte ranges are fetched; no publisher image is cached/stored here.
  */
 import type { PhotoCandidate } from "./article_photo_candidates.ts";
+import cropPolicy from "./crop_policy.json" with { type: "json" };
 
 export type M9PhotoSlot = "COVER_NEWS" | "BODY_NEWS" | "PLAYER_PROFILE";
 export type M9PhotoMime = "image/jpeg" | "image/png" | "image/webp";
@@ -26,6 +27,7 @@ export interface M9PhotoAssessment {
   readonly requires_review: true;
   readonly can_auto_publish: false;
   readonly score: number;
+  readonly projected_crop_scale: number | null;
   readonly flags: readonly string[];
 }
 export interface M9PhotoSelection {
@@ -188,6 +190,20 @@ export function matchPhotoSubject(candidate: PhotoCandidate, aliases: readonly s
 function isCoverOrBodyUsable(w:number,h:number): boolean {return w>=960 && h>=640;}
 function isProfileUsable(w:number,h:number): boolean {return w>=650 && h>=950;}
 
+/** Effective target enlargement after taking the required 4:5 source crop. */
+export function projectedCropScale(width: number, height: number): number {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    throw new RangeError("M9_IMAGE_DIMENSIONS_INVALID");
+  }
+  const targetWidth = cropPolicy.target_width;
+  const targetHeight = cropPolicy.target_height;
+  const targetAspect = targetWidth / targetHeight;
+  const sourceAspect = width / height;
+  const cropWidth = sourceAspect > targetAspect ? height * targetAspect : width;
+  const cropHeight = sourceAspect > targetAspect ? height : width / targetAspect;
+  return Math.max(targetWidth / cropWidth, targetHeight / cropHeight);
+}
+
 export function assessPublisherPhoto(
   candidate:PhotoCandidate,probe:M9ImageProbe,subjectAliases:readonly string[],
   slot:M9PhotoSlot,now:Date,
@@ -215,15 +231,16 @@ export function assessPublisherPhoto(
   // Source relevancy is a tie-breaker after actual dimensions and subject evidence.
   const identityScore=nameEvidence==="ALT_OR_CAPTION_MATCH"?38:nameEvidence==="FILENAME_HINT"?15:0;
   const aspect=probe.width&&probe.height?probe.width/probe.height:null;
-  const compositionScore=aspect===null?0:
-    slot==="PLAYER_PROFILE"?(aspect<=1?12:0):
-    aspect>=1.15?12:4;
+  const projectedScale=probe.width&&probe.height?projectedCropScale(probe.width,probe.height):null;
+  const compositionScore=slot==="PLAYER_PROFILE"?
+    (aspect===null?0:aspect<=1?12:0):
+    projectedScale===null?0:Math.min(12,Math.max(0,12*(2-projectedScale)));
   const freshness=isRecent===true?12:isRecent===false?-10:0;
   const score=(good?50:-100)+identityScore+compositionScore+freshness+
     Math.min(15,Math.max(0,candidate.score/8))+
     (candidate.origin==="ARTICLE"?7:0);
   return {candidate,probe,identity_evidence:nameEvidence,is_recent_photo:isRecent,
-    requires_review:true,can_auto_publish:false,score,flags};
+    requires_review:true,can_auto_publish:false,score,projected_crop_scale:projectedScale,flags};
 }
 
 export function selectPublisherPhoto(
