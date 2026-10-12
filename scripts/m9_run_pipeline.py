@@ -85,10 +85,26 @@ def claim_cloud_preview(remote: SupabaseGateway, brief: dict) -> str:
                 previous.get("status") != "FAILED" or
                 previous.get("telegram_message_ids") != []):
             raise ValueError("M9_JOB_ALREADY_CLAIMED_NO_RETRY")
-        key = pre_send_retry_job_key(brief)
-        if remote.get_preview(key) is not None:
+        first_retry_key = pre_send_retry_job_key(brief)
+        retry_keys = [first_retry_key, first_retry_key.rsplit(":v", 1)[0] + ":v00"]
+        retry_records = [remote.get_preview(retry_key) for retry_key in retry_keys]
+        for attempt, (retry_key, retry_record) in enumerate(zip(retry_keys, retry_records), start=1):
+            if retry_record is None:
+                if any(later is not None for later in retry_records[attempt:]):
+                    raise ValueError("M9_JOB_ALREADY_CLAIMED_NO_RETRY")
+                key = retry_key
+                manifest.update({
+                    "retry_of": original_key,
+                    "retry_reason": "CONFIRMED_PRE_SEND_FAILURE",
+                    "retry_attempt": attempt,
+                })
+                break
+            if (retry_record.get("creative_brief_id") != brief["id"] or
+                    retry_record.get("status") != "FAILED" or
+                    retry_record.get("telegram_message_ids") != []):
+                raise ValueError("M9_JOB_ALREADY_CLAIMED_NO_RETRY")
+        else:
             raise ValueError("M9_JOB_RETRY_ALREADY_USED")
-        manifest.update({"retry_of": original_key, "retry_reason": "CONFIRMED_PRE_SEND_FAILURE"})
     remote.claim(key, brief["id"], manifest)
     return key
 

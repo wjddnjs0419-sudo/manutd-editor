@@ -60,10 +60,28 @@ class TestM9RunPipeline(unittest.TestCase):
                 claim_cloud_preview(blocked,brief)
             self.assertEqual(blocked.claimed,[])
 
-        used=Remote({original:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},retry:{"status":"FAILED","telegram_message_ids":[]}})
+        used=Remote({original:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},retry:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]}})
+        retry2=retry.rsplit(":v",1)[0]+":v00"
+        self.assertEqual(claim_cloud_preview(used,brief),retry2)
+        self.assertEqual(used.claimed[0][0],retry2)
+        self.assertEqual(used.claimed[0][2]["retry_attempt"],2)
+
+        exhausted=Remote({
+            original:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},
+            retry:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},
+            retry2:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},
+        })
         with self.assertRaisesRegex(ValueError,"M9_JOB_RETRY_ALREADY_USED"):
-            claim_cloud_preview(used,brief)
-        self.assertEqual(used.claimed,[])
+            claim_cloud_preview(exhausted,brief)
+        self.assertEqual(exhausted.claimed,[])
+
+        uncertain_retry=Remote({
+            original:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},
+            retry:{"creative_brief_id":brief["id"],"status":"SEND_UNCERTAIN","telegram_message_ids":[]},
+        })
+        with self.assertRaisesRegex(ValueError,"M9_JOB_ALREADY_CLAIMED_NO_RETRY"):
+            claim_cloud_preview(uncertain_retry,brief)
+        self.assertEqual(uncertain_retry.claimed,[])
 
     def test_subprocess_timeout_is_classified_without_exposing_command_output(self):
         with patch("m9_run_pipeline.subprocess.run", side_effect=subprocess.TimeoutExpired("deno", 240)):
