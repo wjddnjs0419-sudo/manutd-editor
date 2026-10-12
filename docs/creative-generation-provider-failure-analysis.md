@@ -105,3 +105,39 @@ regression covers uncertain -> failed -> explicit retry -> DRAFT -> NOOP, with o
 classifier call, cumulative usage preserved and no duplicate brief. All Deno
 nonintegration tests now pass: 693 (29 steps). This follow-up needs approval to
 deploy before consuming the already approved one-generation request.
+
+## Approved v34 deployment and one live request
+
+User separately approved deployment and one generation request. v34 was deployed
+to `byymtttpwmllqvggnddm`, ACTIVE status and returned runtime source files verified.
+The only runtime change from v33 was the manual retry guard in orchestrator.ts.
+
+Exactly one POST was sent, 2026-10-12 13:43:02–13:43:33 UTC, using the existing
+invoke secret from the original `.env.local` without printing it. Request ID:
+`4ee9b639-c067-4199-8dda-021388667a54`. Candidate and job are unchanged. A local
+exclusive-create attempt marker prevents accidental repeat of that invocation.
+
+Result: FAILED_VALIDATION; error codes STYLE_SLIDE_INDEX (5 occurrences) and
+STYLE_ROLE_ORDER (2 occurrences). Production function logs confirm v34 and this
+status. OpenAI generation returned parseable JSON and reached the quality gate;
+no provider exception occurred in this request. This does not retroactively prove
+the cause of the earlier v32 FAILED_PROVIDER.
+
+Job totals after request: provider_calls 3, input_tokens 25,440, output_tokens
+2,850, retry_count 0, estimated_cost_usd $0.085080, creative_brief_id null.
+Delta for this request: one provider call, 22,719 input tokens, 2,787 output tokens,
+zero retries and $0.078882 estimated cost. Actual invoice cost remains unverified.
+No brief was saved and no M9/PNG/Storage/Telegram action was performed.
+
+Code comparison confirms the Exploration prompt omitted a one-based `index`
+requirement and replaced the fixed role order with "Use a distinct role per
+message", while the style gate requires the prefix of
+HOOK, CONTEXT, KEY_FACT, IMPLICATION, KEY_FACT, IMPLICATION. The returned output
+was not retained or logged, so its exact wrong values cannot be reconstructed.
+
+A PR-only follow-up makes the Exploration prompt explicitly match these existing
+index and role requirements. It does not normalize returned roles, relax the
+gate, change Standard prompts, or trigger a paid repair. Mock prompt-contract test
+failed first and then passed; all nonintegration Deno tests now pass: 694
+(29 steps). This prompt change is NOT in deployed v34. Deployment of this
+follow-up and any further live request require new user approval.

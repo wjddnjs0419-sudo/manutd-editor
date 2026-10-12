@@ -102,3 +102,13 @@ Deno.test("Exploration prompts set mode-specific bounds and concise caption requ
   assertEquals(analysis.includes("summarizes the carousel in fresh wording"), true);
   assertEquals(analysis.includes("Build three or four meaningful slides"), false);
 });
+
+Deno.test("Exploration prompt specifies the exact style gate index and role contract", async () => {
+  const { generationPrompt } = await import("../../creative-generation/prompts.ts");
+  for (const mode of ["NEWS_UPDATE", "ANALYSIS_CONTEXT", "MATCH_CONTENT"] as const) {
+    const prompt = generationPrompt(mode, null, {}, "EXPLORATION");
+    assertEquals(prompt.includes("index and slide_number must both equal the one-based slide position"), true);
+    assertEquals(prompt.includes("HOOK, CONTEXT, KEY_FACT, IMPLICATION, KEY_FACT, IMPLICATION"), true);
+    assertEquals(prompt.includes("Use a distinct role per message"), false);
+  }
+});

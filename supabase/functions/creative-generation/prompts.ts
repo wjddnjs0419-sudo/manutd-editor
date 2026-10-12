@@ -21,7 +21,7 @@ export function generationPrompt(mode: ContentMode, phase: MatchPhase | null, ev
   const styleInstructions = intent === "EXPLORATION"
     ? MANUTD_EDITOR_STYLE_INSTRUCTIONS.replace(
       "Build three or four meaningful slides in this order: HOOK, CONTEXT, KEY_FACT, optional IMPLICATION.",
-      `Build ${slideBounds.min}–${slideBounds.max} meaningful content slides with a natural story flow. Use a distinct role per message; add no filler slides.`,
+      `Build ${slideBounds.min}–${slideBounds.max} meaningful content slides with a natural story flow. For the chosen slide count, use exactly the corresponding prefix of this role sequence: HOOK, CONTEXT, KEY_FACT, IMPLICATION, KEY_FACT, IMPLICATION. Repeated KEY_FACT and IMPLICATION roles are intentional; each slide must add a distinct supported message, with no filler.`,
     )
     : MANUTD_EDITOR_STYLE_INSTRUCTIONS;
   const modeInstruction = intent === "EXPLORATION"
@@ -37,6 +37,7 @@ export function generationPrompt(mode: ContentMode, phase: MatchPhase | null, ev
   return [
     "You are a grounded Creative Director, not a reporter.",
     styleInstructions,
+    ...(intent === "EXPLORATION" ? ["For every slide, index and slide_number must both equal the one-based slide position: 1, 2, 3, and so on. Do not use zero-based indexes."] : []),
     modeInstruction,
     `Content mode: ${mode}`,
     `Match phase: ${phase ?? "none"}`,
