@@ -128,6 +128,41 @@ class M9IntegrationContracts(unittest.TestCase):
         self.assertEqual(len(p["body_slides"]), 1)
         self.assertEqual(p["cover_photo_source"], self.media["cover"]["source_url"])
 
+    def test_maps_page_media_and_preserves_legacy_cover_body_aliases(self):
+        self.brief["slides_json"]["slides"].append({
+            "slide_number": 3, "headline": "후속 내용", "body": "기사의 추가 근거를 소개한다.",
+        })
+        page_three = {
+            **self.media["body"], "file": "body.jpg",
+            "source_url": "https://publisher.example.org/photos/page-three.jpg",
+        }
+        media = {**self.media, "pages": [
+            {"slide_number": 1, **self.media["cover"]},
+            {"slide_number": 2, **self.media["body"]},
+            {"slide_number": 3, **page_three},
+        ]}
+        prepared = prepared_render_job(self.brief, media)
+        self.assertEqual(prepared["page_photos"]["1"]["file"], "cover.jpg")
+        self.assertEqual(prepared["body_slides"][1]["photo"]["source_url"], page_three["source_url"])
+        self.assertEqual(prepared["body_photo"], "body.jpg")
+
+    def test_exploration_page_bounds_apply_by_mode_and_leave_ready_unchanged(self):
+        draft = {
+            **self.brief, "status": "DRAFT", "content_mode": "ANALYSIS_CONTEXT",
+            "generation_metadata": {"generation_intent": "EXPLORATION"},
+            "slides_json": {"slides": [dict(slide) for slide in self.brief["slides_json"]["slides"]]},
+        }
+        with self.assertRaisesRegex(ValueError, "M9_EXPLORATION_SLIDE_COUNT_INVALID"):
+            prepared_render_job(draft, self.media)
+        for slide_number in (3, 4):
+            draft["slides_json"]["slides"].append({
+                "slide_number": slide_number, "headline": f"추가 근거 {slide_number}",
+                "body": f"원문 근거를 설명한다. {slide_number}",
+            })
+        self.assertEqual(len(prepared_render_job(draft, self.media)["body_slides"]), 3)
+        ready = {**make_brief(), "status": "READY", "content_mode": "ANALYSIS_CONTEXT"}
+        self.assertEqual(len(prepared_render_job(ready, self.media)["body_slides"]), 1)
+
     def test_prepared_render_job_carries_crop_quality_faces_and_manual_focus(self):
         crop = {"x": 0.1, "y": 0.0, "width": 0.6, "height": 1.0, "scale": 1.0,
                 "focus_x": 0.4, "focus_y": 0.5, "review_required": False, "flags": []}
@@ -257,6 +292,7 @@ class M9IntegrationContracts(unittest.TestCase):
     @unittest.skipUnless(find_font(), "M9_TEST_FONT needed")
     def test_exploration_preview_renders_every_content_slide_and_cta(self):
         brief = {**self.brief, "status": "DRAFT", "generation_metadata": {"generation_intent": "EXPLORATION"},
+                 "content_mode": "NEWS_UPDATE",
                  "evidence_snapshot": {"exploration_articles": [{"published_at": "2026-10-12T09:00:00Z"}]},
                  "slides_json": {"slides": [
                      {"slide_number": 1, "headline": "맨유의 이적설", "body": ""},

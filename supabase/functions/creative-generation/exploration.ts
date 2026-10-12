@@ -2,6 +2,7 @@ import { validPublisherUrl } from "./evidence.ts";
 import { canonicalJson, sha256 } from "./fingerprint.ts";
 import { classifyManchesterUnitedRelevance } from "../_shared/m8/manchester_united_relevance.ts";
 import type { EvidenceSnapshot, ExplorationArticleEvidenceInput } from "./types.ts";
+import type { ContentMode } from "./types.ts";
 
 export interface ExplorationConfig {
   readonly enabled: boolean;
@@ -41,6 +42,20 @@ export const DEFAULT_EXPLORATION_CONFIG: ExplorationConfig = {
   inputCostPerMillionUsd: null,
   outputCostPerMillionUsd: null,
 };
+
+export interface ExplorationSlideBounds {
+  readonly min: number;
+  readonly max: number;
+}
+
+/** Content-slide bounds for Exploration DRAFTs; the fixed CTA is rendered separately. */
+export function explorationSlideBounds(mode: ContentMode): ExplorationSlideBounds {
+  switch (mode) {
+    case "NEWS_UPDATE": return { min: 2, max: 4 };
+    case "ANALYSIS_CONTEXT": return { min: 4, max: 6 };
+    case "MATCH_CONTENT": return { min: 3, max: 5 };
+  }
+}
 
 function readPositiveInteger(
   readEnv: (name: string) => string | undefined,

@@ -13,6 +13,8 @@ import {
 export interface M9PhotoSlotRequest {
   readonly slot: M9PhotoSlot;
   readonly subject_aliases: readonly string[];
+  /** 1-based creative brief page; omitted by legacy two-slot callers. */
+  readonly slide_number?: number;
 }
 export interface M9PhotoHarvestJob {
   readonly publisher_article_urls: readonly string[];
@@ -89,8 +91,10 @@ export async function harvestArticlePhotos(
     probes.push(await probePhotoImage(candidate.image_url,opts));
   }
   const now=opts.now??new Date();
-  const selections=job.slots.map(request=>selectPublisherPhoto(toProbe,probes,
-    request.subject_aliases,request.slot,now));
+  const selections=job.slots.map(request=>({
+    ...selectPublisherPhoto(toProbe,probes,request.subject_aliases,request.slot,now),
+    ...(request.slide_number !== undefined ? {slide_number:request.slide_number} : {}),
+  }));
   return {
     status:selections.some(s=>s.status==="CANDIDATES_FOR_REVIEW")
       ? "CANDIDATES_FOR_REVIEW":"NO_SUITABLE_IMAGE",

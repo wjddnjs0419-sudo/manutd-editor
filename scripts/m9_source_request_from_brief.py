@@ -45,8 +45,6 @@ ROLES = {"FACT_PRIMARY": 0, "FACT_INDEPENDENT": 1, "OFFICIAL": 2,
 SOCIAL_HOSTS = {"instagram.com", "www.instagram.com", "x.com", "twitter.com",
                 "www.youtube.com", "youtube.com", "youtu.be", "m.youtube.com",
                 "t.me", "www.tiktok.com"}
-M9_SLOT_LABELS = ("COVER_NEWS", "BODY_NEWS")
-
 def is_publishable_source_url(value: object) -> bool:
     if not isinstance(value, str) or len(value) > 2000:
         return False
@@ -144,10 +142,19 @@ def build_request(
     if not isinstance(slides,list) or len(slides)<2:
         raise ValueError("M9_BRIEF_SLIDES_MISSING")
     registry=from_tracked_entities(tracked_entities or [])
+    numbered_slides = sorted(
+        (slide for slide in slides if isinstance(slide, dict)),
+        key=lambda slide: int(slide.get("slide_number", slide.get("index", 0))),
+    )
+    if len(numbered_slides) != len(slides) or len(numbered_slides) > 6:
+        raise ValueError("M9_BRIEF_SLIDE_COUNT_INVALID")
     subjects=[]
-    for index in (0,1):
-        slide=slides[index]
+    slots=[]
+    for index, slide in enumerate(numbered_slides):
         if not isinstance(slide,dict):raise ValueError("M9_BRIEF_SLIDES_MISSING")
+        slide_number = int(slide.get("slide_number", slide.get("index", index + 1)))
+        if slide_number != index + 1:
+            raise ValueError("M9_BRIEF_SLIDE_NUMBERS_INVALID")
         direction=slide.get("visual_direction")
         if not isinstance(direction,dict):direction={}
         scene=direction.get("subject") or ""
@@ -158,9 +165,12 @@ def build_request(
         if len(recognized)>1:
             raise ValueError(f"M9_AMBIGUOUS_PHOTO_SUBJECT_PAGE_{index+1}")
         if len(recognized)==0:
-            if index==1 and subjects:recognized=[subjects[0]]
+            if index > 0 and subjects:recognized=[subjects[0]]
             else:raise ValueError(f"M9_PHOTO_SUBJECT_NOT_IDENTIFIED_PAGE_{index+1}")
         subjects.append(recognized[0])
+        role = "COVER_NEWS" if index == 0 else "BODY_NEWS"
+        aliases = list(dict.fromkeys([recognized[0], *[alias for alias in registry[recognized[0]] if len(alias.strip()) >= 4]]))[:6]
+        slots.append({"slot": role, "slide_number": slide_number, "subject_aliases": aliases})
     news,official=source_pages(snapshot)
     google_original_urls=[]
     for source in snapshot.get("sources",[]):
@@ -172,8 +182,7 @@ def build_request(
     return {
         "publisher_article_urls":news,
         "official_article_urls":official,
-        "slots":[{"slot":role,"subject_aliases":list(dict.fromkeys([name, *[alias for alias in registry[name] if len(alias.strip()) >= 4]]))[:6]}
-                 for role,name in zip(M9_SLOT_LABELS,subjects)],
+        "slots":slots,
         "allowed_image_hosts":allowed_image_hosts,
         "_provenance":{
             "brief_id":brief.get("id"),

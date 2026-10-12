@@ -44,6 +44,18 @@ Deno.test("accepts an optional grounded implication slide", () => {
   assertEquals(validateManutdEditorDraft(value, new Set(["source:bbc"])).valid, true);
 });
 
+Deno.test("accepts mode-specific Exploration bounds without changing the default 3–4 policy", () => {
+  const base = draft();
+  const six = draft({ slides: [
+    ...base.slides,
+    { index: 4, role: "IMPLICATION", headline: "근거 하나 더", highlight: null, body: "추가 근거를 요약한다.", closing_line: null, evidence_ids: ["source:bbc"] },
+    { index: 5, role: "KEY_FACT", headline: "수치 확인", highlight: null, body: "기사에 나온 수치를 확인한다.", closing_line: null, evidence_ids: ["source:bbc"] },
+    { index: 6, role: "IMPLICATION", headline: "남은 쟁점", highlight: null, body: "보도에서 확정하지 않은 내용을 구분한다.", closing_line: null, evidence_ids: ["source:bbc"] },
+  ] });
+  assertEquals(validateManutdEditorDraft(six, new Set(["source:bbc"]), { min: 4, max: 6 }).valid, true);
+  assert(validateManutdEditorDraft(six, new Set(["source:bbc"])).errors.some((error) => error.code === "SLIDE_COUNT"));
+});
+
 Deno.test("rejects internal research language from public copy", () => {
   const value = draft({ slides: [{ ...draft().slides[0]!, headline: "현재 확보된 자료에는 전술 문제가 없습니다." }, ...draft().slides.slice(1)] });
   const result = validateManutdEditorDraft(value, new Set(["source:bbc"]));

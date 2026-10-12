@@ -15,6 +15,14 @@ Deno.test("accepts explicit trusted publisher URLs with two different photo subj
  assertEquals(r.job.slots.map(x=>x.slot),["COVER_NEWS","BODY_NEWS"]);
  assertEquals(r.allowed_image_hosts,["i.guim.co.uk","media.manutd.com"]);
 });
+Deno.test("accepts repeated BODY_NEWS slots keyed to distinct creative pages",()=>{
+ const r=validateM9SourceRequest({...request,slots:[
+  {...request.slots[0],slide_number:1},
+  {...request.slots[1],slide_number:2},
+  {slot:"BODY_NEWS",slide_number:3,subject_aliases:["Bruno Fernandes"]},
+ ]});
+ assertEquals(r.job.slots.map(x=>x.slide_number),[1,2,3]);
+});
 Deno.test("refuses implicit CDN allowlist, missing subject or extra photo slot",()=>{
  assertThrows(()=>validateM9SourceRequest({...request,allowed_image_hosts:[]}),Error,"M9_TRUSTED_IMAGE_HOSTS_REQUIRED");
  assertThrows(()=>validateM9SourceRequest({...request,slots:[request.slots[0]]}),Error,"M9_SUBJECT_ALIASES_INVALID");

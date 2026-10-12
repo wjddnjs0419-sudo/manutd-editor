@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import socket
 import urllib.error
@@ -21,7 +22,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from PIL import Image
+from PIL import Image, ImageOps
 from m9_photo_analysis import (
     MediaPipeFaceDetector,
     NormalizedFace,
@@ -139,6 +140,53 @@ def _candidate_rejection(assessment: dict[str, Any], reason: str) -> dict[str, A
     }
 
 
+def _perceptual_hash(image: Image.Image) -> int:
+    """Small dependency-free 64-bit DCT pHash for resized/re-encoded photos."""
+    pixels = list(ImageOps.fit(image.convert("L"), (32, 32), method=Image.Resampling.LANCZOS).getdata())
+    cosine = [[math.cos((2 * position + 1) * frequency * math.pi / 64) for position in range(32)]
+              for frequency in range(8)]
+    horizontal = [[sum(pixels[y * 32 + x] * cosine[u][x] for x in range(32))
+                   for y in range(32)] for u in range(8)]
+    coefficients = [
+        sum(horizontal[u][y] * cosine[v][y] for y in range(32))
+        for u in range(8) for v in range(8)
+    ]
+    median = sorted(coefficients[1:])[len(coefficients[1:]) // 2]
+    value = 0
+    for coefficient in coefficients:
+        value = (value << 1) | int(coefficient > median)
+    return value
+
+
+def _visual_fingerprint(image: Image.Image) -> dict[str, Any]:
+    rgb = image.convert("RGB")
+    width, height = rgb.size
+    target_ratio = 4 / 5
+    if width / height > target_ratio:
+        crop_width = round(height * target_ratio)
+        left = (width - crop_width) // 2
+        crop = rgb.crop((left, 0, left + crop_width, height))
+    else:
+        crop_height = round(width / target_ratio)
+        top = (height - crop_height) // 2
+        crop = rgb.crop((0, top, width, top + crop_height))
+    mean = rgb.resize((1, 1), Image.Resampling.BOX).getpixel((0, 0))
+    return {
+        "hashes": (_perceptual_hash(rgb), _perceptual_hash(crop)),
+        "aspect": width / height,
+        "mean_rgb": mean,
+    }
+
+
+def _same_visual(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if abs(left["aspect"] - right["aspect"]) > 0.2:
+        return False
+    color_distance = math.sqrt(sum((a - b) ** 2 for a, b in zip(left["mean_rgb"], right["mean_rgb"])))
+    if color_distance > 34:
+        return False
+    return min((a ^ b).bit_count() for a in left["hashes"] for b in right["hashes"]) <= 5
+
+
 def choose_media(
     gathered: dict[str, Any], output: Path, allowed_hosts: list[str],
     downloader: Callable[[str, list[str]], tuple[bytes, str]] = fetch_bounded_image,
@@ -150,26 +198,43 @@ def choose_media(
     selections = gathered.get("selections")
     if not isinstance(selections, list):
         raise ValueError("M9_PHOTO_MANIFEST_INVALID")
-    expected = ("COVER_NEWS", "BODY_NEWS")
-    choices: list[tuple[str, list[dict[str, Any]]]] = []
-    for kind in expected:
-        row = next((r for r in selections if isinstance(r, dict) and r.get("slot") == kind), None)
-        if not row:
-            raise ValueError("M9_PHOTO_REVIEW_REQUIRED_" + kind)
+    if not selections:
+        raise ValueError("M9_PHOTO_REVIEW_REQUIRED_COVER_NEWS")
+    choices: list[tuple[int, str, list[dict[str, Any]]]] = []
+    next_body_slide = 2
+    seen_slide_numbers: set[int] = set()
+    for row in selections:
+        if not isinstance(row, dict) or row.get("slot") not in ("COVER_NEWS", "BODY_NEWS"):
+            raise ValueError("M9_PHOTO_SELECTION_INVALID")
+        role_kind = str(row["slot"])
+        slide_number = row.get("slide_number")
+        if slide_number is None:
+            slide_number = 1 if role_kind == "COVER_NEWS" else next_body_slide
+        if not isinstance(slide_number, int) or slide_number < 1 or slide_number > 6:
+            raise ValueError("M9_PHOTO_SLIDE_NUMBER_INVALID")
+        if role_kind == "COVER_NEWS" and slide_number != 1:
+            raise ValueError("M9_PHOTO_COVER_SLIDE_INVALID")
+        if role_kind == "BODY_NEWS":
+            next_body_slide = max(next_body_slide, slide_number + 1)
+        if slide_number in seen_slide_numbers:
+            raise ValueError("M9_PHOTO_SLIDE_NUMBER_DUPLICATE")
+        seen_slide_numbers.add(slide_number)
+        kind = "cover" if role_kind == "COVER_NEWS" else "body"
         if "shortlist" not in row:
             selected = row.get("selected")
-            if not isinstance(selected, dict):
-                raise ValueError("M9_PHOTO_REVIEW_REQUIRED_" + kind)
-            candidates = [selected]
+            candidates = [selected] if isinstance(selected, dict) else []
         else:
             shortlist = row.get("shortlist")
             if not isinstance(shortlist, list):
-                raise ValueError("M9_PHOTO_SHORTLIST_INVALID_" + kind)
+                raise ValueError("M9_PHOTO_SHORTLIST_INVALID_" + role_kind)
             candidates = shortlist[:MAX_FULL_IMAGES_PER_SLOT]
-            if not candidates:
-                raise ValueError("M9_PHOTO_REVIEW_REQUIRED_" + kind)
-        validated = [_validated_assessment(candidate, kind) for candidate in candidates]
-        choices.append(("cover" if kind == "COVER_NEWS" else "body", validated))
+        validated = [_validated_assessment(candidate, role_kind) for candidate in candidates]
+        choices.append((slide_number, kind, validated))
+    choices.sort(key=lambda row: row[0])
+    if not any(slide == 1 and role == "cover" for slide, role, _ in choices):
+        raise ValueError("M9_PHOTO_REVIEW_REQUIRED_COVER_NEWS")
+    if not any(slide == 2 and role == "body" for slide, role, _ in choices):
+        raise ValueError("M9_PHOTO_REVIEW_REQUIRED_BODY_NEWS")
     if detector is None:
         raise ValueError("M9_FACE_DETECTOR_REQUIRED")
     output.mkdir(parents=True, exist_ok=True)
@@ -180,14 +245,24 @@ def choose_media(
         "candidate_attempts": {},
         "candidate_rejections": {},
         "quality_policy": load_crop_policy(),
+        "candidate_count": int(gathered.get("candidate_count", len(selections))),
+        "pages": [],
+        "photo_shortage": {"missing_slide_numbers": [], "unique_image_count": 0},
     }
     cache: dict[str, tuple[bytes, str]] = {}
     download_failures: dict[str, str] = {}
+    analysis_cache: dict[tuple[str, str], PhotoEvaluation] = {}
+    fingerprint_by_slide: dict[int, dict[str, Any]] = {}
+    photo_by_slide: dict[int, dict[str, Any]] = {}
+    visual_by_digest: dict[str, dict[str, Any]] = {}
     policy = load_crop_policy()
-    for role, assessments in choices:
+    for slide_number, role, assessments in choices:
+        attempt_key = role if slide_number in (1, 2) else f"slide_{slide_number:02d}"
         attempts: list[dict[str, Any]] = []
         rejections: list[dict[str, Any]] = []
         seen_urls: set[str] = set()
+        passing_duplicate: tuple[dict[str, Any], str, dict[str, Any], PhotoEvaluation, str, int] | None = None
+        chosen: tuple[dict[str, Any], str, dict[str, Any], PhotoEvaluation, str, int] | None = None
         for choice in assessments[:MAX_FULL_IMAGES_PER_SLOT]:
             item = choice["candidate"]
             url = item["image_url"]
@@ -221,8 +296,12 @@ def choose_media(
                 attempts.append(rejection)
                 rejections.append(rejection)
                 continue
+            digest = hashlib.sha256(data).hexdigest()
             try:
-                evaluation = analyzer(image, role, detector)
+                evaluation = analysis_cache.get((digest, role))
+                if evaluation is None:
+                    evaluation = analyzer(image, role, detector)
+                    analysis_cache[(digest, role)] = evaluation
             except ValueError as error:
                 reason = str(error)
                 if reason not in CANDIDATE_ANALYSIS_FAILURES:
@@ -235,7 +314,10 @@ def choose_media(
             hard_failures = [flag for flag in evaluation.flags if flag in HARD_CROP_FAILURES]
             if evaluation.crop.scale > float(policy["max_enlargement"]):
                 hard_failures.append("UPSCALE_ABOVE_LIMIT")
-            digest = hashlib.sha256(data).hexdigest()
+            visual = visual_by_digest.get(digest)
+            if visual is None:
+                visual = _visual_fingerprint(image)
+                visual_by_digest[digest] = visual
             attempt = {
                 "source_url": url,
                 "source_sha256": digest,
@@ -252,10 +334,12 @@ def choose_media(
                 rejections.append(attempt)
                 continue
 
-            path = output / (role + ext)
-            path.write_bytes(data)
-            result[role] = {
-                "file": path.name,
+            duplicate_slide = next((prior for prior, prior_visual in fingerprint_by_slide.items()
+                                     if prior_visual["sha256"] == digest or _same_visual(prior_visual["visual"], visual)), None)
+            entry = {
+                "slide_number": slide_number,
+                "slot": "COVER_NEWS" if role == "cover" else "BODY_NEWS",
+                "file": "",
                 "source_url": url,
                 "article_url": item["article_url"],
                 "credit": str(item.get("credit") or "Photo credit: see original article")[:220],
@@ -271,13 +355,71 @@ def choose_media(
                 "analysis_ms": evaluation.analysis_ms,
                 "review_required": evaluation.review_required,
                 "review_flags": list(evaluation.flags),
+                "crop_coordinates": asdict(evaluation.crop),
+                "scale": evaluation.crop.scale,
+                "subject_detection_result": {
+                    "face_count": evaluation.face_count,
+                    "faces": [asdict(face) for face in evaluation.faces],
+                    "review_required": evaluation.review_required,
+                    "review_flags": list(evaluation.flags),
+                    "analysis_ms": evaluation.analysis_ms,
+                },
+                "image_reuse_status": "UNIQUE" if duplicate_slide is None else "REUSED_EXACT" if fingerprint_by_slide[duplicate_slide]["sha256"] == digest else "REUSED_PERCEPTUAL",
             }
+            if duplicate_slide is not None:
+                if passing_duplicate is None:
+                    original = photo_by_slide[duplicate_slide]
+                    passing_duplicate = (choice, original["file"], original, evaluation, digest, duplicate_slide)
+                attempt["status"] = "DUPLICATE"
+                attempt["duplicate_of_slide_number"] = duplicate_slide
+                attempt["reasons"] = [entry["image_reuse_status"]]
+                continue
+            chosen = (choice, "", entry, evaluation, digest, 0)
             break
-        result["candidate_attempts"][role] = attempts
+        if chosen is None and passing_duplicate is not None:
+            chosen = passing_duplicate
+        if chosen is not None:
+            choice, existing_file, entry, evaluation, digest, duplicate_slide = chosen
+            item = choice["candidate"]
+            ext = cache[item["image_url"]][1]
+            if duplicate_slide:
+                original = photo_by_slide[duplicate_slide]
+                entry = {**original, "slide_number": slide_number, "slot": "BODY_NEWS",
+                         "image_reuse_status": "REUSED_EXACT" if original["source_sha256"] == digest else "REUSED_PERCEPTUAL",
+                         "duplicate_of_slide_number": duplicate_slide}
+                file_name = original["file"]
+            else:
+                file_name = "cover" + ext if slide_number == 1 else "body" + ext if slide_number == 2 else f"slide_{slide_number:02d}" + ext
+                path = output / file_name
+                path.write_bytes(cache[item["image_url"]][0])
+                fingerprint_by_slide[slide_number] = {"sha256": digest, "visual": visual_by_digest[digest]}
+                entry["file"] = file_name
+            entry["duplicate_of_slide_number"] = duplicate_slide or None
+            photo_by_slide[slide_number] = entry
+            attempts[-1]["status"] = "SELECTED" if not duplicate_slide else "REUSED"
+            attempts[-1]["slide_number"] = slide_number
+        result["candidate_attempts"][attempt_key] = attempts
         if rejections:
-            result["candidate_rejections"][role] = rejections
-        if role not in result:
+            result["candidate_rejections"][attempt_key] = rejections
+        if slide_number in photo_by_slide:
+            result["pages"].append(photo_by_slide[slide_number])
+        else:
             result["selection_status"] = "REVIEW_REQUIRED"
+            result["photo_shortage"]["missing_slide_numbers"].append(slide_number)
+    if 1 in photo_by_slide:
+        result["cover"] = photo_by_slide[1]
+    if 2 in photo_by_slide:
+        body_alias = {**photo_by_slide[2]}
+        alias_path = output / ("body" + Path(body_alias["file"]).suffix)
+        if body_alias["file"] != alias_path.name:
+            alias_path.write_bytes((output / body_alias["file"]).read_bytes())
+            body_alias["file"] = alias_path.name
+        result["body"] = body_alias
+    result["photo_shortage"]["unique_image_count"] = len(fingerprint_by_slide)
+    result["photo_shortage"]["reused_page_count"] = sum(
+        1 for page in result["pages"] if page["image_reuse_status"] != "UNIQUE"
+    )
+    result["page_photo_map"] = {str(page["slide_number"]): page for page in result["pages"]}
     (output / "media.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     return result
 

@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from m9_render_news_deck import render
+from m9_content_policy import validate_exploration_slide_count
 
 BUCKET = "manutd-card-assets"
 CTA_PATH = "assets/cta.png"
@@ -68,6 +69,11 @@ def brief_slides(brief: dict[str, Any]) -> list[dict[str, Any]]:
     slides.sort(key=lambda s: int(s.get("slide_number", s.get("index", 0))))
     if len(slides) < 2:
         raise ValueError("M9_BRIEF_REQUIRES_TWO_SLIDES")
+    if len(slides) > 6:
+        raise ValueError("M9_NEWS_SLIDE_LIMIT")
+    for expected, slide in enumerate(slides, start=1):
+        if int(slide.get("slide_number", slide.get("index", expected))) != expected:
+            raise ValueError("M9_BRIEF_SLIDE_NUMBERS_INVALID")
     return slides
 
 
@@ -85,6 +91,22 @@ def safe_local_file(media_root: Path, name: str) -> Path:
 def checked_media(media: dict[str, Any], media_root: Path) -> dict[str, Any]:
     if media.get("editorial_review_only") is not True:
         raise ValueError("M9_REVIEW_ONLY_REQUIRED")
+    page_rows = media.get("pages")
+    if page_rows is not None:
+        if not isinstance(page_rows, list):
+            raise ValueError("M9_PAGE_MEDIA_INVALID")
+        pages_by_number: dict[int, dict[str, Any]] = {}
+        for info in page_rows:
+            if not isinstance(info, dict) or not isinstance(info.get("slide_number"), int):
+                raise ValueError("M9_PAGE_MEDIA_INVALID")
+            number = info["slide_number"]
+            if number < 1 or number > 6 or number in pages_by_number:
+                raise ValueError("M9_PAGE_MEDIA_INVALID")
+            pages_by_number[number] = info
+        if 1 not in pages_by_number or 2 not in pages_by_number:
+            raise ValueError("M9_PAGE_PHOTO_REQUIRED")
+        media.setdefault("cover", pages_by_number[1])
+        media.setdefault("body", pages_by_number[2])
     for slot in ("cover", "body"):
         info = media.get(slot)
         if not isinstance(info, dict):
@@ -105,11 +127,29 @@ def checked_media(media: dict[str, Any], media_root: Path) -> dict[str, Any]:
                 raise ValueError("M9_SOURCE_URL_INVALID")
         if info.get("subject_metadata_checked") is not True:
             raise ValueError("M9_SUBJECT_METADATA_REVIEW_REQUIRED")
+    if isinstance(page_rows, list):
+        for info in page_rows:
+            if not isinstance(info, dict):
+                raise ValueError("M9_PAGE_MEDIA_INVALID")
+            photo_file = safe_local_file(media_root, info.get("file", ""))
+            expected_sha = info.get("source_sha256")
+            if expected_sha is not None and hashlib.sha256(photo_file.read_bytes()).hexdigest() != expected_sha:
+                raise ValueError("M9_MEDIA_HASH_MISMATCH")
+            if any(not isinstance(info.get(field), str) or not info[field].strip()
+                   for field in ("source_url", "article_url", "credit")):
+                raise ValueError("M9_PAGE_MEDIA_PROVENANCE_REQUIRED")
+            if info.get("subject_metadata_checked") is not True:
+                raise ValueError("M9_SUBJECT_METADATA_REVIEW_REQUIRED")
     return media
 
 
 def prepared_render_job(brief: dict[str, Any], media: dict[str, Any]) -> dict[str, Any]:
     slides = brief_slides(brief)
+    generation_metadata = brief.get("generation_metadata") if isinstance(brief.get("generation_metadata"), dict) else {}
+    validate_exploration_slide_count(
+        brief.get("status"), generation_metadata.get("generation_intent"),
+        brief.get("content_mode"), len(slides),
+    )
     first, second = slides[0], slides[1]
     hooks = brief.get("hooks_json")
     hook = first.get("headline", "")
@@ -128,6 +168,11 @@ def prepared_render_job(brief: dict[str, Any], media: dict[str, Any]) -> dict[st
         raise ValueError("M9_BODY_HEADLINE_REQUIRED")
     cover = media["cover"]
     body_media = media["body"]
+    page_media = {
+        str(page["slide_number"]): page
+        for page in media.get("pages", [])
+        if isinstance(page, dict) and isinstance(page.get("slide_number"), int)
+    } if isinstance(media.get("pages"), list) else {}
     snapshot = brief.get("evidence_snapshot") if isinstance(brief.get("evidence_snapshot"), dict) else {}
     article_records = snapshot.get("exploration_articles") if isinstance(snapshot.get("exploration_articles"), list) else []
     published_at = next((row.get("published_at") for row in article_records if isinstance(row, dict) and isinstance(row.get("published_at"), str)), None)
@@ -137,17 +182,21 @@ def prepared_render_job(brief: dict[str, Any], media: dict[str, Any]) -> dict[st
                 published_at = row["published_at"]
                 break
     body_slides = []
-    for slide in slides[1:]:
+    page_photos = {"1": page_media.get("1", cover)}
+    for slide_index, slide in enumerate(slides[1:], start=2):
         body_text = slide.get("body")
         if not isinstance(body_text, str) or not body_text.strip():
             raise ValueError("M9_BODY_TEXT_REQUIRED")
         body_headline = slide.get("headline")
         if not isinstance(body_headline, str) or not body_headline.strip():
             raise ValueError("M9_BODY_HEADLINE_REQUIRED")
+        page_photo = page_media.get(str(slide_index), body_media)
+        page_photos[str(slide_index)] = page_photo
         body_slides.append({
             "body_headline": body_headline.strip(),
             "body_paragraphs": [line.strip() for line in body_text.splitlines() if line.strip()] or [body_text.strip()],
             "body_highlight": slide.get("highlight") or "",
+            "photo": page_photo,
         })
     prepared = {
         "article_url": cover["article_url"],
@@ -167,6 +216,14 @@ def prepared_render_job(brief: dict[str, Any], media: dict[str, Any]) -> dict[st
         "body_photo_source": body_media["source_url"],
         "cover_source_article_url": cover["article_url"],
         "body_source_article_url": body_media["article_url"],
+        "page_photos": page_photos,
+        "caption_draft": brief.get("caption_draft") if isinstance(brief.get("caption_draft"), str) else "",
+        "content_mode": brief.get("content_mode"),
+        "brief_status": brief.get("status"),
+        "generation_intent": (brief.get("generation_metadata") or {}).get("generation_intent")
+            if isinstance(brief.get("generation_metadata"), dict) else None,
+        "photo_candidate_count": media.get("candidate_count"),
+        "photo_shortage": media.get("photo_shortage"),
     }
     for role, source in (("cover", cover), ("body", body_media)):
         for field in ("crop", "faces", "quality", "analysis_ms", "review_required", "review_flags"):

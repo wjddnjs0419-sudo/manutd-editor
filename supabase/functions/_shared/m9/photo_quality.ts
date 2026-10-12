@@ -36,6 +36,7 @@ export interface M9PhotoSelection {
   readonly slot: M9PhotoSlot;
   readonly selected: M9PhotoAssessment | null;
   readonly shortlist: readonly M9PhotoAssessment[];
+  readonly slide_number?: number;
 }
 export interface M9ProbeOptions {
   readonly fetch?: typeof fetch;

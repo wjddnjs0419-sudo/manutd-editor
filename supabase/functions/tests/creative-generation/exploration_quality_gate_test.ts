@@ -30,6 +30,11 @@ const config: QualityGateConfig = { min_slides: 3, max_slides: 5, hook_count: 3,
 
 function validExplorationOutput(overrides: Partial<CreativeBriefOutput> = {}): CreativeBriefOutput {
   const report = "BBC Sport 보도에 따르면 맨유의 관심은 아직 루머 단계이며 영입이 확정된 것은 아닙니다.";
+  const slideClaims = [
+    report,
+    "BBC Sport 보도에 따르면 논의는 초기 단계이며 합의가 이뤄지지 않았습니다.",
+    "BBC Sport 보도에 따르면 맨유 이적설은 확정된 단계가 아닙니다.",
+  ];
   return {
     schema_version: "1.0",
     content_mode: "NEWS_UPDATE",
@@ -41,9 +46,9 @@ function validExplorationOutput(overrides: Partial<CreativeBriefOutput> = {}): C
     slides: Array.from({ length: 3 }, (_, index) => ({
       slide_number: index + 1,
       purpose: index === 0 ? "HOOK" : "DETAIL",
-      headline: `BBC Sport 보도: 맨유 관심은 아직 루머 ${index + 1}`,
-      body: `${report} https://bbc.test/article/1`,
-      claims: [{ claim_id: `claim-${index + 1}`, type: "FACT" as const, text: report, evidence_ids: [articleId] }],
+      headline: `BBC Sport 보도: ${index === 0 ? "맨유 관심은 아직 루머" : index === 1 ? "논의는 초기 단계" : "영입 합의는 나오지 않았다"}`,
+      body: `${slideClaims[index] ?? report} https://bbc.test/article/1`,
+      claims: [{ claim_id: `claim-${index + 1}`, type: "FACT" as const, text: slideClaims[index] ?? report, evidence_ids: [articleId] }],
       visual_direction: { subject: "Manchester United", image_type: "photo", layout_intent: "clear", stat_emphasis: null, text_hierarchy: ["headline", "body"] },
     })),
     caption: { body: `${report} https://bbc.test/article/1 #ManUtd #MUFC`, cta: "의견을 남겨주세요" },
@@ -84,4 +89,17 @@ Deno.test("Exploration DRAFT enforces at most five hashtags", () => {
   const output = validExplorationOutput({ caption: { body: "BBC Sport 보도에 따르면 루머입니다. https://bbc.test/article/1 #1 #2 #3 #4 #5 #6", cta: "의견" } });
   const result = validateExplorationDraft!(output, evidence, config, new Date("2026-10-12T10:00:00Z"));
   assert(result.errors.some((entry) => entry.code === "EXPLORATION_HASHTAG_LIMIT"));
+});
+
+Deno.test("Exploration DRAFT rejects exact duplicate slide copy used to pad a carousel", () => {
+  const validateExplorationDraft = (qualityGate as unknown as { validateExplorationDraft?: (value: unknown, evidence: EvidenceSnapshot, config: QualityGateConfig, now?: Date) => { valid: boolean; errors: readonly { code: string }[] } }).validateExplorationDraft;
+  const original = validExplorationOutput().slides[1]!;
+  const output = validExplorationOutput({ slides: [
+    validExplorationOutput().slides[0]!,
+    original,
+    { ...original, slide_number: 3 },
+  ] });
+  const result = validateExplorationDraft!(output, evidence, config, new Date("2026-10-12T10:00:00Z"));
+  assert(result.errors.some((entry) => entry.code === "EXPLORATION_DUPLICATE_SLIDE_COPY"));
+  assert(result.errors.some((entry) => entry.code === "EXPLORATION_DUPLICATE_CLAIM"));
 });

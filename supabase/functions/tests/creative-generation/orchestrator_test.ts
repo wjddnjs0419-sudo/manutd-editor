@@ -1,5 +1,5 @@
 import { assertEquals, assert } from "jsr:@std/assert@1.0.8";
-import { runCreativeGeneration, type GenerationDependencies } from "../../creative-generation/orchestrator.ts";
+import { qualityConfig, runCreativeGeneration, type GenerationDependencies } from "../../creative-generation/orchestrator.ts";
 import type { GenerationRepository, GenerationJob, StoredCreativeBrief, CreativeBriefInsert } from "../../creative-generation/repository.ts";
 import type { CandidateEvidenceInput, CreativeBriefOutput, EvidenceSnapshot } from "../../creative-generation/types.ts";
 import type { GenerationConfig } from "../../creative-generation/config.ts";
@@ -33,6 +33,17 @@ const output: CreativeBriefOutput = {
   })),
   caption: { body: "Caption", cta: "Your view?" }, sources: [{ evidence_id: "post:post-1", label: "utdreport" }],
 };
+
+Deno.test("Exploration quality config uses mode-specific bounds while STANDARD remains configured", () => {
+  const news = qualityConfig(config, "EXPLORATION", DEFAULT_EXPLORATION_CONFIG, "NEWS_UPDATE");
+  const analysis = qualityConfig(config, "EXPLORATION", DEFAULT_EXPLORATION_CONFIG, "ANALYSIS_CONTEXT");
+  const match = qualityConfig(config, "EXPLORATION", DEFAULT_EXPLORATION_CONFIG, "MATCH_CONTENT");
+  const standard = qualityConfig(config, "STANDARD", DEFAULT_EXPLORATION_CONFIG, "ANALYSIS_CONTEXT");
+  assertEquals([news.min_slides, news.max_slides], [2, 4]);
+  assertEquals([analysis.min_slides, analysis.max_slides], [4, 6]);
+  assertEquals([match.min_slides, match.max_slides], [3, 5]);
+  assertEquals([standard.min_slides, standard.max_slides], [4, 7]);
+});
 
 function evidence(overrides: Partial<CandidateEvidenceInput> = {}): CandidateEvidenceInput {
   return {
@@ -224,21 +235,31 @@ function explorationCandidate(overrides: Partial<CandidateEvidenceInput> = {}): 
 }
 
 function explorationOutput(mode: CreativeBriefOutput["content_mode"]): CreativeBriefOutput {
-  const report = "BBC Sport 보도에 따르면 맨유의 관심은 아직 루머 단계이며 영입이 확정된 것은 아닙니다.";
+  const statements = [
+    "BBC Sport 보도에 따르면 맨유의 관심은 아직 루머 단계이며 영입이 확정된 것은 아닙니다.",
+    "BBC Sport 보도에 따르면 맨유의 관심설이 전해졌지만 공식 영입 발표는 없습니다.",
+    "BBC Sport 보도에 따르면 현재 확인된 내용은 맨유의 관심 보도입니다.",
+    "BBC Sport 보도에 따르면 관심은 루머로 분류되며 영입 여부는 확정되지 않았습니다.",
+    "BBC Sport 보도에 따르면 관련 영입 발표는 아직 나오지 않았습니다.",
+    "BBC Sport 보도에 따르면 관심 보도와 공식 발표는 구분해야 합니다.",
+  ];
+  const count = mode === "ANALYSIS_CONTEXT" ? 4 : mode === "NEWS_UPDATE" ? 3 : 3;
+  const roles = ["HOOK", "CONTEXT", "KEY_FACT", "IMPLICATION", "KEY_FACT", "IMPLICATION"] as const;
   return {
     ...output,
     content_mode: mode,
     match_phase: mode === "MATCH_CONTENT" ? "LIVE" : null,
     hooks: [1, 2, 3].map((id) => ({ id: `hook-${id}`, text: `BBC Sport 보도: 맨유 관심 루머 ${id}` })),
-    slides: Array.from({ length: 3 }, (_, index) => ({
+    slides: Array.from({ length: count }, (_, index) => ({
       slide_number: index + 1,
-      purpose: index === 0 ? "HOOK" : "DETAIL",
+      purpose: roles[index],
+      role: roles[index],
       headline: `BBC Sport 보도: 맨유 관심 루머 ${index + 1}`,
-      body: `${report} https://bbc.test/article/1`,
-      claims: [{ claim_id: `claim-${index + 1}`, type: "FACT" as const, text: report, evidence_ids: ["article:observation-1"] }],
+      body: `${statements[index]} https://bbc.test/article/1`,
+      claims: [{ claim_id: `claim-${index + 1}`, type: "FACT" as const, text: statements[index], evidence_ids: ["article:observation-1"] }],
       visual_direction: { subject: "Manchester United", image_type: "photo", layout_intent: "clear", stat_emphasis: null, text_hierarchy: ["headline", "body"] },
     })),
-    caption: { body: `${report} https://bbc.test/article/1 #ManUtd #MUFC`, cta: "의견을 남겨주세요" },
+    caption: { body: `${statements[0]} https://bbc.test/article/1 #ManUtd #MUFC`, cta: "의견을 남겨주세요" },
     sources: [{ evidence_id: "article:observation-1", label: "BBC Sport", url: "https://bbc.test/article/1" }],
     editor_warning: "미승인 출처 보도입니다. 편집자가 원문과 사실을 확인해야 합니다.",
   };
@@ -264,14 +285,16 @@ Deno.test("Exploration is disabled unless the explicit feature flag is enabled",
 Deno.test("Exploration intent always saves all content modes as DRAFT", async () => {
   for (const mode of ["NEWS_UPDATE", "ANALYSIS_CONTEXT", "MATCH_CONTENT"] as const) {
     const repository = new MemoryRepository();
-    repository.candidate = explorationCandidate();
+    repository.candidate = explorationCandidate({
+      posts: [{ ...explorationCandidate().posts[0]!, caption: "Manchester United transfer update" }],
+    });
     const deps = {
       ...dependencies(repository),
       explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
       provider: { ...dependencies(repository).provider, classify: async () => ({ content_mode: mode, match_phase: mode === "MATCH_CONTENT" ? "LIVE" as const : null, confidence: 0.95, reason_code: "MODEL" }), generate: async () => explorationOutput(mode) },
     } as unknown as GenerationDependencies;
     const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" } as never, deps);
-    assertEquals(result.status, "DRAFT", mode);
+    assertEquals(result.status, "DRAFT", `${mode}: ${JSON.stringify(result)}`);
     assertEquals(repository.briefs[0]?.status, "DRAFT", mode);
   }
 });

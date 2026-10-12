@@ -21,6 +21,7 @@ export interface QualityGateConfig {
   readonly style_version?: string;
   readonly enable_style_validator?: boolean;
   readonly exploration_config?: ExplorationConfig;
+  readonly exploration_slide_bounds?: { readonly min: number; readonly max: number };
 }
 
 export interface ValidationError {
@@ -79,9 +80,10 @@ function unsupportedConfirmation(modality: string | undefined, value: string): b
 }
 
 function styleDraft(value: CreativeBriefOutput, evidence: EvidenceSnapshot): ManutdEditorCarouselDraft {
+  const defaultRoles = ["HOOK", "CONTEXT", "KEY_FACT", "IMPLICATION", "KEY_FACT", "IMPLICATION"] as const;
   const slides = value.slides.map((slide, index) => ({
     index: typeof slide.index === "number" ? slide.index : index + 1,
-    role: slide.role ?? (index === 0 ? "HOOK" : index === 1 ? "CONTEXT" : index === 2 ? "KEY_FACT" : "IMPLICATION"),
+    role: slide.role ?? defaultRoles[index] ?? "IMPLICATION",
     headline: slide.headline,
     highlight: slide.highlight ?? null,
     body: typeof slide.body === "string" && slide.body.trim() ? slide.body : null,
@@ -233,7 +235,11 @@ export function validateCreativeBrief(
     if (output.style_profile !== config.style_profile || output.style_version !== config.style_version) {
       errors.push(error("STYLE_IDENTITY", "style_profile"));
     }
-    const styleResult = validateManutdEditorDraft(styleDraft(output as unknown as CreativeBriefOutput, evidence), new Set(evidence.evidence_ids));
+    const styleResult = validateManutdEditorDraft(
+      styleDraft(output as unknown as CreativeBriefOutput, evidence),
+      new Set(evidence.evidence_ids),
+      intent === "EXPLORATION" ? config.exploration_slide_bounds ?? { min: config.min_slides, max: config.max_slides } : undefined,
+    );
     for (const entry of styleResult.errors) errors.push(error(`STYLE_${entry.code}`, entry.path ?? "root"));
   }
 
@@ -256,6 +262,28 @@ function validateExplorationOutput(
     return;
   }
   const articleById = new Map<string, ExplorationArticleEvidence>(eligibleArticles.map((article) => [article.evidence_id, article]));
+  if (Array.isArray(output.slides)) {
+    const seenCopy = new Set<string>();
+    const seenClaims = new Set<string>();
+    output.slides.forEach((slide, index) => {
+      if (!object(slide)) return;
+      const normalized = [slide.headline, slide.body, slide.highlight]
+        .map(safeText).join(" ").normalize("NFKC").toLocaleLowerCase("ko-KR")
+        .replace(/https:\/\/\S+/gu, "").replace(/[\p{P}\p{S}\s]+/gu, "");
+      if (!normalized) return;
+      if (seenCopy.has(normalized)) errors.push(error("EXPLORATION_DUPLICATE_SLIDE_COPY", `slides[${index}]`));
+      seenCopy.add(normalized);
+      if (Array.isArray(slide.claims)) {
+        for (const claim of slide.claims.filter(object)) {
+          const claimText = safeText(claim.text).normalize("NFKC").toLocaleLowerCase("ko-KR")
+            .replace(/https:\/\/\S+/gu, "").replace(/[\p{P}\p{S}\s]+/gu, "");
+          if (!claimText) continue;
+          if (seenClaims.has(claimText)) errors.push(error("EXPLORATION_DUPLICATE_CLAIM", `slides[${index}].claims`));
+          seenClaims.add(claimText);
+        }
+      }
+    });
+  }
   const claims = Array.isArray(output.slides)
     ? output.slides.flatMap((slide) => object(slide) && Array.isArray(slide.claims) ? slide.claims.filter(object).map((claim) => ({ slide, claim })) : [])
     : [];

@@ -24,6 +24,22 @@ def brief(cover="알렉스 퍼거슨 경의 올드 트래퍼드 복귀 장면",
     }
 
 class BriefToRequest(unittest.TestCase):
+    def test_creates_one_subject_request_per_news_page_with_legacy_first_two_slots(self):
+        value = brief()
+        value["slides_json"]["slides"] = [
+            value["slides_json"]["slides"][0],
+            value["slides_json"]["slides"][1],
+            {"slide_number": 3, "visual_direction": {"subject": "브루노 페르난데스의 경기 장면"}},
+            {"slide_number": 4, "visual_direction": {"subject": "알렉스 퍼거슨 감독의 인터뷰"}},
+        ]
+        result = build_request(value, ["i.guim.co.uk"])
+        self.assertEqual([(row["slot"], row.get("slide_number")) for row in result["slots"]], [
+            ("COVER_NEWS", 1), ("BODY_NEWS", 2), ("BODY_NEWS", 3), ("BODY_NEWS", 4),
+        ])
+        self.assertEqual(result["_provenance"]["subject_names"], [
+            "Sir Alex Ferguson", "Sir Alex Ferguson", "Bruno Fernandes", "Sir Alex Ferguson",
+        ])
+
     def test_extracts_canonical_url_prioritized_original_and_explicit_player_aliases(self):
         result=build_request(brief(),["i.guim.co.uk","media.manutd.com"])
         self.assertEqual(result["publisher_article_urls"][0],

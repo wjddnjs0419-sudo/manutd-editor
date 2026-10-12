@@ -4,7 +4,7 @@ import { buildEvidenceSnapshot, verifiedNewsSources } from "./evidence.ts";
 import { canonicalJson, hashGenerationInput, sha256 } from "./fingerprint.ts";
 import { generateWithOneRepair } from "./quality_gate.ts";
 import { businessDate } from "../_shared/m6/business_date.ts";
-import { assessExplorationSnapshot, DEFAULT_EXPLORATION_CONFIG, explorationFingerprint, type ExplorationConfig } from "./exploration.ts";
+import { assessExplorationSnapshot, DEFAULT_EXPLORATION_CONFIG, explorationFingerprint, explorationSlideBounds, type ExplorationConfig } from "./exploration.ts";
 import type { CreativeGenerationProvider, ProviderUsageStats } from "./provider.ts";
 import type { GenerationRepository, GenerationJob, StoredCreativeBrief, TriggerType } from "./repository.ts";
 import type { CandidateEvidenceInput, ContentMode, CreativeBriefOutput, EvidenceSnapshot, ExplorationArticleEvidenceInput, GenerationIntent } from "./types.ts";
@@ -40,16 +40,17 @@ function evidenceText(snapshot: EvidenceSnapshot, intent: GenerationIntent): str
   return [snapshot.story.canonical_title ?? "", ...snapshot.posts.map((post) => post.caption ?? ""), ...articles].filter(Boolean).join("\n");
 }
 
-function qualityConfig(config: GenerationConfig, intent: GenerationIntent, explorationConfig: ExplorationConfig) {
+export function qualityConfig(config: GenerationConfig, intent: GenerationIntent, explorationConfig: ExplorationConfig, mode: ContentMode) {
   const value = config.quality_gate_config;
+  const explorationBounds = explorationSlideBounds(mode);
   return {
-    min_slides: intent === "EXPLORATION" ? explorationConfig.minSlides : Number(value.min_slides ?? 4),
-    max_slides: intent === "EXPLORATION" ? explorationConfig.maxSlides : Number(value.max_slides ?? 7), hook_count: Number(value.hook_count ?? 3),
+    min_slides: intent === "EXPLORATION" ? explorationBounds.min : Number(value.min_slides ?? 4),
+    max_slides: intent === "EXPLORATION" ? explorationBounds.max : Number(value.max_slides ?? 7), hook_count: Number(value.hook_count ?? 3),
     max_repair_attempts: Number(value.max_repair_attempts ?? 1), require_visual_direction: value.require_visual_direction !== false,
     style_profile: typeof value.style_profile === "string" ? value.style_profile : undefined,
     style_version: typeof value.style_version === "string" ? value.style_version : undefined,
     enable_style_validator: value.style_profile === "manutd_editor" && value.style_version === "manutd-editor-v1",
-    ...(intent === "EXPLORATION" ? { exploration_config: explorationConfig } : {}),
+    ...(intent === "EXPLORATION" ? { exploration_config: explorationConfig, exploration_slide_bounds: explorationBounds } : {}),
   };
 }
 
@@ -181,7 +182,7 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
     await dependencies.repository.updateJob(job.id, { status: "FAILED_PROVIDER", last_error_category: "FAILED_PROVIDER", completed_at: runAt.toISOString(), lease_owner: null, lease_expires_at: null, ...currentUsage() });
     return { status: "FAILED_PROVIDER", candidate_id: trigger.candidate_id, input_fingerprint: fingerprint, error_codes: ["FAILED_PROVIDER"] };
   }
-  const checked = await generateWithOneRepair(dependencies.provider, generated, providerInput, snapshot, qualityConfig(config, intent, reviewConfig), intent, runAt);
+  const checked = await generateWithOneRepair(dependencies.provider, generated, providerInput, snapshot, qualityConfig(config, intent, reviewConfig, mode), intent, runAt);
   if (!checked.ok || !checked.output) {
     await dependencies.repository.updateJob(job.id, { status: "FAILED_VALIDATION", repair_attempted: checked.repair_attempted, last_error_category: "FAILED_VALIDATION", completed_at: runAt.toISOString(), lease_owner: null, lease_expires_at: null, ...currentUsage() });
     return { status: "FAILED_VALIDATION", candidate_id: trigger.candidate_id, input_fingerprint: fingerprint, error_codes: checked.validation.errors.map((entry) => entry.code) };
@@ -193,7 +194,7 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
   const brief = await dependencies.repository.insertCreativeBrief({
     candidate_id: trigger.candidate_id, version: revision, headline: output.hooks[0]?.text ?? output.angle, angle: output.angle, format: "INSTAGRAM_CAROUSEL", slide_count: output.slides.length,
     slides_json: { slides: output.slides, sources: output.sources, key_takeaway: output.key_takeaway, editor_warning: output.editor_warning ?? null, internal_grounding: output.internal_grounding ?? null, ...(intent === "EXPLORATION" ? { exploration_articles: eligibleExplorationArticles } : {}) }, design_json: { slides: output.slides.map((slide) => ({ slide_number: slide.slide_number, visual_direction: slide.visual_direction })) }, caption_draft: output.caption.body, cta: output.caption.cta, status: briefStatus, content_mode: output.content_mode, match_phase: output.match_phase, generation_config_id: config.id, input_fingerprint: fingerprint, evidence_snapshot: snapshot, hooks_json: output.hooks, grounding_json: { claims: output.slides.flatMap((slide) => slide.claims), internal_grounding: output.internal_grounding ?? null }, generation_metadata: { config_version: config.version, classifier_config_version: config.classifier_config.version, classification_source: classification.source, trigger_type: trigger.trigger_type, ...(intent === "EXPLORATION" ? { generation_intent: intent, exploration_fingerprint: fingerprint, ...(historicalReview ? { historical_review: true } : {}) } : {}), ranking_eligible: rankingEligible, provider_usage: usage }, generation_quality: output.generation_quality, model_name: String(config.generation_config.model), generated_at: runAt.toISOString(),
-    style_profile: output.style_profile ?? (qualityConfig(config, intent, reviewConfig).style_profile === "manutd_editor" ? "manutd_editor" : undefined), style_version: output.style_version ?? qualityConfig(config, intent, reviewConfig).style_version,
+    style_profile: output.style_profile ?? (qualityConfig(config, intent, reviewConfig, mode).style_profile === "manutd_editor" ? "manutd_editor" : undefined), style_version: output.style_version ?? qualityConfig(config, intent, reviewConfig, mode).style_version,
     ...(intent === "EXPLORATION" ? { exploration_fingerprint: fingerprint } : {}), provider_calls: usage.provider_calls, input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, estimated_cost_usd: usage.estimated_cost_usd,
   });
   await dependencies.repository.updateJob(job.id, { status: briefStatus, creative_brief_id: brief.id, repair_attempted: checked.repair_attempted, completed_at: runAt.toISOString(), lease_owner: null, lease_expires_at: null, ...usage });

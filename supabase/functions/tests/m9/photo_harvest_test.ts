@@ -23,8 +23,8 @@ Deno.test("harvests article and official photos and selects the stronger cover c
    publisher_article_urls:["https://sports.example.org/bruno"],
    official_article_urls:["https://www.manutd.com/en/news/bruno"],
    slots:[
-     {slot:"COVER_NEWS",subject_aliases:["Bruno Fernandes"]},
-     {slot:"PLAYER_PROFILE",subject_aliases:["Bruno Fernandes"]},
+     {slot:"COVER_NEWS",slide_number:1,subject_aliases:["Bruno Fernandes"]},
+     {slot:"PLAYER_PROFILE",slide_number:2,subject_aliases:["Bruno Fernandes"]},
    ],
  },{
    allowedImageHosts:["cdn.example.org"],now:new Date("2026-10-11T14:00:00Z"),
@@ -42,6 +42,7 @@ Deno.test("harvests article and official photos and selects the stronger cover c
  assertEquals(out.candidate_count,2);
  assertEquals(out.probed_count,2);
  assertEquals(out.selections.length,2);
+ assertEquals(out.selections.map(selection=>selection.slide_number),[1,2]);
  assertEquals(out.selections[0]?.selected?.candidate.origin,"OFFICIAL_CLUB");
  assertEquals(out.selections[0]?.selected?.projected_crop_scale,0.9);
  assertEquals(out.selections[1]?.selected?.candidate.origin,"OFFICIAL_CLUB");

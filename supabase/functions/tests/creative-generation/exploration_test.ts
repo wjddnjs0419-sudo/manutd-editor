@@ -61,3 +61,23 @@ Deno.test("Exploration rejects an article with only an incidental United mention
   assertEquals(result.eligible, false);
   assertEquals(result.reason, "UNITED_SIGNAL_NOT_CENTRAL");
 });
+
+Deno.test("Exploration slide bounds vary by content mode", async () => {
+  const { explorationSlideBounds } = await import("../../creative-generation/exploration.ts");
+  assertEquals(explorationSlideBounds("NEWS_UPDATE"), { min: 2, max: 4 });
+  assertEquals(explorationSlideBounds("ANALYSIS_CONTEXT"), { min: 4, max: 6 });
+  assertEquals(explorationSlideBounds("MATCH_CONTENT"), { min: 3, max: 5 });
+});
+
+Deno.test("Exploration prompts set mode-specific bounds and concise caption requirements", async () => {
+  const { generationPrompt } = await import("../../creative-generation/prompts.ts");
+  const simpleNews = generationPrompt("NEWS_UPDATE", null, {}, "EXPLORATION");
+  const analysis = generationPrompt("ANALYSIS_CONTEXT", null, {}, "EXPLORATION");
+  const match = generationPrompt("MATCH_CONTENT", "POST_MATCH", {}, "EXPLORATION");
+  assertEquals(simpleNews.includes("2–4 concise Korean content slides"), true);
+  assertEquals(analysis.includes("4–6 concise Korean content slides"), true);
+  assertEquals(match.includes("3–5 concise Korean content slides"), true);
+  assertEquals(analysis.includes("do not pad to the maximum"), true);
+  assertEquals(analysis.includes("summarizes the carousel in fresh wording"), true);
+  assertEquals(analysis.includes("Build three or four meaningful slides"), false);
+});

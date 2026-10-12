@@ -24,6 +24,7 @@ function hasHangul(value: string): boolean {
 export function validateManutdEditorDraft(
   draft: ManutdEditorCarouselDraft,
   availableEvidenceIds: ReadonlySet<string>,
+  slideBounds?: { readonly min: number; readonly max: number },
 ): StyleValidationResult {
   const errors: StyleValidationError[] = [];
 
@@ -33,11 +34,15 @@ export function validateManutdEditorDraft(
   if (!draft.story_id.trim()) add(errors, "STORY_ID_MISSING", "story_id is required.");
 
   const slideCount = draft.slides.length;
-  if (slideCount < MANUTD_EDITOR_STYLE_PROFILE.default_slide_count.min || slideCount > MANUTD_EDITOR_STYLE_PROFILE.default_slide_count.max) {
-    add(errors, "SLIDE_COUNT", "A completed ManUtd Editor carousel must contain three or four meaningful slides.", "slides");
+  const bounds = slideBounds ?? MANUTD_EDITOR_STYLE_PROFILE.default_slide_count;
+  if (slideCount < bounds.min || slideCount > bounds.max) {
+    add(errors, "SLIDE_COUNT", "The carousel slide count is outside its configured editorial bounds.", "slides");
   }
 
-  const expectedRoles = slideCount === 4 ? MANUTD_EDITOR_STYLE_PROFILE.roles : MANUTD_EDITOR_STYLE_PROFILE.roles.slice(0, 3);
+  const explorationRoles = ["HOOK", "CONTEXT", "KEY_FACT", "IMPLICATION", "KEY_FACT", "IMPLICATION"] as const;
+  const expectedRoles = slideBounds
+    ? explorationRoles.slice(0, slideCount)
+    : slideCount === 4 ? MANUTD_EDITOR_STYLE_PROFILE.roles : MANUTD_EDITOR_STYLE_PROFILE.roles.slice(0, 3);
   draft.slides.forEach((slide, index) => {
     if (slide.index !== index + 1) add(errors, "SLIDE_INDEX", "Slide indexes must be sequential.", `slides[${index}].index`);
     if (slide.role !== expectedRoles[index]) add(errors, "ROLE_ORDER", "Slides must follow HOOK, CONTEXT, KEY_FACT, then optional IMPLICATION.", `slides[${index}].role`);

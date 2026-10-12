@@ -122,6 +122,166 @@ class TestAcquire(unittest.TestCase):
         self.assertIn("faces", result["cover"])
         self.assertIn("quality", result["cover"])
 
+    def test_assigns_page_photos_and_reuses_only_when_unique_images_run_out(self):
+        gathered = payload()
+        second = assessment("https://photos.example.org/photo-2.jpg")
+        third = assessment("https://photos.example.org/photo-3.jpg")
+        gathered["selections"] = [
+            {"slot": "COVER_NEWS", "slide_number": 1, "selected": assessment("https://photos.example.org/photo-1.jpg")},
+            {"slot": "BODY_NEWS", "slide_number": 2, "shortlist": [second, third], "selected": second},
+            {"slot": "BODY_NEWS", "slide_number": 3, "shortlist": [third, second], "selected": third},
+            {"slot": "BODY_NEWS", "slide_number": 4, "shortlist": [
+                assessment("https://photos.example.org/photo-1.jpg"), second, third,
+            ], "selected": assessment("https://photos.example.org/photo-1.jpg")},
+        ]
+        colors = {
+            "photo-1.jpg": "red", "photo-2.jpg": "green", "photo-3.jpg": "blue",
+        }
+
+        def fake(url, hosts):
+            validate_cdn_url(url, hosts)
+            image = Image.new("RGB", (1800, 1400), colors[url.rsplit("/", 1)[-1]])
+            draw = ImageDraw.Draw(image)
+            for x in range(0, image.width, 16):
+                draw.rectangle((x, 0, min(image.width, x + 7), image.height),
+                               fill="#ffffff" if (x // 16) % 2 else "#151515")
+            content = BytesIO()
+            image.save(content, "JPEG", quality=95)
+            return content.getvalue(), ".jpg"
+
+        result = self.run_choose(gathered, fake)
+        self.assertEqual([page["slide_number"] for page in result["pages"]], [1, 2, 3, 4])
+        self.assertEqual(len({page["source_sha256"] for page in result["pages"]}), 3)
+        self.assertEqual([page["image_reuse_status"] for page in result["pages"]], [
+            "UNIQUE", "UNIQUE", "UNIQUE", "REUSED_EXACT",
+        ])
+        self.assertEqual(result["photo_shortage"]["reused_page_count"], 1)
+        self.assertEqual(result["body"]["file"], result["pages"][1]["file"])
+
+    def test_one_photo_is_reused_for_every_news_page_without_failing(self):
+        gathered = payload()
+        one = assessment("https://photos.example.org/only.jpg")
+        gathered["selections"] = [
+            {"slot": "COVER_NEWS", "slide_number": 1, "selected": one},
+            *[
+                {"slot": "BODY_NEWS", "slide_number": number, "selected": one}
+                for number in (2, 3, 4)
+            ],
+        ]
+        result = self.run_choose(gathered)
+        self.assertEqual([row["image_reuse_status"] for row in result["pages"]], [
+            "UNIQUE", "REUSED_EXACT", "REUSED_EXACT", "REUSED_EXACT",
+        ])
+        self.assertEqual(result["photo_shortage"]["unique_image_count"], 1)
+        self.assertEqual(result["photo_shortage"]["reused_page_count"], 3)
+
+    def test_two_unique_photos_are_reused_only_after_both_are_assigned(self):
+        gathered = payload()
+        photo_a = assessment("https://photos.example.org/photo-a.jpg")
+        photo_b = assessment("https://photos.example.org/photo-b.jpg")
+        gathered["selections"] = [
+            {"slot": "COVER_NEWS", "slide_number": 1, "selected": photo_a},
+            {"slot": "BODY_NEWS", "slide_number": 2, "selected": photo_b},
+            {"slot": "BODY_NEWS", "slide_number": 3, "selected": photo_a},
+            {"slot": "BODY_NEWS", "slide_number": 4, "selected": photo_b},
+        ]
+        variant = Image.new("RGB", (1800, 1400), "#134cba")
+        draw = ImageDraw.Draw(variant)
+        for x in range(0, variant.width, 24):
+            draw.rectangle((x, 0, min(x + 9, variant.width), variant.height), fill="#f3c525")
+        encoded = BytesIO()
+        variant.save(encoded, "JPEG", quality=94)
+        assets = {
+            "photo-a.jpg": (self.photo, ".jpg"),
+            "photo-b.jpg": (encoded.getvalue(), ".jpg"),
+        }
+
+        result = self.run_choose(gathered, lambda url, _hosts: assets[url.rsplit("/", 1)[-1]])
+
+        self.assertEqual(result["photo_shortage"]["unique_image_count"], 2)
+        self.assertEqual(result["photo_shortage"]["reused_page_count"], 2)
+        self.assertEqual([row["image_reuse_status"] for row in result["pages"]], [
+            "UNIQUE", "UNIQUE", "REUSED_EXACT", "REUSED_EXACT",
+        ])
+        self.assertEqual([row.get("duplicate_of_slide_number") for row in result["pages"]], [
+            None, None, 1, 2,
+        ])
+
+    def test_five_unique_photos_cover_five_pages_without_reuse(self):
+        gathered = payload()
+        palette = ["#b02020", "#168d27", "#1b28ad", "#e7d219", "#a516aa"]
+        selections = []
+        assets = {}
+        for number, color in enumerate(palette, start=1):
+            filename = f"photo-{number}.jpg"
+            row = {"slot": "COVER_NEWS" if number == 1 else "BODY_NEWS",
+                   "slide_number": number, "selected": assessment(f"https://photos.example.org/{filename}")}
+            selections.append(row)
+            image = Image.new("RGB", (1800, 1400), color)
+            draw = ImageDraw.Draw(image)
+            for x in range(number * 3, image.width, 31 + number):
+                draw.rectangle((x, 0, min(x + 10, image.width), image.height), fill="#f4f4f4")
+            encoded = BytesIO()
+            image.save(encoded, "JPEG", quality=94)
+            assets[filename] = (encoded.getvalue(), ".jpg")
+        gathered["selections"] = selections
+
+        result = self.run_choose(gathered, lambda url, _hosts: assets[url.rsplit("/", 1)[-1]])
+
+        self.assertEqual(result["photo_shortage"]["unique_image_count"], 5)
+        self.assertEqual(result["photo_shortage"]["reused_page_count"], 0)
+        self.assertEqual([row["image_reuse_status"] for row in result["pages"]], ["UNIQUE"] * 5)
+
+    def test_detects_same_photo_bytes_from_different_cdn_urls_and_records_reuse(self):
+        gathered = payload()
+        gathered["selections"] = [
+            {"slot": "COVER_NEWS", "slide_number": 1, "selected": assessment("https://photos.example.org/original.jpg")},
+            {"slot": "BODY_NEWS", "slide_number": 2, "selected": assessment("https://photos.example.org/variant.jpg")},
+        ]
+        requests = []
+
+        def fake(url, hosts):
+            requests.append(url)
+            return self.photo, ".jpg"
+
+        result = self.run_choose(gathered, fake)
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(result["pages"][0]["source_sha256"], result["pages"][1]["source_sha256"])
+        self.assertEqual(result["pages"][1]["image_reuse_status"], "REUSED_EXACT")
+        self.assertEqual(result["pages"][1]["duplicate_of_slide_number"], 1)
+
+    def test_perceptual_hash_detects_resized_reencoded_photo_from_another_cdn_url(self):
+        gathered = payload()
+        gathered["selections"] = [
+            {"slot": "COVER_NEWS", "slide_number": 1, "selected": assessment("https://photos.example.org/original.jpg")},
+            {"slot": "BODY_NEWS", "slide_number": 2, "selected": assessment("https://photos.example.org/resize.jpg")},
+        ]
+        resized = Image.open(BytesIO(self.photo)).resize((900, 700), Image.Resampling.LANCZOS)
+        encoded = BytesIO()
+        resized.save(encoded, "JPEG", quality=84)
+        variants = {"original.jpg": (self.photo, ".jpg"), "resize.jpg": (encoded.getvalue(), ".jpg")}
+
+        def fake(url, hosts):
+            return variants[url.rsplit("/", 1)[-1]]
+
+        result = self.run_choose(gathered, fake)
+        self.assertEqual(result["pages"][1]["image_reuse_status"], "REUSED_PERCEPTUAL")
+        body_attempt = result["candidate_attempts"]["body"][-1]
+        self.assertEqual(body_attempt["status"], "REUSED")
+        self.assertIn("REUSED_PERCEPTUAL", body_attempt["reasons"])
+
+    def test_zero_photos_returns_review_required_state_without_inventing_assets(self):
+        gathered = payload()
+        gathered["selections"] = [
+            {"slot": "COVER_NEWS", "slide_number": 1, "selected": None, "shortlist": []},
+            {"slot": "BODY_NEWS", "slide_number": 2, "selected": None, "shortlist": []},
+        ]
+        result = self.run_choose(gathered)
+        self.assertEqual(result["selection_status"], "REVIEW_REQUIRED")
+        self.assertEqual(result["pages"], [])
+        self.assertEqual(result["photo_shortage"]["missing_slide_numbers"], [1, 2])
+        self.assertNotIn("cover", result)
+
     def test_tries_next_candidate_when_crop_gate_fails(self):
         gathered = payload()
         row = gathered["selections"][0]

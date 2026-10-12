@@ -9,8 +9,9 @@
  *
  * request.json requires:
  * { publisher_article_urls: [...], official_article_urls: [...],
- *   slots: [{ slot:"COVER_NEWS", subject_aliases:["Michael Carrick"] },
- *           { slot:"BODY_NEWS", subject_aliases:["Dominic Solanke"] }],
+ *   slots: [{ slot:"COVER_NEWS", slide_number:1, subject_aliases:["Michael Carrick"] },
+ *           { slot:"BODY_NEWS", slide_number:2, subject_aliases:["Dominic Solanke"] },
+ *           { slot:"BODY_NEWS", slide_number:3, subject_aliases:["Michael Carrick"] }],
  *   allowed_image_hosts:["i.guim.co.uk"] }
  *
  * CDN hosts are explicit trusted configuration, not derived from fetched HTML.
@@ -43,13 +44,14 @@ export function validateM9SourceRequest(value: unknown): {
     !googleOriginals.every((url) => typeof url === "string" && isGoogleNewsArticleUrl(url))) {
     throw new Error("M9_SOURCE_PROVENANCE_INVALID");
   }
-  const validSlots = ["COVER_NEWS", "BODY_NEWS"] as const;
-  if (value.slots.length !== 2 ||
-      value.slots[0]?.slot !== validSlots[0] ||
-      value.slots[1]?.slot !== validSlots[1] ||
-      !value.slots.every(s => object(s) && Array.isArray(s.subject_aliases) &&
+  const slotsValid = value.slots.length >= 2 && value.slots.length <= 6 &&
+      value.slots[0]?.slot === "COVER_NEWS" &&
+      value.slots.slice(1).every(s => object(s) && s.slot === "BODY_NEWS") &&
+      value.slots.every((s, index) => object(s) && Array.isArray(s.subject_aliases) &&
         s.subject_aliases.length >= 1 && s.subject_aliases.length <= 6 &&
-        s.subject_aliases.every((name: unknown) => typeof name === "string" && name.trim().length >= 4))) {
+        s.subject_aliases.every((name: unknown) => typeof name === "string" && name.trim().length >= 4) &&
+        (s.slide_number === undefined || s.slide_number === index + 1));
+  if (!slotsValid) {
     throw new Error("M9_SUBJECT_ALIASES_INVALID");
   }
   const hosts = value.allowed_image_hosts;
