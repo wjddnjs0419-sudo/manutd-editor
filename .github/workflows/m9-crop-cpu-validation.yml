@@ -31,6 +31,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends --yes libegl1 libgles2
 
+      - name: Load checksum-pinned Pretendard fonts for renderer integration tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/m9-test-fonts"
+          curl --fail --show-error --silent --location --retry 2 --max-time 90 \
+            "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/Pretendard-Bold.otf" \
+            --output "$RUNNER_TEMP/m9-test-fonts/Pretendard-Bold.otf"
+          echo "2e91915fab54df71cc9598ebf608b2bdb54c6fe3c066ac61dff0bc44fca71cc7  $RUNNER_TEMP/m9-test-fonts/Pretendard-Bold.otf" | sha256sum --check --status
+          curl --fail --show-error --silent --location --retry 2 --max-time 90 \
+            "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/Pretendard-SemiBold.otf" \
+            --output "$RUNNER_TEMP/m9-test-fonts/Pretendard-SemiBold.otf"
+          echo "c89bc43027dc7cde5726e96223376f8eec09302b2fc1f8147fd5b57cfc376118  $RUNNER_TEMP/m9-test-fonts/Pretendard-SemiBold.otf" | sha256sum --check --status
+          {
+            echo "M9_TEST_FONT=$RUNNER_TEMP/m9-test-fonts/Pretendard-Bold.otf"
+            echo "M9_TEST_BODY_FONT=$RUNNER_TEMP/m9-test-fonts/Pretendard-SemiBold.otf"
+          } >> "$GITHUB_ENV"
+
       - name: Verify MediaPipe Linux runtime linkage
         run: |
           library="$(python -c 'from importlib.resources import files; print(files("mediapipe.tasks.c") / "libmediapipe.so")')"
