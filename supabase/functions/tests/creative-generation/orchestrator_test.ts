@@ -5,6 +5,13 @@ import type { CandidateEvidenceInput, CreativeBriefOutput, EvidenceSnapshot } fr
 import type { GenerationConfig } from "../../creative-generation/config.ts";
 import { DEFAULT_EXPLORATION_CONFIG } from "../../creative-generation/exploration.ts";
 
+const EXPLORATION_COST_CONFIG = {
+  ...DEFAULT_EXPLORATION_CONFIG,
+  enabled: true,
+  inputCostPerMillionUsd: 1,
+  outputCostPerMillionUsd: 2,
+};
+
 const config = {
   id: "config-1",
   version: "m5-v1",
@@ -43,6 +50,8 @@ Deno.test("Exploration quality config uses mode-specific bounds while STANDARD r
   assertEquals([analysis.min_slides, analysis.max_slides], [4, 6]);
   assertEquals([match.min_slides, match.max_slides], [3, 5]);
   assertEquals([standard.min_slides, standard.max_slides], [4, 7]);
+  assertEquals(news.max_repair_attempts, 0);
+  assertEquals(standard.max_repair_attempts, 1);
 });
 
 function evidence(overrides: Partial<CandidateEvidenceInput> = {}): CandidateEvidenceInput {
@@ -282,6 +291,68 @@ Deno.test("Exploration is disabled unless the explicit feature flag is enabled",
   assertEquals(providerCalls, 0);
 });
 
+Deno.test("Exploration refuses generation until both cost rates are configured", async () => {
+  const repository = new MemoryRepository();
+  repository.candidate = explorationCandidate();
+  let providerCalls = 0;
+  const result = await runCreativeGeneration(
+    { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" },
+    dependencies(repository, {
+      explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true, inputCostPerMillionUsd: null, outputCostPerMillionUsd: null },
+      provider: {
+        ...dependencies(repository).provider,
+        classify: async () => { providerCalls += 1; return { content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }; },
+        generate: async () => { providerCalls += 1; return explorationOutput("ANALYSIS_CONTEXT"); },
+      },
+    }),
+  );
+  assertEquals(result.status, "EXPLORATION_COST_RATES_REQUIRED");
+  assertEquals(providerCalls, 0);
+  assertEquals(repository.jobs.length, 0);
+});
+
+Deno.test("Exploration gives the classifier a zero-retry request budget", async () => {
+  const repository = new MemoryRepository();
+  repository.candidate = explorationCandidate({
+    posts: [{ ...explorationCandidate().posts[0]!, caption: "Manchester United transfer report" }],
+  });
+  let classifierOptions: unknown;
+  const result = await runCreativeGeneration(
+    { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" },
+    dependencies(repository, {
+      explorationConfig: EXPLORATION_COST_CONFIG,
+      provider: {
+        ...dependencies(repository).provider,
+        classify: async (_text: string, _config: unknown, options: unknown) => {
+          classifierOptions = options;
+          return { content_mode: "ANALYSIS_CONTEXT" as const, match_phase: null, confidence: 0.95, reason_code: "MODEL" };
+        },
+        generate: async () => explorationOutput("ANALYSIS_CONTEXT"),
+      },
+    }),
+  );
+  assertEquals(result.status, "DRAFT");
+  assertEquals(classifierOptions, { maxRetries: 0 });
+});
+
+Deno.test("Exploration fails validation without a paid repair request", async () => {
+  const repository = new MemoryRepository();
+  repository.candidate = explorationCandidate();
+  let repairCalls = 0;
+  const deps = dependencies(repository, {
+    explorationConfig: EXPLORATION_COST_CONFIG,
+    provider: {
+      ...dependencies(repository).provider,
+      classify: async () => ({ content_mode: "ANALYSIS_CONTEXT" as const, match_phase: null, confidence: 0.95, reason_code: "MODEL" }),
+      generate: async () => ({ ...explorationOutput("ANALYSIS_CONTEXT"), hooks: [] }),
+      repair: async () => { repairCalls += 1; return explorationOutput("ANALYSIS_CONTEXT"); },
+    },
+  });
+  const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, deps);
+  assertEquals(result.status, "FAILED_VALIDATION");
+  assertEquals(repairCalls, 0);
+});
+
 Deno.test("Exploration intent always saves all content modes as DRAFT", async () => {
   for (const mode of ["NEWS_UPDATE", "ANALYSIS_CONTEXT", "MATCH_CONTENT"] as const) {
     const repository = new MemoryRepository();
@@ -290,7 +361,7 @@ Deno.test("Exploration intent always saves all content modes as DRAFT", async ()
     });
     const deps = {
       ...dependencies(repository),
-      explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
+      explorationConfig: EXPLORATION_COST_CONFIG,
       provider: { ...dependencies(repository).provider, classify: async () => ({ content_mode: mode, match_phase: mode === "MATCH_CONTENT" ? "LIVE" as const : null, confidence: 0.95, reason_code: "MODEL" }), generate: async () => explorationOutput(mode) },
     } as unknown as GenerationDependencies;
     const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" } as never, deps);
@@ -308,7 +379,7 @@ Deno.test("Exploration blocks missing article body and archived stories before a
     repository.candidate = candidate;
     let providerCalls = 0;
     const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, dependencies(repository, {
-      explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
+      explorationConfig: EXPLORATION_COST_CONFIG,
       provider: { ...dependencies(repository).provider, classify: async () => { providerCalls += 1; return { content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }; }, generate: async () => { providerCalls += 1; return explorationOutput("ANALYSIS_CONTEXT"); } },
     }));
     assertEquals(result.status, "BLOCKED_EVIDENCE");
@@ -320,7 +391,7 @@ Deno.test("Exploration remains DRAFT for a fresh article attached to a STALE sto
   const repository = new MemoryRepository();
   repository.candidate = explorationCandidate({ story: { ...explorationCandidate().story, status: "STALE" } });
   const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, dependencies(repository, {
-    explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
+    explorationConfig: EXPLORATION_COST_CONFIG,
     provider: { ...dependencies(repository).provider, classify: async () => ({ content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }), generate: async () => explorationOutput("ANALYSIS_CONTEXT") },
   }));
   assertEquals(result.status, "DRAFT");
@@ -332,7 +403,7 @@ Deno.test("historical Exploration is available only through one-story MANUAL rev
   automaticRepository.candidate = older;
   let automaticCalls = 0;
   const autoResult = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY", generation_intent: "EXPLORATION" }, dependencies(automaticRepository, {
-    explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
+    explorationConfig: EXPLORATION_COST_CONFIG,
     provider: { ...dependencies(automaticRepository).provider, classify: async () => { automaticCalls += 1; return { content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }; } },
   }));
   assertEquals(autoResult.status, "BLOCKED_EVIDENCE");
@@ -341,7 +412,7 @@ Deno.test("historical Exploration is available only through one-story MANUAL rev
   const manualRepository = new MemoryRepository();
   manualRepository.candidate = older;
   const manualResult = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, dependencies(manualRepository, {
-    explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
+    explorationConfig: EXPLORATION_COST_CONFIG,
     provider: { ...dependencies(manualRepository).provider, classify: async () => ({ content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }), generate: async () => explorationOutput("ANALYSIS_CONTEXT") },
   }));
   assertEquals(manualResult.status, "DRAFT");
@@ -355,7 +426,7 @@ Deno.test("story-level fingerprint prevents duplicate drafts across candidate da
   repository.candidate = explorationCandidate();
   let generations = 0;
   const deps = dependencies(repository, {
-    explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
+    explorationConfig: EXPLORATION_COST_CONFIG,
     provider: { ...dependencies(repository).provider, classify: async () => ({ content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }), generate: async () => { generations += 1; return explorationOutput("ANALYSIS_CONTEXT"); } },
   });
   assertEquals((await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, deps)).status, "DRAFT");
@@ -372,7 +443,7 @@ Deno.test("new facts for the same story allow a revised exploration draft", asyn
   repository.candidate = original;
   let generations = 0;
   const deps = dependencies(repository, {
-    explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
+    explorationConfig: EXPLORATION_COST_CONFIG,
     provider: { ...dependencies(repository).provider, classify: async () => ({ content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }), generate: async () => { generations += 1; return explorationOutput("ANALYSIS_CONTEXT"); } },
   });
   const first = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, deps);
@@ -413,7 +484,7 @@ Deno.test("daily Exploration cap is enforced before provider calls", async () =>
   repository.dailyExplorationLimit = 1;
   repository.candidate = explorationCandidate();
   const deps = dependencies(repository, {
-    explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true, maxDraftsPerDay: 1 },
+    explorationConfig: { ...EXPLORATION_COST_CONFIG, maxDraftsPerDay: 1 },
     provider: { ...dependencies(repository).provider, classify: async () => ({ content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }), generate: async () => explorationOutput("ANALYSIS_CONTEXT") },
   });
   assertEquals((await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, deps)).status, "DRAFT");

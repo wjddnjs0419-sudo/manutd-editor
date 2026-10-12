@@ -119,3 +119,42 @@ Deno.test("does not retry permanent authorization failures", async () => {
   await assertRejects(() => provider.generate(input), Error, "FAILED_PROVIDER");
   assertEquals(attempts, 1);
 });
+
+Deno.test("does not retry an Exploration generation request after a transient failure", async () => {
+  let attempts = 0;
+  const provider = createOpenAIProvider({
+    apiKey: "test-key",
+    sleep: async () => {},
+    fetchImpl: async () => {
+      attempts += 1;
+      return response({ error: { message: "transient" } }, 503);
+    },
+  });
+  await assertRejects(() => provider.generate({ ...input, generation_intent: "EXPLORATION" }), Error, "FAILED_PROVIDER");
+  assertEquals(attempts, 1);
+  assertEquals(provider.getUsageStats(), { provider_calls: 1, input_tokens: 0, output_tokens: 0, retry_count: 0 });
+});
+
+Deno.test("supports a request-scoped zero-retry limit for the Exploration classifier", async () => {
+  let attempts = 0;
+  const provider = createOpenAIProvider({
+    apiKey: "test-key",
+    sleep: async () => {},
+    fetchImpl: async () => {
+      attempts += 1;
+      return response({ error: { message: "transient" } }, 503);
+    },
+  });
+  const classify = provider.classify as unknown as (
+    text: string,
+    config: Parameters<typeof provider.classify>[1],
+    options: { maxRetries: number },
+  ) => Promise<unknown>;
+  await assertRejects(() => classify("ambiguous story", {
+    version: "classifier-v1", model: "gpt-5.6-luna", reasoning: "low", confidence_threshold: 0.75,
+    keywords: { match: [], news: [], analysis: [] },
+    phase_keywords: { PRE_MATCH: [], LIVE: [], POST_MATCH: [] },
+  }, { maxRetries: 0 }), Error, "FAILED_PROVIDER");
+  assertEquals(attempts, 1);
+  assertEquals(provider.getUsageStats().retry_count, 0);
+});

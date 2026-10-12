@@ -15,7 +15,7 @@ export interface GenerationTrigger {
   readonly generation_intent?: GenerationIntent;
 }
 
-export type GenerationStatus = "READY" | "DRAFT" | "NOOP" | "CONCURRENT" | "DAILY_LIMIT" | "NOT_ELIGIBLE" | "EXPLORATION_DISABLED" | "BLOCKED_EVIDENCE" | "CLASSIFICATION_UNCERTAIN" | "FAILED_VALIDATION" | "FAILED_PROVIDER";
+export type GenerationStatus = "READY" | "DRAFT" | "NOOP" | "CONCURRENT" | "DAILY_LIMIT" | "NOT_ELIGIBLE" | "EXPLORATION_DISABLED" | "EXPLORATION_COST_RATES_REQUIRED" | "BLOCKED_EVIDENCE" | "CLASSIFICATION_UNCERTAIN" | "FAILED_VALIDATION" | "FAILED_PROVIDER";
 
 export interface GenerationResult {
   readonly status: GenerationStatus;
@@ -46,7 +46,7 @@ export function qualityConfig(config: GenerationConfig, intent: GenerationIntent
   return {
     min_slides: intent === "EXPLORATION" ? explorationBounds.min : Number(value.min_slides ?? 4),
     max_slides: intent === "EXPLORATION" ? explorationBounds.max : Number(value.max_slides ?? 7), hook_count: Number(value.hook_count ?? 3),
-    max_repair_attempts: Number(value.max_repair_attempts ?? 1), require_visual_direction: value.require_visual_direction !== false,
+    max_repair_attempts: intent === "EXPLORATION" ? 0 : Number(value.max_repair_attempts ?? 1), require_visual_direction: value.require_visual_direction !== false,
     style_profile: typeof value.style_profile === "string" ? value.style_profile : undefined,
     style_version: typeof value.style_version === "string" ? value.style_version : undefined,
     enable_style_validator: value.style_profile === "manutd_editor" && value.style_version === "manutd-editor-v1",
@@ -121,6 +121,10 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
     if (existingExplorationBrief) return { status: "NOOP", candidate_id: trigger.candidate_id, creative_brief_id: existingExplorationBrief.id, revision: existingExplorationBrief.version, input_fingerprint: fingerprint };
     const existingStoryBrief = await dependencies.repository.findExistingBriefForStory?.(snapshot.story.id, assessment.articles.map((article) => article.canonical_url));
     if (existingStoryBrief) return { status: "NOOP", candidate_id: trigger.candidate_id, creative_brief_id: existingStoryBrief.id, revision: existingStoryBrief.version, input_fingerprint: fingerprint };
+    if (![explorationConfig.inputCostPerMillionUsd, explorationConfig.outputCostPerMillionUsd]
+      .every((rate) => typeof rate === "number" && Number.isFinite(rate) && rate >= 0)) {
+      return { status: "EXPLORATION_COST_RATES_REQUIRED", candidate_id: trigger.candidate_id };
+    }
     if (dependencies.repository.reserveExplorationJob) {
       const reservation = await dependencies.repository.reserveExplorationJob({ candidate_id: trigger.candidate_id, exploration_fingerprint: fingerprint, trigger_type: trigger.trigger_type, now: runAt, daily_limit: explorationConfig.maxDraftsPerDay });
       if (reservation.status === "DAILY_LIMIT") return { status: "DAILY_LIMIT", candidate_id: trigger.candidate_id, input_fingerprint: fingerprint };
@@ -142,7 +146,12 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
   dependencies.provider.configure?.(config);
   const usageBefore = readProviderUsage(dependencies.provider);
   const currentUsage = () => usageDelta(usageBefore, readProviderUsage(dependencies.provider), explorationConfig);
-  const classification = await classifyWithFallback(evidenceText(snapshot, intent), config.classifier_config, dependencies.provider);
+  const classification = await classifyWithFallback(
+    evidenceText(snapshot, intent),
+    config.classifier_config,
+    dependencies.provider,
+    intent === "EXPLORATION" ? { maxRetries: 0 } : undefined,
+  );
   if (classification.source === "UNCERTAIN" || !classification.content_mode) {
     fingerprint ??= await uncertainFingerprint(trigger.candidate_id, snapshot, config);
     const existing = intent === "EXPLORATION"

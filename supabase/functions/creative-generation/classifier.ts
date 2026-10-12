@@ -1,4 +1,5 @@
 import type { ClassifierConfig } from "./config.ts";
+import type { ProviderRequestOptions } from "./provider.ts";
 import type { ContentMode, MatchPhase } from "./types.ts";
 
 export type ClassificationSource = "DETERMINISTIC" | "AI_FALLBACK" | "UNCERTAIN";
@@ -20,7 +21,7 @@ export interface AiClassification {
 }
 
 export interface ClassifierProvider {
-  classify(text: string, config: ClassifierConfig): Promise<AiClassification>;
+  classify(text: string, config: ClassifierConfig, requestOptions?: ProviderRequestOptions): Promise<AiClassification>;
 }
 
 export interface ClassificationResult {
@@ -79,6 +80,7 @@ export async function classifyWithFallback(
   text: string,
   config: ClassifierConfig,
   provider: ClassifierProvider,
+  requestOptions?: ProviderRequestOptions,
 ): Promise<ClassificationResult> {
   const deterministic = classifyDeterministically(text, config);
   if (deterministic.status === "DETERMINISTIC") {
@@ -91,7 +93,7 @@ export async function classifyWithFallback(
     };
   }
   try {
-    const result = await provider.classify(text, config);
+    const result = await provider.classify(text, config, requestOptions);
     if (!validAiClassification(result, config.confidence_threshold)) {
       return { source: "UNCERTAIN", match_phase: null, confidence: result.confidence, reason_code: "CLASSIFICATION_UNCERTAIN" };
     }

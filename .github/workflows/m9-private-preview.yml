@@ -8,6 +8,10 @@ on:
         description: "Existing Manutd Editor creative_briefs UUID"
         required: true
         type: string
+      expected_sha:
+        description: "40-character SHA of the selected branch commit; must match this workflow run"
+        required: true
+        type: string
       approved_image_hosts:
         description: "Trusted EXACT image CDN hosts, comma-separated (no wildcards)"
         required: true
@@ -39,7 +43,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-target:
+    name: "Verify selected branch and commit before loading M9 secrets"
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: "Verify the expected PR 10 commit"
+        env:
+          M9_EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: python scripts/m9_dispatch_gate.py
+
   m9-preview:
+    needs: validate-target
     name: "Publisher photos → Pillow PNGs → private Storage → optional Telegram"
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -69,6 +90,10 @@ jobs:
           set -euo pipefail
           [[ -n "$SUPABASE_URL" ]] || { echo "M9_SUPABASE_URL secret missing"; exit 1; }
           [[ -n "$SUPABASE_SERVICE_ROLE_KEY" ]] || { echo "M9_SUPABASE_SERVICE_ROLE_KEY secret missing"; exit 1; }
+          if [[ "$M9_ALLOW_DRAFT_PREVIEW" == "YES" && "${SUPABASE_URL%/}" != "https://byymtttpwmllqvggnddm.supabase.co" ]]; then
+            echo "M9 Supabase project ref mismatch"
+            exit 1
+          fi
           [[ "$M9_BRIEF_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "Invalid creative brief UUID"; exit 1; }
           if [[ "${{ inputs.mode }}" == "owner_review" && "$M9_ALLOW_DRAFT_PREVIEW" != "YES" ]]; then
             echo "Owner review mode is only for an Exploration DRAFT"

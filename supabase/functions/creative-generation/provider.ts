@@ -12,8 +12,12 @@ export interface ProviderPromptInput {
   readonly generation_intent?: GenerationIntent;
 }
 
+export interface ProviderRequestOptions {
+  readonly maxRetries?: number;
+}
+
 export interface CreativeGenerationProvider {
-  classify(text: string, config: ClassifierConfig): Promise<AiClassification>;
+  classify(text: string, config: ClassifierConfig, requestOptions?: ProviderRequestOptions): Promise<AiClassification>;
   generate(input: ProviderPromptInput): Promise<CreativeBriefOutput>;
   repair(input: ProviderPromptInput, output: CreativeBriefOutput, errors: readonly string[]): Promise<CreativeBriefOutput>;
   configure?(config: GenerationConfig): void;
@@ -244,8 +248,12 @@ export function createOpenAIProvider(options: OpenAIProviderOptions) {
   let outputTokens = 0;
   let retryCount = 0;
 
-  async function request<T>(body: Record<string, unknown>): Promise<T> {
-    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+  async function request<T>(body: Record<string, unknown>, requestOptions?: ProviderRequestOptions): Promise<T> {
+    const requestedRetries = requestOptions?.maxRetries;
+    const requestMaxRetries = typeof requestedRetries === "number" && Number.isFinite(requestedRetries)
+      ? Math.max(0, Math.floor(requestedRetries))
+      : maxRetries;
+    for (let attempt = 0; attempt <= requestMaxRetries; attempt += 1) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
@@ -269,12 +277,12 @@ export function createOpenAIProvider(options: OpenAIProviderOptions) {
           return parseOutput<T>(parsed);
         }
         const retryable = response.status === 429 || response.status >= 500;
-        if (!retryable || attempt === maxRetries) throw new ProviderError("FAILED_PROVIDER", response.status);
+        if (!retryable || attempt === requestMaxRetries) throw new ProviderError("FAILED_PROVIDER", response.status);
         retryCount += 1;
         await sleep(retryAfterMilliseconds(response.headers) || Math.min(1000 * (2 ** attempt), 5000));
       } catch (error) {
         if (error instanceof ProviderError) throw error;
-        if (attempt === maxRetries) throw new ProviderError(error instanceof DOMException && error.name === "AbortError" ? "PROVIDER_TIMEOUT" : "FAILED_PROVIDER");
+        if (attempt === requestMaxRetries) throw new ProviderError(error instanceof DOMException && error.name === "AbortError" ? "PROVIDER_TIMEOUT" : "FAILED_PROVIDER");
         retryCount += 1;
         await sleep(Math.min(1000 * (2 ** attempt), 5000));
       } finally {
@@ -294,14 +302,16 @@ export function createOpenAIProvider(options: OpenAIProviderOptions) {
       if (typeof configured.reasoning === "string" && configured.reasoning.trim()) reasoning = configured.reasoning;
       if (typeof configured.max_output_tokens === "number") maxOutputTokens = configured.max_output_tokens;
     },
-    async classify(text: string, config: ClassifierConfig): Promise<AiClassification> {
-      return await request<AiClassification>(requestBody(config.model, config.reasoning, classifierPrompt(text), "content_classification", CLASSIFIER_SCHEMA, 500));
+    async classify(text: string, config: ClassifierConfig, requestOptions?: ProviderRequestOptions): Promise<AiClassification> {
+      return await request<AiClassification>(requestBody(config.model, config.reasoning, classifierPrompt(text), "content_classification", CLASSIFIER_SCHEMA, 500), requestOptions);
     },
     async generate(input: ProviderPromptInput): Promise<CreativeBriefOutput> {
-      return await request<CreativeBriefOutput>(requestBody(model, reasoning, generationPrompt(input.content_mode, input.match_phase, input.evidence_snapshot, input.generation_intent), "creative_brief", CREATIVE_SCHEMA, maxOutputTokens));
+      const requestOptions = input.generation_intent === "EXPLORATION" ? { maxRetries: 0 } : undefined;
+      return await request<CreativeBriefOutput>(requestBody(model, reasoning, generationPrompt(input.content_mode, input.match_phase, input.evidence_snapshot, input.generation_intent), "creative_brief", CREATIVE_SCHEMA, maxOutputTokens), requestOptions);
     },
     async repair(input: ProviderPromptInput, output: CreativeBriefOutput, errors: readonly string[]): Promise<CreativeBriefOutput> {
-      return await request<CreativeBriefOutput>(requestBody(model, reasoning, repairPrompt(input.content_mode, input.match_phase, input.evidence_snapshot, output, errors, input.generation_intent), "creative_brief_repair", CREATIVE_SCHEMA, maxOutputTokens));
+      const requestOptions = input.generation_intent === "EXPLORATION" ? { maxRetries: 0 } : undefined;
+      return await request<CreativeBriefOutput>(requestBody(model, reasoning, repairPrompt(input.content_mode, input.match_phase, input.evidence_snapshot, output, errors, input.generation_intent), "creative_brief_repair", CREATIVE_SCHEMA, maxOutputTokens), requestOptions);
     },
   };
 }
