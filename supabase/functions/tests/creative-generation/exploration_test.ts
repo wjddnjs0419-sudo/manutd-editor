@@ -110,5 +110,7 @@ Deno.test("Exploration prompt specifies the exact style gate index and role cont
     assertEquals(prompt.includes("index and slide_number must both equal the one-based slide position"), true);
     assertEquals(prompt.includes("HOOK, CONTEXT, KEY_FACT, IMPLICATION, KEY_FACT, IMPLICATION"), true);
     assertEquals(prompt.includes("Use a distinct role per message"), false);
+    assertEquals(prompt.includes("For every slides[].claims[].text, explicitly write the publisher attribution in the claim itself"), true);
+    assertEquals(prompt.includes("[publisher_name] 보도에 따르면"), true);
   }
 });

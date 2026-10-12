@@ -141,3 +141,34 @@ gate, change Standard prompts, or trigger a paid repair. Mock prompt-contract te
 failed first and then passed; all nonintegration Deno tests now pass: 694
 (29 steps). This prompt change is NOT in deployed v34. Deployment of this
 follow-up and any further live request require new user approval.
+
+## Approved v36 retry and follow-up finding
+
+After a fresh user approval, the prompt correction was deployed as v35. Before
+invoking it, the previous live job state was checked and revealed FAILED_VALIDATION
+was not allowed by the manual retry guard. No request was made against v35.
+The guard was extended to permit an explicit MANUAL Exploration retry for an
+attempted FAILED_VALIDATION job. A mocked regression verifies that it resumes
+without classification and creates a DRAFT only after the next output validates.
+
+The combined source was deployed as v36 and verified ACTIVE with all returned
+runtime files matching the deployment bundle. Exactly one POST followed at
+2026-10-12 13:55:55–13:56:27 UTC (request ID
+`af4ad453-993a-496a-8a91-7a5b443dffbf`). There were no automatic retries. OpenAI
+returned structured output, but validation stopped at
+`EXPLORATION_ATTRIBUTION_MISSING`. The status came from the existing quality gate,
+which requires each `slides[].claims[].text` to itself contain a report marker such
+as `보도`, `따르면`, `reported`, or `according to`. The general instruction to
+attribute claims to publishers did not state this literal requirement.
+
+Job totals: 4 provider calls, 48,242 input tokens, 6,003 output tokens, 0 retries,
+$0.168520 estimated cumulative cost, and no creative brief. This invocation added
+22,802 input / 3,153 output tokens and $0.083440 estimated cost under the stored
+rates. No raw model output was stored in logs; exact claim wording is unavailable.
+No brief or downstream rendering/storage/Telegram action occurred.
+
+A further PR-only prompt clarification now tells each claim to include publisher
+name and an explicit report marker inside the claim text, with the tested example
+`[publisher_name] 보도에 따르면 …`. It leaves the quality gate unchanged. Tests
+assert this instruction for every Exploration content mode. This latest prompt
+revision has not been deployed, and no further paid call has been made.
