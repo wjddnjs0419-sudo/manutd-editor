@@ -121,7 +121,17 @@ export function createDiscoveryPromotionRepository(options: RepositoryOptions): 
       },
     });
     if (!response.ok) {
-      await response.body?.cancel();
+      const responseBody = await response.text();
+      if (response.status === 400) {
+        try {
+          const error = record(JSON.parse(responseBody));
+          if (error.code === "42703" || error.code === "PGRST204" || (typeof error.message === "string" && /column .+(?:does not exist|not found in the schema cache)/iu.test(error.message))) {
+            throw new Error("DATABASE_SCHEMA_COLUMNS_MISSING");
+          }
+        } catch (error) {
+          if (error instanceof Error && error.message === "DATABASE_SCHEMA_COLUMNS_MISSING") throw error;
+        }
+      }
       throw new Error("DATABASE_HTTP_ERROR");
     }
     const body = await response.text();
@@ -156,7 +166,23 @@ export function createDiscoveryPromotionRepository(options: RepositoryOptions): 
         query.set("and", `(${andFilters.join(",")})`);
       }
       query.append("last_observed_at", `lte.${asOf.toISOString()}`);
-      const rows = await request(`/rest/v1/discovery_observations?${query}`, {}, "app_private");
+      let rows: unknown;
+      try {
+        rows = await request(`/rest/v1/discovery_observations?${query}`, {}, "app_private");
+      } catch (error) {
+        if (promotionObservationId || !(error instanceof Error) || error.message !== "DATABASE_SCHEMA_COLUMNS_MISSING") throw error;
+        const legacyQuery = new URLSearchParams({
+          select: "id,provider_id,source_canonical_name,editorial_role,external_id,canonical_url,title,excerpt,published_at,first_observed_at,last_observed_at,platform,engagement,engagement_available,discovery_query_id,content_fingerprint,metadata,story_cluster_id",
+          provider_id: "neq.google-news",
+          last_observed_at: `gte.${since}`,
+          order: "last_observed_at.desc,id.asc",
+          limit: String(Math.max(1, Math.min(500, limit))),
+        });
+        if (promotionJobId) legacyQuery.set("and", `(or(story_cluster_id.is.null,promotion_job_id.eq.${promotionJobId}))`);
+        else legacyQuery.set("story_cluster_id", "is.null");
+        legacyQuery.append("last_observed_at", `lte.${asOf.toISOString()}`);
+        rows = await request(`/rest/v1/discovery_observations?${legacyQuery}`, {}, "app_private");
+      }
       return Array.isArray(rows) ? rows.flatMap((value) => { const item = observation(value); return item?.id ? [item] : []; }) : [];
     },
     async listStories() {

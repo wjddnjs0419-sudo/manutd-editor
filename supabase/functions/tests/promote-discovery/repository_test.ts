@@ -102,6 +102,28 @@ Deno.test("exact BBC source linking reads only the tagged observation using lega
   assertEquals(query.get("select")?.includes("excerpt"), true);
 });
 
+Deno.test("regular promotion falls back to direct publisher columns when GNews schema is absent", async () => {
+  const urls: string[] = [];
+  const repository = createDiscoveryPromotionRepository({
+    supabaseUrl: "https://example.supabase.co", serviceRoleKey: "service-role-key",
+    request: async (input) => {
+      const url = String(input);
+      urls.push(url);
+      if (urls.length === 1) return Response.json({ code: "PGRST204", message: "Column article_final_url was not found in the schema cache" }, { status: 400 });
+      return Response.json([{ id: "bbc-1", provider_id: "feed-1-bbc-sport", source_canonical_name: "BBC Sport", editorial_role: "FACT_INDEPENDENT", external_id: "bbc-article-1", canonical_url: "https://www.bbc.co.uk/sport/football/articles/c62e9g09e781o", title: "Carrick pressure after draw", excerpt: "Manchester United article body", published_at: "2026-10-10T20:54:46Z", first_observed_at: "2026-10-10T20:54:46Z", last_observed_at: "2026-10-10T20:54:52Z", platform: "RSS", engagement: {}, engagement_available: false, discovery_query_id: "query-1", content_fingerprint: "bbc-fingerprint", metadata: {}, story_cluster_id: null }]);
+    },
+  });
+  const rows = await repository.listFreshUnassigned(new Date("2026-10-12T09:00:00Z"), 1);
+  assertEquals(rows.length, 1);
+  assertEquals(rows[0]?.providerId, "feed-1-bbc-sport");
+  const first = new URL(urls[0]!).searchParams;
+  const fallback = new URL(urls[1]!).searchParams;
+  assertEquals(first.get("select")?.includes("article_final_url"), true);
+  assertEquals(fallback.get("select")?.includes("article_final_url"), false);
+  assertEquals(fallback.get("provider_id"), "neq.google-news");
+  assertEquals(fallback.get("story_cluster_id"), "is.null");
+});
+
 Deno.test("Google publisher provenance reaches M8 source observations without replacing discovery identity", async () => {
   const requests: { url: string; method: string; body: Record<string, unknown> | null }[] = [];
   const repository = createDiscoveryPromotionRepository({
