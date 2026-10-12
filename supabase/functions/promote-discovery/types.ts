@@ -33,7 +33,7 @@ export interface PromotionStoryInput {
 }
 
 export interface DiscoveryPromotionRepository {
-  listFreshUnassigned(asOf: Date, limit: number, promotionJobId?: string): Promise<readonly PromotionObservation[]>;
+  listFreshUnassigned(asOf: Date, limit: number, promotionJobId?: string, promotionObservationId?: string): Promise<readonly PromotionObservation[]>;
   listStories(asOf: Date): Promise<readonly PromotionStory[]>;
   upsertStory(input: PromotionStoryInput): Promise<{ id: string; created: boolean }>;
   assignObservation(observationId: string, storyClusterId: string, sourceObservationId: string, promotionJobId?: string): Promise<void>;

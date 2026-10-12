@@ -79,6 +79,29 @@ Deno.test("promotion retry re-reads observations already assigned by the same jo
   assertEquals(decodeURIComponent(patchQuery.get("or") ?? ""), "(story_cluster_id.is.null,story_cluster_id.eq.story-1)");
 });
 
+Deno.test("exact BBC source linking reads only the tagged observation using legacy columns", async () => {
+  const promotionJobId = "99999999-9999-4999-8999-999999999999";
+  const observationId = "11111111-1111-4111-8111-111111111111";
+  let requestUrl = "";
+  const repository = createDiscoveryPromotionRepository({
+    supabaseUrl: "https://example.supabase.co", serviceRoleKey: "service-role-key",
+    request: async (input) => {
+      requestUrl = String(input);
+      return Response.json([{ id: observationId, provider_id: "feed-1-bbc-sport", source_canonical_name: "BBC Sport", editorial_role: "FACT_INDEPENDENT", external_id: "bbc-article-1", canonical_url: "https://www.bbc.co.uk/sport/football/articles/c62e9g09e781o", title: "Boos, anguish & fading belief - 'worrying day' for under-pressure Carrick", excerpt: "Manchester United article body", published_at: "2026-10-10T20:54:46.000Z", first_observed_at: "2026-10-10T20:54:46.000Z", last_observed_at: "2026-10-10T20:54:52.000Z", platform: "RSS", engagement: {}, engagement_available: false, discovery_query_id: "query-1", content_fingerprint: "bbc-fingerprint", metadata: { article_enrichment: "EXTRACTED" }, story_cluster_id: "story-1", promotion_job_id: promotionJobId }]);
+    },
+  });
+  const list = repository.listFreshUnassigned as unknown as (asOf: Date, limit: number, promotionJobId: string, observationId: string) => Promise<readonly PromotionObservation[]>;
+  const rows = await list.call(repository, new Date("2026-10-12T09:00:00Z"), 1, promotionJobId, observationId);
+  const query = new URL(requestUrl).searchParams;
+  assertEquals(rows.length, 1);
+  assertEquals(rows[0]?.id, observationId);
+  assertEquals(query.get("id"), `eq.${observationId}`);
+  assertEquals(query.get("promotion_job_id"), `eq.${promotionJobId}`);
+  assertEquals(query.get("provider_id"), "neq.google-news");
+  assertEquals(query.get("select")?.includes("article_final_url"), false);
+  assertEquals(query.get("select")?.includes("excerpt"), true);
+});
+
 Deno.test("Google publisher provenance reaches M8 source observations without replacing discovery identity", async () => {
   const requests: { url: string; method: string; body: Record<string, unknown> | null }[] = [];
   const repository = createDiscoveryPromotionRepository({

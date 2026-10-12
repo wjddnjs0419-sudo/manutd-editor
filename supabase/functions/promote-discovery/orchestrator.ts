@@ -8,6 +8,7 @@ interface PromoteDiscoveryOptions {
   readonly limit?: number;
   readonly rankingDate?: string;
   readonly promotionJobId?: string;
+  readonly promotionObservationId?: string;
   readonly refreshExistingGrounding?: boolean;
 }
 
@@ -109,7 +110,8 @@ export async function promoteDiscovery(options: PromoteDiscoveryOptions): Promis
   const asOf = asOfDate(options.asOf);
   const limit = options.limit ?? 100;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("INVALID_PROMOTION_LIMIT");
-  const listedObservations = [...await options.repository.listFreshUnassigned(asOf, limit, options.promotionJobId)];
+  if (options.promotionObservationId && !options.promotionJobId) throw new Error("PROMOTION_OBSERVATION_REQUIRES_JOB_ID");
+  const listedObservations = [...await options.repository.listFreshUnassigned(asOf, limit, options.promotionJobId, options.promotionObservationId)];
   if (listedObservations.length > limit) throw new Error("PROMOTION_LIMIT_EXCEEDED");
   const observations = listedObservations.filter((item) => item.providerId !== "google-news" || isTrendRelevant({
     title: item.title,

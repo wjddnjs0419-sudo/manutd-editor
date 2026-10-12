@@ -134,18 +134,27 @@ export function createDiscoveryPromotionRepository(options: RepositoryOptions): 
   }
 
   return {
-    async listFreshUnassigned(asOf, limit, promotionJobId) {
+    async listFreshUnassigned(asOf, limit, promotionJobId, promotionObservationId) {
       const since = new Date(asOf.getTime() - 72 * 60 * 60 * 1000).toISOString();
       const query = new URLSearchParams({
-        select: "id,provider_id,source_canonical_name,editorial_role,external_id,canonical_url,google_news_original_url,google_news_article_id,resolved_publisher_url,article_final_url,url_resolution_status,article_fetch_status,article_extraction_status,article_content_excerpt,title,excerpt,published_at,first_observed_at,last_observed_at,platform,engagement,engagement_available,discovery_query_id,content_fingerprint,metadata,story_cluster_id",
+        select: promotionObservationId
+          ? "id,provider_id,source_canonical_name,editorial_role,external_id,canonical_url,title,excerpt,published_at,first_observed_at,last_observed_at,platform,engagement,engagement_available,discovery_query_id,content_fingerprint,metadata,story_cluster_id"
+          : "id,provider_id,source_canonical_name,editorial_role,external_id,canonical_url,google_news_original_url,google_news_article_id,resolved_publisher_url,article_final_url,url_resolution_status,article_fetch_status,article_extraction_status,article_content_excerpt,title,excerpt,published_at,first_observed_at,last_observed_at,platform,engagement,engagement_available,discovery_query_id,content_fingerprint,metadata,story_cluster_id",
         last_observed_at: `gte.${since}`,
         order: "last_observed_at.desc,id.asc",
-        limit: String(Math.max(1, Math.min(500, limit))),
+        limit: String(promotionObservationId ? 1 : Math.max(1, Math.min(500, limit))),
       });
-      const andFilters = ["or(provider_id.neq.google-news,url_resolution_status.eq.RESOLVED)"];
-      if (promotionJobId) andFilters.push(`or(story_cluster_id.is.null,promotion_job_id.eq.${promotionJobId})`);
-      else andFilters.push("story_cluster_id.is.null");
-      query.set("and", `(${andFilters.join(",")})`);
+      if (promotionObservationId) {
+        if (!promotionJobId) throw new Error("PROMOTION_OBSERVATION_REQUIRES_JOB_ID");
+        query.set("id", `eq.${promotionObservationId}`);
+        query.set("promotion_job_id", `eq.${promotionJobId}`);
+        query.set("provider_id", "neq.google-news");
+      } else {
+        const andFilters = ["or(provider_id.neq.google-news,url_resolution_status.eq.RESOLVED)"];
+        if (promotionJobId) andFilters.push(`or(story_cluster_id.is.null,promotion_job_id.eq.${promotionJobId})`);
+        else andFilters.push("story_cluster_id.is.null");
+        query.set("and", `(${andFilters.join(",")})`);
+      }
       query.append("last_observed_at", `lte.${asOf.toISOString()}`);
       const rows = await request(`/rest/v1/discovery_observations?${query}`, {}, "app_private");
       return Array.isArray(rows) ? rows.flatMap((value) => { const item = observation(value); return item?.id ? [item] : []; }) : [];
@@ -183,6 +192,7 @@ export function createDiscoveryPromotionRepository(options: RepositoryOptions): 
         source_observation_id: "is.null",
         or: `(story_cluster_id.is.null,story_cluster_id.eq.${storyClusterId})`,
       });
+      if (promotionJobId) query.set("promotion_job_id", `eq.${promotionJobId}`);
       await request(`/rest/v1/discovery_observations?${query}`, { method: "PATCH", headers: { prefer: "return=minimal" }, body: JSON.stringify({ story_cluster_id: storyClusterId, source_observation_id: sourceObservationId, ...(promotionJobId ? { promotion_job_id: promotionJobId } : {}) }) }, "app_private");
     },
     async ensureSourceObservation(item) {

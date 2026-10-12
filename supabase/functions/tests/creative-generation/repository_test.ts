@@ -77,6 +77,37 @@ Deno.test("generation evidence includes M8 grounded fact sources", async () => {
   }]);
 });
 
+Deno.test("direct BBC exploration evidence reads from the pre-GNews production schema", async () => {
+  const articleUrl = "https://www.bbc.co.uk/sport/football/articles/c62e9g09e781o";
+  const articleText = "Solanke scores in added time as 10-man Spurs draw with Man Utd. Manchester United failed to beat a 10-man opponent. ".repeat(5);
+  let discoveryQuery = "";
+  const repository = createRestGenerationRepository({
+    supabaseUrl: "https://example.supabase.co", serviceKey: "service-role",
+    request: async (input) => {
+      const url = String(input);
+      if (url.includes("/editorial_rankings")) return Response.json([]);
+      if (url.includes("content_candidates")) return Response.json([{ id: candidateId, story_cluster_id: clusterId, ranking_date: "2026-10-12", rank: 44, priority_score: 4, data_confidence: 0, score_inputs: {} }]);
+      if (url.includes("story_clusters")) return Response.json([{ id: clusterId, canonical_title: "Boos, anguish & fading belief - 'worrying day' for under-pressure Carrick", status: "STALE", first_seen_at: "2026-10-10T20:54:46Z", last_seen_at: "2026-10-10T20:54:52Z" }]);
+      if (url.includes("story_cluster_posts") || url.includes("story_cluster_sources")) return Response.json([]);
+      if (url.includes("story_claims") || url.includes("claim_evidence")) return Response.json([]);
+      if (url.includes("discovery_observations")) {
+        discoveryQuery = url;
+        return Response.json([{ id: "discovery-bbc", provider_id: "feed-1-bbc-sport", story_cluster_id: clusterId, source_observation_id: "source-bbc", source_canonical_name: "BBC Sport", canonical_url: articleUrl, title: "Boos, anguish & fading belief - 'worrying day' for under-pressure Carrick", excerpt: articleText, published_at: "2026-10-10T20:54:46Z", last_observed_at: "2026-10-10T20:54:52Z", content_fingerprint: "bbc-fingerprint", metadata: { article_enrichment: "EXTRACTED" } }]);
+      }
+      if (url.includes("source_observations")) return Response.json([{ id: "source-bbc", information_source_id: "info-bbc", editorial_role: "FACT_INDEPENDENT", external_id: "bbc-article-1", canonical_url: articleUrl, title: "Boos, anguish & fading belief - 'worrying day' for under-pressure Carrick", excerpt: articleText, published_at: "2026-10-10T20:54:46Z", observed_at: "2026-10-10T20:54:52Z", content_fingerprint: "bbc-fingerprint", metadata: { article_enrichment: "EXTRACTED" } }]);
+      if (url.includes("information_sources")) return Response.json([{ id: "info-bbc", canonical_name: "BBC Sport", entity_type: "MEDIA_OUTLET", reliability_score: 0 }]);
+      throw new Error(`Unexpected request: ${url}`);
+    },
+  });
+  const evidence = await repository.getCandidateEvidence(candidateId);
+  assertEquals(evidence?.exploration_articles?.[0]?.canonical_url, articleUrl);
+  assertEquals(evidence?.exploration_articles?.[0]?.article_text, articleText);
+  const select = new URL(discoveryQuery).searchParams.get("select") ?? "";
+  assertEquals(select.includes("excerpt"), true);
+  assertEquals(select.includes("article_final_url"), false);
+  assertEquals(select.includes("article_extraction_status"), false);
+});
+
 Deno.test("unapproved Google News publisher extraction keeps publisher identity and URL in exploration evidence", async () => {
   const publisherUrl = "https://www.teamtalk.com/manchester-united/example-report";
   const articleText = "TEAMtalk reports that Manchester United are considering a move, but no agreement has been reached. " + "The report distinguishes current interest from a completed transfer. ".repeat(6);

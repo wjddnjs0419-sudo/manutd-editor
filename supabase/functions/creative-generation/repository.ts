@@ -245,7 +245,7 @@ function m8ExplorationArticles(
       : typeof discovery?.article_extraction_status === "string" ? discovery.article_extraction_status
       : "NOT_EXTRACTED";
     const articleText = extractionStatus === "EXTRACTED"
-      ? (typeof metadata.article_content_excerpt === "string" ? metadata.article_content_excerpt : typeof discovery?.article_content_excerpt === "string" ? discovery.article_content_excerpt : typeof source?.excerpt === "string" ? source.excerpt : null)
+      ? (typeof metadata.article_content_excerpt === "string" ? metadata.article_content_excerpt : typeof discovery?.article_content_excerpt === "string" ? discovery.article_content_excerpt : typeof source?.excerpt === "string" ? source.excerpt : typeof discovery?.excerpt === "string" ? discovery.excerpt : null)
       : null;
     const canonicalUrl = typeof discovery?.article_final_url === "string" ? discovery.article_final_url
       : typeof discovery?.resolved_publisher_url === "string" ? discovery.resolved_publisher_url
@@ -345,7 +345,7 @@ export function createRestGenerationRepository(options: RestRepositoryOptions): 
         request(`/story_cluster_posts?select=raw_post_id,raw_posts(id,source_account_id,caption,permalink,published_at,media_type,source_accounts(username,region))&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&order=raw_post_id.asc`),
         request(`/story_cluster_sources?select=information_source_id,first_cited_post_id,citation_count,evidence_text,information_sources(canonical_name,entity_type,reliability_score)&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&order=information_source_id.asc`),
         request(`/story_claims?select=id,grounding_status,claim_scope,claim_modality&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&limit=2000`, {}, "app_private"),
-        request(`/discovery_observations?select=id,source_observation_id,provider_id,source_canonical_name,canonical_url,article_final_url,resolved_publisher_url,title,article_extraction_status,article_content_excerpt,published_at,last_observed_at,content_fingerprint,metadata&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&order=published_at.desc.nullslast&limit=100`, {}, "app_private"),
+        request(`/discovery_observations?select=id,source_observation_id,provider_id,source_canonical_name,canonical_url,title,excerpt,published_at,last_observed_at,content_fingerprint,metadata&story_cluster_id=eq.${encodeURIComponent(candidate.story_cluster_id)}&order=published_at.desc.nullslast&limit=100`, {}, "app_private"),
       ]);
       const claimIds = Array.isArray(m8Claims) ? m8Claims.map(object).map((row) => string(row.id)).filter(Boolean) : [];
       const claimFilter = claimIds.length > 0 ? `&claim_id=in.(${claimIds.map(encodeURIComponent).join(",")})` : "&claim_id=eq.__none__";
