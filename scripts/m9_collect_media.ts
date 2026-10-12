@@ -1,6 +1,6 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-net
 /**
- * M9: approved article URLs + subject aliases -> ranked REAL photo candidate JSON.
+ * M9: approved article URLs + grouped subject aliases -> ranked REAL photo candidate JSON.
  * This is a CLI boundary for a Python-capable renderer worker. Never publishes.
  *
  * Usage:
@@ -14,13 +14,33 @@
  *           { slot:"BODY_NEWS", slide_number:3, subject_aliases:["Michael Carrick"] }],
  *   allowed_image_hosts:["i.guim.co.uk"] }
  *
+ * Legacy subject_aliases remain valid for one person; multi-person requests use
+ * subject_alias_groups to keep each person's aliases distinct.
  * CDN hosts are explicit trusted configuration, not derived from fetched HTML.
  */
 import { harvestArticlePhotos, type M9PhotoHarvestJob } from "../supabase/functions/_shared/m9/photo_harvest.ts";
+import type { M9PhotoSubjectGroup } from "../supabase/functions/_shared/m9/photo_quality.ts";
 import { isGoogleNewsArticleUrl, safePublisherUrl } from "../supabase/functions/trend-discovery/google_news_resolution.ts";
 
 function object(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+function validSubjectGroups(value: unknown): value is M9PhotoSubjectGroup[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 6) return false;
+  const canonicalNames = new Set<string>();
+  return value.every((group: unknown) => {
+    if (!object(group) || typeof group.canonical_name !== "string" ||
+        group.canonical_name.trim().length < 4 || !Array.isArray(group.aliases) ||
+        group.aliases.length < 1 || group.aliases.length > 6 ||
+        !group.aliases.every((name: unknown) => typeof name === "string" && name.trim().length >= 4)) {
+      return false;
+    }
+    const canonical = group.canonical_name.trim().toLocaleLowerCase("en-US");
+    if (canonicalNames.has(canonical) || !group.aliases.some((name: string) =>
+      name.trim().toLocaleLowerCase("en-US") === canonical)) return false;
+    canonicalNames.add(canonical);
+    return true;
+  });
 }
 export function validateM9SourceRequest(value: unknown): {
   job: M9PhotoHarvestJob;
@@ -47,10 +67,15 @@ export function validateM9SourceRequest(value: unknown): {
   const slotsValid = value.slots.length >= 2 && value.slots.length <= 6 &&
       value.slots[0]?.slot === "COVER_NEWS" &&
       value.slots.slice(1).every(s => object(s) && s.slot === "BODY_NEWS") &&
-      value.slots.every((s, index) => object(s) && Array.isArray(s.subject_aliases) &&
-        s.subject_aliases.length >= 1 && s.subject_aliases.length <= 6 &&
-        s.subject_aliases.every((name: unknown) => typeof name === "string" && name.trim().length >= 4) &&
-        (s.slide_number === undefined || s.slide_number === index + 1));
+      value.slots.every((s, index) => {
+        if (!object(s) || (s.slide_number !== undefined && s.slide_number !== index + 1)) return false;
+        const aliases = s.subject_aliases;
+        if (!Array.isArray(aliases) || aliases.length < 1 || aliases.length > 24 ||
+            !aliases.every((name: unknown) => typeof name === "string" && name.trim().length >= 4)) return false;
+        const groups = s.subject_alias_groups;
+        if (groups === undefined) return aliases.length <= 6;
+        return validSubjectGroups(groups);
+      });
   if (!slotsValid) {
     throw new Error("M9_SUBJECT_ALIASES_INVALID");
   }
@@ -64,7 +89,16 @@ export function validateM9SourceRequest(value: unknown): {
     job: {
       publisher_article_urls: sourceUrls as string[],
       official_article_urls: officialUrls as string[],
-      slots: value.slots as unknown as M9PhotoHarvestJob["slots"],
+      slots: value.slots.map((slot) => {
+        const row = slot as Record<string, unknown>;
+        return {
+          ...row,
+          subject_aliases: row.subject_aliases as string[],
+          ...(Array.isArray(row.subject_alias_groups)
+            ? {subject_alias_groups: row.subject_alias_groups as M9PhotoSubjectGroup[]}
+            : {}),
+        };
+      }) as unknown as M9PhotoHarvestJob["slots"],
     },
     allowed_image_hosts: hosts as string[],
     google_news_original_urls: googleOriginals as string[],

@@ -11,8 +11,15 @@ const request={
  ],
 };
 Deno.test("accepts explicit trusted publisher URLs with two different photo subjects",()=>{
- const r=validateM9SourceRequest(request);
+ const r=validateM9SourceRequest({...request,slots:[
+  request.slots[0],
+  {slot:"BODY_NEWS",subject_aliases:["Bryan Mbeumo","Dominic Solanke"],subject_alias_groups:[
+   {canonical_name:"Bryan Mbeumo",aliases:["Bryan Mbeumo"]},
+   {canonical_name:"Dominic Solanke",aliases:["Dominic Solanke"]},
+  ]},
+ ]});
  assertEquals(r.job.slots.map(x=>x.slot),["COVER_NEWS","BODY_NEWS"]);
+ assertEquals(r.job.slots[1]?.subject_alias_groups?.map(group=>group.canonical_name),["Bryan Mbeumo","Dominic Solanke"]);
  assertEquals(r.allowed_image_hosts,["i.guim.co.uk","media.manutd.com"]);
 });
 Deno.test("accepts repeated BODY_NEWS slots keyed to distinct creative pages",()=>{

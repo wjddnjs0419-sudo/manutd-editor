@@ -119,6 +119,25 @@ def _validated_assessment(choice: Any, slot: str) -> dict[str, Any]:
     probe = choice.get("probe")
     if not isinstance(info, dict) or not isinstance(probe, dict) or probe.get("status") != "VALID":
         raise ValueError("M9_IMAGE_PROBE_INVALID_" + slot)
+    subject_match = choice.get("subject_match")
+    if subject_match is not None:
+        if not isinstance(subject_match, dict):
+            raise ValueError("M9_SUBJECT_MATCH_INVALID_" + slot)
+        requested = subject_match.get("requested_subjects")
+        metadata_matched = subject_match.get("metadata_matched_subjects")
+        filename_matched = subject_match.get("filename_matched_subjects")
+        requested_count = subject_match.get("requested_subject_count")
+        coverage = subject_match.get("coverage")
+        if (not isinstance(requested, list) or not 1 <= len(requested) <= 6 or
+                any(not isinstance(name, str) or len(name.strip()) < 4 for name in requested) or
+                not isinstance(metadata_matched, list) or
+                any(name not in requested for name in metadata_matched) or
+                not isinstance(filename_matched, list) or
+                any(name not in requested for name in filename_matched) or
+                requested_count != len(requested) or coverage not in ("FULL", "PARTIAL") or
+                (coverage == "FULL" and len(metadata_matched) != len(requested)) or
+                (coverage == "PARTIAL" and not 0 < len(metadata_matched) < len(requested))):
+            raise ValueError("M9_SUBJECT_MATCH_INVALID_" + slot)
     if info.get("rights_status") != "UNVERIFIED" or choice.get("can_auto_publish") is not False:
         raise ValueError("M9_REVIEW_STATUS_INVALID_" + slot)
     if "ARCHIVE_PHOTO" in (choice.get("flags") or []):
@@ -318,6 +337,10 @@ def choose_media(
             if visual is None:
                 visual = _visual_fingerprint(image)
                 visual_by_digest[digest] = visual
+            subject_match = choice.get("subject_match")
+            review_flags = list(evaluation.flags)
+            if isinstance(subject_match, dict) and subject_match.get("coverage") == "PARTIAL":
+                review_flags.append("SUBJECT_METADATA_PARTIAL")
             attempt = {
                 "source_url": url,
                 "source_sha256": digest,
@@ -326,7 +349,7 @@ def choose_media(
                 "face_count": evaluation.face_count,
                 "crop_scale": evaluation.crop.scale,
                 "review_required": evaluation.review_required,
-                "review_flags": list(evaluation.flags),
+                "review_flags": list(dict.fromkeys(review_flags)),
                 "analysis_ms": evaluation.analysis_ms,
             }
             attempts.append(attempt)
@@ -346,6 +369,7 @@ def choose_media(
                 "source_sha256": digest,
                 "subject_metadata_checked": True,
                 "identity_evidence": choice["identity_evidence"],
+                "subject_match": subject_match,
                 "visual_subject_verified": False,
                 "rights_status": "UNVERIFIED",
                 "crop": asdict(evaluation.crop),
@@ -354,14 +378,14 @@ def choose_media(
                 "quality": evaluation.quality,
                 "analysis_ms": evaluation.analysis_ms,
                 "review_required": evaluation.review_required,
-                "review_flags": list(evaluation.flags),
+                "review_flags": list(dict.fromkeys(review_flags)),
                 "crop_coordinates": asdict(evaluation.crop),
                 "scale": evaluation.crop.scale,
                 "subject_detection_result": {
                     "face_count": evaluation.face_count,
                     "faces": [asdict(face) for face in evaluation.faces],
                     "review_required": evaluation.review_required,
-                    "review_flags": list(evaluation.flags),
+                    "review_flags": list(dict.fromkeys(review_flags)),
                     "analysis_ms": evaluation.analysis_ms,
                 },
                 "image_reuse_status": "UNIQUE" if duplicate_slide is None else "REUSED_EXACT" if fingerprint_by_slide[duplicate_slide]["sha256"] == digest else "REUSED_PERCEPTUAL",

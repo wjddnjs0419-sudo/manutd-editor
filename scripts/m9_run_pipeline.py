@@ -28,7 +28,7 @@ from pathlib import Path
 from m9_source_request_from_brief import build_request
 from m9_preview_workflow import (
     Http, SupabaseGateway, TelegramGateway, job_key, safe_failure_category,
-    validate_preview_status,
+    pre_send_retry_job_key, validate_preview_status,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,13 +71,25 @@ def require_exploration_owner_draft(brief: dict) -> None:
         raise ValueError("M9_DRAFT_EXPLORATION_REQUIRED")
 
 def claim_cloud_preview(remote: SupabaseGateway, brief: dict) -> str:
-    key = job_key(brief, {})
+    original_key = job_key(brief, {})
     remote.ensure_private_bucket()
-    remote.claim(key, brief["id"], {
+    previous = remote.get_preview(original_key)
+    key = original_key
+    manifest = {
         "content_mode": brief.get("content_mode"),
         "brief_version": brief.get("version"),
         "source": "telegram_owner_preview",
-    })
+    }
+    if previous is not None:
+        if (previous.get("creative_brief_id") != brief["id"] or
+                previous.get("status") != "FAILED" or
+                previous.get("telegram_message_ids") != []):
+            raise ValueError("M9_JOB_ALREADY_CLAIMED_NO_RETRY")
+        key = pre_send_retry_job_key(brief)
+        if remote.get_preview(key) is not None:
+            raise ValueError("M9_JOB_RETRY_ALREADY_USED")
+        manifest.update({"retry_of": original_key, "retry_reason": "CONFIRMED_PRE_SEND_FAILURE"})
+    remote.claim(key, brief["id"], manifest)
     return key
 
 def fail_unrendered_cloud_preview(remote: SupabaseGateway, key: str, error: BaseException) -> None:
@@ -131,11 +143,13 @@ def launch(argv: list[str] | None = None) -> Path:
     if brief_data.get("status") in ("DRAFT", "SELECTED") and args.send_telegram and not args.allow_draft_preview:
         raise ValueError("M9_DRAFT_TELEGRAM_SEND_REQUIRES_OWNER_OPT_IN")
     claimed_key = claim_cloud_preview(remote, brief_data) if args.upload and remote else None
+    is_pre_send_recovery = claimed_key == pre_send_retry_job_key(brief_data) if claimed_key else False
     try:
         telegram = None
         if args.send_telegram:
             telegram = TelegramGateway(os.getenv("TELEGRAM_BOT_TOKEN", ""), Http())
-            telegram.send_text(args.chat_id, "📨 비공개 카드뉴스 작업을 접수했습니다. 기사 원문에 연결된 사진 후보를 수집합니다.")
+            if not is_pre_send_recovery:
+                telegram.send_text(args.chat_id, "📨 비공개 카드뉴스 작업을 접수했습니다. 기사 원문에 연결된 사진 후보를 수집합니다.")
         if args.request:
             request_path = Path(args.request).resolve()
             request = json.loads(request_path.read_text(encoding="utf-8"))
@@ -177,7 +191,7 @@ def launch(argv: list[str] | None = None) -> Path:
         if args.body_font: next_command += ["--body-font", str(Path(args.body_font).resolve())]
         if args.allow_draft_preview: next_command += ["--allow-draft-preview"]
         if args.upload: next_command += ["--upload"]
-        if claimed_key: next_command += ["--job-already-claimed"]
+        if claimed_key: next_command += ["--job-already-claimed", "--job-key", claimed_key]
         if args.send_telegram: next_command += ["--send-telegram","--chat-id", args.chat_id]
         command(next_command)
         state = root / "slides/delivery-state.json"

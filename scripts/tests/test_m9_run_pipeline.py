@@ -11,7 +11,7 @@ from m9_run_pipeline import (
     claim_cloud_preview, command, content_slide_count, fail_unrendered_cloud_preview,
     reviewed_selections_match, require_exploration_owner_draft,
 )
-from m9_preview_workflow import job_key
+from m9_preview_workflow import job_key, pre_send_retry_job_key
 
 
 class TestM9RunPipeline(unittest.TestCase):
@@ -19,6 +19,7 @@ class TestM9RunPipeline(unittest.TestCase):
         class Remote:
             def __init__(self): self.events=[]
             def ensure_private_bucket(self): self.events.append(("private",))
+            def get_preview(self,key): self.events.append(("lookup",key)); return None
             def claim(self,key,brief_id,manifest): self.events.append(("claim",key,brief_id,manifest))
             def transition(self,key,previous,next_status,patch): self.events.append(("transition",key,previous,next_status,patch))
         brief={"id":"72bf1111-ae15-45ca-a812-3c1e2ee37a10","version":2,"content_mode":"NEWS_UPDATE"}
@@ -26,10 +27,43 @@ class TestM9RunPipeline(unittest.TestCase):
         key=claim_cloud_preview(remote,brief)
         self.assertEqual(key,job_key(brief,{}))
         self.assertEqual(remote.events[0],("private",))
-        self.assertEqual(remote.events[1][0:3],("claim",key,brief["id"]))
-        self.assertEqual(remote.events[1][3],{"content_mode":"NEWS_UPDATE","brief_version":2,"source":"telegram_owner_preview"})
+        self.assertEqual(remote.events[1],("lookup",key))
+        self.assertEqual(remote.events[2][0:3],("claim",key,brief["id"]))
+        self.assertEqual(remote.events[2][3],{"content_mode":"NEWS_UPDATE","brief_version":2,"source":"telegram_owner_preview"})
         fail_unrendered_cloud_preview(remote,key,RuntimeError("M9_STAGE_TIMEOUT: m9_collect_media.ts"))
         self.assertEqual(remote.events[-1],("transition",key,"CLAIMED","FAILED",{"error_category":"STAGE_TIMEOUT"}))
+
+    def test_claims_one_reserved_key_only_after_confirmed_pre_send_failure(self):
+        brief={"id":"72bf1111-ae15-45ca-a812-3c1e2ee37a10","version":1,"content_mode":"NEWS_UPDATE"}
+        original=job_key(brief,{})
+        retry=pre_send_retry_job_key(brief)
+
+        class Remote:
+            def __init__(self,previews): self.previews=previews; self.claimed=[]
+            def ensure_private_bucket(self): pass
+            def get_preview(self,key): return self.previews.get(key)
+            def claim(self,key,brief_id,manifest): self.claimed.append((key,brief_id,manifest))
+
+        remote=Remote({original:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]}})
+        self.assertEqual(claim_cloud_preview(remote,brief),retry)
+        self.assertEqual(remote.claimed[0][0],retry)
+        self.assertEqual(remote.claimed[0][2]["retry_of"],original)
+        self.assertEqual(remote.claimed[0][2]["retry_reason"],"CONFIRMED_PRE_SEND_FAILURE")
+
+        for previous in (
+            {"creative_brief_id":brief["id"],"status":"SEND_UNCERTAIN","telegram_message_ids":[]},
+            {"creative_brief_id":brief["id"],"status":"SENT","telegram_message_ids":[701]},
+            {"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[701]},
+        ):
+            blocked=Remote({original:previous})
+            with self.assertRaisesRegex(ValueError,"M9_JOB_ALREADY_CLAIMED_NO_RETRY"):
+                claim_cloud_preview(blocked,brief)
+            self.assertEqual(blocked.claimed,[])
+
+        used=Remote({original:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},retry:{"status":"FAILED","telegram_message_ids":[]}})
+        with self.assertRaisesRegex(ValueError,"M9_JOB_RETRY_ALREADY_USED"):
+            claim_cloud_preview(used,brief)
+        self.assertEqual(used.claimed,[])
 
     def test_subprocess_timeout_is_classified_without_exposing_command_output(self):
         with patch("m9_run_pipeline.subprocess.run", side_effect=subprocess.TimeoutExpired("deno", 240)):

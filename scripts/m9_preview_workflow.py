@@ -271,6 +271,14 @@ def job_key(brief: dict[str, Any], media: dict[str, Any]) -> str:
     return "m9:" + brief_id + ":v" + str(revision)
 
 
+def pre_send_retry_job_key(brief: dict[str, Any]) -> str:
+    """Reserved one-time key for a fresh dispatch after a confirmed pre-send failure."""
+    # Canonical brief revisions start at v1; the existing RPC accepts v0, so
+    # reserve it for this single recovery attempt without rewriting the failed row.
+    base_key = job_key(brief, {})
+    return base_key.rsplit(":v", 1)[0] + ":v0"
+
+
 class RemoteError(RuntimeError):
     def __init__(self, status: int, message: str):
         super().__init__(message)
@@ -609,14 +617,21 @@ def run_preview(brief: dict[str, Any], media: dict[str, Any], media_root: Path,
                 *, send: bool, chat_id: str | None = None, cta_file: Path | None = None,
                 body_font_file: Path | None = None, allow_draft_preview: bool = False,
                 allow_draft_telegram_send: bool = False,
-                job_already_claimed: bool = False) -> dict[str, Any]:
+                job_already_claimed: bool = False,
+                job_key_override: str | None = None) -> dict[str, Any]:
     if job_already_claimed and gateway is None:
         raise ValueError("M9_JOB_CLAIM_REMOTE_REQUIRED")
+    if job_key_override is not None and not job_already_claimed:
+        raise ValueError("M9_JOB_KEY_REQUIRES_CLAIM")
     validate_preview_status(brief, allow_draft_preview)
     if brief.get("status") in ("DRAFT", "SELECTED") and send and not allow_draft_telegram_send:
         raise ValueError("M9_DRAFT_TELEGRAM_SEND_REQUIRES_OWNER_OPT_IN")
     checked_media(media, media_root)
     key = job_key(brief, media)
+    if job_key_override is not None:
+        if job_key_override not in (key, pre_send_retry_job_key(brief)):
+            raise ValueError("M9_JOB_KEY_INVALID")
+        key = job_key_override
     payload = prepared_render_job(brief, media)
     workdir = media_root.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -709,11 +724,14 @@ def main() -> None:
     cli.add_argument("--cta", help="Optional existing CTA PNG for local 3-slide review; never uploaded again")
     cli.add_argument("--upload", action="store_true", help="Upload private PNGs to Supabase")
     cli.add_argument("--job-already-claimed", action="store_true", help="Continue a brief job claimed before cloud photo collection")
+    cli.add_argument("--job-key", help="Exact previously claimed M9 job key for internal pipeline continuation")
     cli.add_argument("--send-telegram", action="store_true", help="Send ONE private review album after upload")
     cli.add_argument("--chat-id", help="Owner-only Telegram chat ID")
     args = cli.parse_args()
     if args.job_already_claimed and (not args.upload or not args.brief_id):
         cli.error("--job-already-claimed requires --upload and --brief-id")
+    if args.job_key and not args.job_already_claimed:
+        cli.error("--job-key requires --job-already-claimed")
     if args.send_telegram and (not args.upload or not args.chat_id):
         cli.error("--send-telegram requires --upload and --chat-id")
     if args.send_telegram and os.getenv("M9_ENABLE_TELEGRAM_PREVIEW") != "YES":
@@ -740,7 +758,8 @@ def main() -> None:
                          allow_draft_telegram_send=(args.send_telegram and
                              os.getenv("M9_ENABLE_TELEGRAM_PREVIEW") == "YES" and
                              args.chat_id == os.getenv("TELEGRAM_OWNER_USER_ID")),
-                         job_already_claimed=args.job_already_claimed)
+                         job_already_claimed=args.job_already_claimed,
+                         job_key_override=args.job_key)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

@@ -56,10 +56,12 @@ class BriefToRequest(unittest.TestCase):
         self.assertEqual(result["slots"][1]["subject_aliases"][0],"Sir Alex Ferguson")
         self.assertTrue(result["_provenance"]["requires_human_photo_review"])
 
-    def test_fail_closed_for_two_named_people_on_same_photo(self):
+    def test_keeps_two_named_people_as_separate_subject_groups(self):
         x=brief("프레드와 텐 하흐의 대비 컷 또는 실루엣","프레드의 인터뷰 사진")
-        with self.assertRaisesRegex(ValueError,"AMBIGUOUS_PHOTO_SUBJECT_PAGE_1"):
-            build_request(x,["i.guim.co.uk"])
+        result=build_request(x,["i.guim.co.uk"])
+        groups=result["slots"][0]["subject_alias_groups"]
+        self.assertEqual([group["canonical_name"] for group in groups], ["Fred","Erik ten Hag"])
+        self.assertEqual(result["slots"][0]["subject_aliases"][:2], ["Fred","Erik ten Hag"])
 
     def test_different_players_for_cover_and_body(self):
         x=brief("마이클 캐릭 감독 경기 후 모습","도미닉 솔란케가 동점골을 넣는 모습")

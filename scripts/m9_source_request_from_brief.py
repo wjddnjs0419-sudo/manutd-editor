@@ -148,7 +148,7 @@ def build_request(
     )
     if len(numbered_slides) != len(slides) or len(numbered_slides) > 6:
         raise ValueError("M9_BRIEF_SLIDE_COUNT_INVALID")
-    subjects=[]
+    first_page_subjects: list[str] | None = None
     slots=[]
     for index, slide in enumerate(numbered_slides):
         if not isinstance(slide,dict):raise ValueError("M9_BRIEF_SLIDES_MISSING")
@@ -161,16 +161,37 @@ def build_request(
         if not isinstance(scene,str):scene=""
         recognized=recognized_people(scene,registry)
         # A person named elsewhere in a headline is not proof they appear in a photo.
-        # For simple one-person stories only, inherit the named subject from page 1.
-        if len(recognized)>1:
-            raise ValueError(f"M9_AMBIGUOUS_PHOTO_SUBJECT_PAGE_{index+1}")
+        # Keep the existing page-1 fallback, inheriting its full named subject group.
         if len(recognized)==0:
-            if index > 0 and subjects:recognized=[subjects[0]]
+            if index > 0 and first_page_subjects:recognized=list(first_page_subjects)
             else:raise ValueError(f"M9_PHOTO_SUBJECT_NOT_IDENTIFIED_PAGE_{index+1}")
-        subjects.append(recognized[0])
+        if len(recognized)>6:
+            raise ValueError(f"M9_PHOTO_SUBJECT_COUNT_INVALID_PAGE_{index+1}")
+        if index == 0:
+            first_page_subjects=list(recognized)
         role = "COVER_NEWS" if index == 0 else "BODY_NEWS"
-        aliases = list(dict.fromkeys([recognized[0], *[alias for alias in registry[recognized[0]] if len(alias.strip()) >= 4]]))[:6]
-        slots.append({"slot": role, "slide_number": slide_number, "subject_aliases": aliases})
+        subject_alias_groups = []
+        for canonical_name in recognized:
+            aliases = list(dict.fromkeys([
+                canonical_name,
+                *[alias for alias in registry[canonical_name] if len(alias.strip()) >= 4],
+            ]))[:6]
+            subject_alias_groups.append({"canonical_name": canonical_name, "aliases": aliases})
+        flat_aliases = list(recognized)
+        flat_aliases.extend(
+            alias
+            for group in subject_alias_groups
+            for alias in group["aliases"]
+            if alias != group["canonical_name"]
+        )
+        slots.append({
+            "slot": role,
+            "slide_number": slide_number,
+            # Retain the legacy flat field for older readers. New collectors use
+            # the grouped field so aliases for different people aren't confused.
+            "subject_aliases": list(dict.fromkeys(flat_aliases))[:6],
+            "subject_alias_groups": subject_alias_groups,
+        })
     news,official=source_pages(snapshot)
     google_original_urls=[]
     for source in snapshot.get("sources",[]):
@@ -186,7 +207,11 @@ def build_request(
         "allowed_image_hosts":allowed_image_hosts,
         "_provenance":{
             "brief_id":brief.get("id"),
-            "subject_names":subjects,
+            "subject_names":[
+                group["canonical_name"]
+                for slot in slots
+                for group in slot["subject_alias_groups"]
+            ],
             "source_type":"creative_briefs.evidence_snapshot.sources_and_exploration_articles",
             "google_news_original_urls":google_original_urls[:20],
             "requires_human_photo_review":True,

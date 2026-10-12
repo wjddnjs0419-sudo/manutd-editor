@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1.0.8";
 import {
-  inspectImageBytes,allowedPhotoImageUrl,probePhotoImage,matchPhotoSubject,
+  inspectImageBytes,allowedPhotoImageUrl,probePhotoImage,matchPhotoSubject,matchPhotoSubjectGroups,
   selectPublisherPhoto,shortlistPublisherPhotos,projectedCropScale,
 } from "../../_shared/m9/photo_quality.ts";
 import type { PhotoCandidate } from "../../_shared/m9/article_photo_candidates.ts";
@@ -80,6 +80,23 @@ Deno.test("subject matching is text evidence, not visual identity verification",
   assertEquals(matchPhotoSubject(candidate(),["Bruno Fernandes"]),"ALT_OR_CAPTION_MATCH");
   assertEquals(matchPhotoSubject(candidate({caption:null}),["Bruno Fernandes"]),"FILENAME_HINT");
   assertEquals(matchPhotoSubject(candidate({caption:"Another footballer",image_url:"https://images.example.org/stock-photo.jpg"}),["Bruno Fernandes"]),"UNCONFIRMED");
+  const groups=[
+    {canonical_name:"Bryan Mbeumo",aliases:["Bryan Mbeumo"]},
+    {canonical_name:"Dominic Solanke",aliases:["Dominic Solanke"]},
+  ];
+  const partial=matchPhotoSubjectGroups(candidate({caption:"Bryan Mbeumo celebrates"}),groups);
+  assertEquals(partial.coverage,"PARTIAL");
+  assertEquals(partial.metadata_matched_subjects,["Bryan Mbeumo"]);
+  const full=matchPhotoSubjectGroups(candidate({caption:"Bryan Mbeumo and Dominic Solanke"}),groups);
+  assertEquals(full.coverage,"FULL");
+  assertEquals(full.metadata_matched_subjects,["Bryan Mbeumo","Dominic Solanke"]);
+  const selected=selectPublisherPhoto([
+    candidate({image_url:"https://images.example.org/partial.jpg",caption:"Bryan Mbeumo celebrates"}),
+    candidate({image_url:"https://images.example.org/full.jpg",caption:"Bryan Mbeumo and Dominic Solanke"}),
+  ],[valid(2000,1300),valid(2000,1300)],
+  ["Bryan Mbeumo","Dominic Solanke"],"BODY_NEWS",new Date("2026-10-11T12:00:00Z"),groups);
+  assertEquals(selected.selected?.candidate.image_url,"https://images.example.org/full.jpg");
+  assertEquals(selected.selected?.subject_match.coverage,"FULL");
 });
 Deno.test("selects current subject-relevant article photo and flags reuse rights",()=>{
   const c=[

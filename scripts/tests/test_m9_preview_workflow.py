@@ -11,7 +11,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from m9_preview_workflow import (
-    brief_slides, checked_media, prepared_render_job, split_hook, job_key, run_preview,
+    brief_slides, checked_media, prepared_render_job, split_hook, job_key, pre_send_retry_job_key, run_preview,
     SupabaseGateway, RemoteError, TelegramGateway, telegram_text_chunks, validate_preview_status,
     safe_failure_category,
 )
@@ -354,6 +354,26 @@ class M9IntegrationContracts(unittest.TestCase):
         self.assertEqual(result["status"], "UPLOADED")
         self.assertEqual(store.claimed, {key})
         self.assertEqual(store.changes, [("CLAIMED", "RENDERED"), ("RENDERED", "UPLOADED")])
+
+    @unittest.skipUnless(find_font(), "M9_TEST_FONT needed")
+    def test_renderer_continues_reserved_pre_send_retry_claim(self):
+        store, tel = FakeGateway(), FakeTelegram()
+        key = pre_send_retry_job_key(self.brief)
+        store.claim(key, self.brief["id"], {"retry_reason": "CONFIRMED_PRE_SEND_FAILURE"})
+        result = run_preview(self.brief, self.media, self.root, self.root / "retry-preclaimed",
+                             self.font, None, store, tel, send=False,
+                             cta_file=self.root / "cta.png", job_already_claimed=True,
+                             job_key_override=key)
+        self.assertEqual(result["job_key"], key)
+        self.assertEqual(store.claimed, {key})
+
+    def test_renderer_rejects_unrecognized_job_key_override(self):
+        store, tel = FakeGateway(), FakeTelegram()
+        with self.assertRaisesRegex(ValueError, "M9_JOB_KEY_INVALID"):
+            run_preview(self.brief, self.media, self.root, self.root / "invalid-job-key",
+                        Path("unused"), None, store, tel, send=False,
+                        job_already_claimed=True, job_key_override="m9:other:v0")
+        self.assertEqual(store.claimed, set())
 
     def test_renderer_rejects_a_missing_preclaim_without_making_one(self):
         store, tel = FakeGateway(), FakeTelegram()

@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFilter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from m9_acquire_photos import choose_media, fetch_bounded_image, validate_cdn_url
-from m9_photo_analysis import NormalizedFace
+from m9_photo_analysis import CropPlan, NormalizedFace, PhotoEvaluation
 
 
 def assessment(url: str, old: bool = False) -> dict:
@@ -85,7 +85,7 @@ class TestAcquire(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_choose(self, gathered, downloader=None, detector=None):
+    def run_choose(self, gathered, downloader=None, detector=None, analyzer=None):
         def fake(url, hosts):
             validate_cdn_url(url, hosts)
             if "/blur" in url:
@@ -94,13 +94,10 @@ class TestAcquire(unittest.TestCase):
                 raise ValueError("M9_IMAGE_DOWNLOAD_FAILED")
             return self.photo, ".jpg"
 
-        return choose_media(
-            gathered,
-            self.root,
-            ["photos.example.org"],
-            downloader or fake,
-            detector=detector or self.detector,
-        )
+        kwargs = {"detector": detector or self.detector}
+        if analyzer is not None:
+            kwargs["analyzer"] = analyzer
+        return choose_media(gathered, self.root, ["photos.example.org"], downloader or fake, **kwargs)
 
     def test_two_roles_one_download_for_same_url(self):
         requests = []
@@ -121,6 +118,24 @@ class TestAcquire(unittest.TestCase):
         self.assertIn("crop", result["cover"])
         self.assertIn("faces", result["cover"])
         self.assertIn("quality", result["cover"])
+
+    def test_partial_named_subject_coverage_is_preserved_for_owner_review(self):
+        gathered = payload()
+        for row in gathered["selections"]:
+            row["selected"]["subject_match"] = {
+                "requested_subjects": ["Bryan Mbeumo", "Dominic Solanke"],
+                "metadata_matched_subjects": ["Bryan Mbeumo"],
+                "filename_matched_subjects": [],
+                "requested_subject_count": 2,
+                "coverage": "PARTIAL",
+            }
+        result = self.run_choose(gathered, analyzer=lambda _image, _role, _detector: PhotoEvaluation(
+            faces=(), face_count=1,
+            crop=CropPlan(0, 0, 1, 1, 1, 0.5, 0.5, False, ()),
+            quality={"sharpness": 1.0}, review_required=True, flags=(), analysis_ms=0.0,
+        ))
+        self.assertEqual(result["cover"]["subject_match"]["coverage"], "PARTIAL")
+        self.assertIn("SUBJECT_METADATA_PARTIAL", result["cover"]["review_flags"])
 
     def test_assigns_page_photos_and_reuses_only_when_unique_images_run_out(self):
         gathered = payload()
