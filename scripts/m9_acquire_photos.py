@@ -113,12 +113,17 @@ Analyzer = Callable[[Image.Image, str, Detector], PhotoEvaluation]
 def _validated_assessment(choice: Any, slot: str) -> dict[str, Any]:
     if not isinstance(choice, dict):
         raise ValueError("M9_PHOTO_ASSESSMENT_INVALID_" + slot)
-    if choice.get("identity_evidence") != "ALT_OR_CAPTION_MATCH":
-        raise ValueError("M9_SUBJECT_METADATA_NOT_CONFIRMED_" + slot)
     info = choice.get("candidate")
     probe = choice.get("probe")
     if not isinstance(info, dict) or not isinstance(probe, dict) or probe.get("status") != "VALID":
         raise ValueError("M9_IMAGE_PROBE_INVALID_" + slot)
+    evidence = choice.get("identity_evidence")
+    if evidence not in ("ALT_OR_CAPTION_MATCH", "FILENAME_HINT", "UNCONFIRMED"):
+        raise ValueError("M9_SUBJECT_METADATA_NOT_CONFIRMED_" + slot)
+    if evidence == "UNCONFIRMED" and (slot == "PLAYER_PROFILE" or info.get("origin") != "ARTICLE"):
+        raise ValueError("M9_SUBJECT_METADATA_NOT_CONFIRMED_" + slot)
+    if slot == "PLAYER_PROFILE" and evidence != "ALT_OR_CAPTION_MATCH":
+        raise ValueError("M9_SUBJECT_METADATA_NOT_CONFIRMED_" + slot)
     subject_match = choice.get("subject_match")
     if subject_match is not None:
         if not isinstance(subject_match, dict):
@@ -134,11 +139,18 @@ def _validated_assessment(choice: Any, slot: str) -> dict[str, Any]:
                 any(name not in requested for name in metadata_matched) or
                 not isinstance(filename_matched, list) or
                 any(name not in requested for name in filename_matched) or
-                requested_count != len(requested) or coverage not in ("FULL", "PARTIAL") or
+                requested_count != len(requested) or coverage not in ("FULL", "PARTIAL", "NONE") or
                 (coverage == "FULL" and len(metadata_matched) != len(requested)) or
-                (coverage == "PARTIAL" and not 0 < len(metadata_matched) < len(requested))):
+                (coverage == "PARTIAL" and not 0 < len(metadata_matched) < len(requested)) or
+                (coverage == "NONE" and metadata_matched)):
             raise ValueError("M9_SUBJECT_MATCH_INVALID_" + slot)
-    if info.get("rights_status") != "UNVERIFIED" or choice.get("can_auto_publish") is not False:
+        if evidence == "UNCONFIRMED" and (
+                coverage != "NONE" or filename_matched or "SUBJECT_NOT_CONFIRMED" not in (choice.get("flags") or [])):
+            raise ValueError("M9_SUBJECT_MATCH_INVALID_" + slot)
+    elif evidence == "UNCONFIRMED":
+        raise ValueError("M9_SUBJECT_MATCH_INVALID_" + slot)
+    if (info.get("rights_status") != "UNVERIFIED" or choice.get("requires_review") is not True or
+            choice.get("can_auto_publish") is not False):
         raise ValueError("M9_REVIEW_STATUS_INVALID_" + slot)
     if "ARCHIVE_PHOTO" in (choice.get("flags") or []):
         raise ValueError("M9_ARCHIVED_PHOTO_REQUIRES_OVERRIDE")
@@ -339,6 +351,10 @@ def choose_media(
                 visual_by_digest[digest] = visual
             subject_match = choice.get("subject_match")
             review_flags = list(evaluation.flags)
+            if choice["identity_evidence"] == "UNCONFIRMED":
+                review_flags.append("SUBJECT_NOT_CONFIRMED")
+            elif choice["identity_evidence"] == "FILENAME_HINT":
+                review_flags.append("SUBJECT_FILENAME_ONLY")
             if isinstance(subject_match, dict) and subject_match.get("coverage") == "PARTIAL":
                 review_flags.append("SUBJECT_METADATA_PARTIAL")
             attempt = {

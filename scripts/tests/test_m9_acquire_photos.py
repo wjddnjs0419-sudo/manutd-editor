@@ -28,6 +28,7 @@ def assessment(url: str, old: bool = False) -> dict:
         "candidate": {
             "image_url": url,
             "article_url": "https://news.example.org/football/story",
+            "origin": "ARTICLE",
             "credit": "Photographer B / News Agency",
             "rights_status": "UNVERIFIED",
             "caption": "Bruno Fernandes scores in Manchester",
@@ -397,9 +398,33 @@ class TestAcquire(unittest.TestCase):
         self.assertIn("NO_FACE_DETECTED", result["cover"]["review_flags"])
         self.assertEqual(result["selection_status"], "CANDIDATES_FOR_REVIEW")
 
-    def test_reject_unmatched_subject(self):
+    def test_accept_unconfirmed_article_photo_as_owner_review_only(self):
         gathered = payload()
-        gathered["selections"][0]["selected"]["identity_evidence"] = "UNCONFIRMED"
+        for row in gathered["selections"]:
+            row["selected"]["identity_evidence"] = "UNCONFIRMED"
+            row["selected"]["flags"] = ["SUBJECT_NOT_CONFIRMED", "REUSE_RIGHTS_UNVERIFIED"]
+            row["selected"]["subject_match"] = {
+                "requested_subjects": ["Bruno Fernandes"],
+                "metadata_matched_subjects": [],
+                "filename_matched_subjects": [],
+                "requested_subject_count": 1,
+                "coverage": "NONE",
+            }
+        result = self.run_choose(gathered, analyzer=lambda _image, _role, _detector: PhotoEvaluation(
+            faces=(), face_count=1,
+            crop=CropPlan(0, 0, 1, 1, 1, 0.5, 0.5, False, ()),
+            quality={"sharpness": 1.0}, review_required=True, flags=(), analysis_ms=0.0,
+        ))
+        self.assertEqual(result["cover"]["identity_evidence"], "UNCONFIRMED")
+        self.assertIn("SUBJECT_NOT_CONFIRMED", result["cover"]["review_flags"])
+        self.assertTrue(result["cover"]["review_required"])
+
+    def test_reject_unconfirmed_official_club_photo(self):
+        gathered = payload()
+        choice = gathered["selections"][0]["selected"]
+        choice["identity_evidence"] = "UNCONFIRMED"
+        choice["flags"] = ["SUBJECT_NOT_CONFIRMED"]
+        choice["candidate"]["origin"] = "OFFICIAL_CLUB"
         with self.assertRaisesRegex(ValueError, "M9_SUBJECT_METADATA_NOT_CONFIRMED"):
             self.run_choose(gathered)
 

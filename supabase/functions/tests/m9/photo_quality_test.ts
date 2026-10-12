@@ -93,10 +93,12 @@ Deno.test("subject matching is text evidence, not visual identity verification",
   const selected=selectPublisherPhoto([
     candidate({image_url:"https://images.example.org/partial.jpg",caption:"Bryan Mbeumo celebrates"}),
     candidate({image_url:"https://images.example.org/full.jpg",caption:"Bryan Mbeumo and Dominic Solanke"}),
-  ],[valid(2000,1300),valid(2000,1300)],
+    candidate({image_url:"https://images.example.org/unconfirmed.jpg",caption:null,credit:null}),
+  ],[valid(2000,1300),valid(2000,1300),valid(2000,1300)],
   ["Bryan Mbeumo","Dominic Solanke"],"BODY_NEWS",new Date("2026-10-11T12:00:00Z"),groups);
   assertEquals(selected.selected?.candidate.image_url,"https://images.example.org/full.jpg");
   assertEquals(selected.selected?.subject_match.coverage,"FULL");
+  assertEquals(selected.shortlist.map(x=>x.subject_match.coverage),["FULL","PARTIAL","NONE"]);
 });
 Deno.test("selects current subject-relevant article photo and flags reuse rights",()=>{
   const c=[
@@ -116,8 +118,21 @@ Deno.test("selects current subject-relevant article photo and flags reuse rights
   assert(picked.shortlist.some(x=>x.candidate.image_url==="https://images.example.org/tiny.jpg"));
   assert((picked.shortlist.find(x=>x.candidate.image_url.endsWith("tiny.jpg"))?.projected_crop_scale ?? 0)>2);
 });
-Deno.test("unknown subject never becomes automatically selected",()=>{
-  const selected=selectPublisherPhoto([candidate({caption:"Unrelated photo",image_url:"https://images.example.org/a.jpg"})],[valid(2000,1500)],["Bruno Fernandes"],"PLAYER_PROFILE");
+Deno.test("unknown-name article photo remains an owner-review candidate, never auto-publish",()=>{
+  const selected=selectPublisherPhoto([candidate({caption:null,credit:null,image_url:"https://images.example.org/editorial-match.jpg"})],[valid(2000,1500)],["Bruno Fernandes"],"COVER_NEWS");
+  assertEquals(selected.status,"CANDIDATES_FOR_REVIEW");
+  assertEquals(selected.selected?.identity_evidence,"UNCONFIRMED");
+  assert(selected.selected?.flags.includes("SUBJECT_NOT_CONFIRMED"));
+  assertEquals(selected.selected?.can_auto_publish,false);
+  assertEquals(selected.selected?.requires_review,true);
+});
+Deno.test("unknown-name official-club photo is not accepted by article-only review policy",()=>{
+  const selected=selectPublisherPhoto([candidate({origin:"OFFICIAL_CLUB",caption:null,credit:null,image_url:"https://images.example.org/editorial-match.jpg"})],[valid(2000,1500)],["Bruno Fernandes"],"COVER_NEWS");
+  assertEquals(selected.status,"NO_SUITABLE_IMAGE");
+  assertEquals(selected.selected,null);
+});
+Deno.test("obvious logo and ad assets are excluded even when dimensions are valid",()=>{
+  const selected=selectPublisherPhoto([candidate({caption:"Manchester United sponsor logo",image_url:"https://images.example.org/club-logo.png"})],[valid(2000,1500)],["Bruno Fernandes"],"COVER_NEWS");
   assertEquals(selected.status,"NO_SUITABLE_IMAGE");
   assertEquals(selected.selected,null);
 });

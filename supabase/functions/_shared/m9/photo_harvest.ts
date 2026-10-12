@@ -8,6 +8,7 @@ import {collectPublisherImages, type PhotoSourcePage,type PhotoCandidate} from "
 import {
   type M9PhotoSlot,type M9ImageProbe,type M9PhotoSelection,type M9PhotoSubjectGroup,
   type M9ProbeOptions,probePhotoImage,selectPublisherPhoto,matchPhotoSubjectGroups,
+  isObviousNonPhotoAsset,
 } from "./photo_quality.ts";
 
 export interface M9PhotoSlotRequest {
@@ -70,17 +71,16 @@ function candidateRelevance(candidate:PhotoCandidate, slots:readonly M9PhotoSlot
     const groups=subjectGroups(request);
     const match=matchPhotoSubjectGroups(candidate,groups);
     const covered=match.metadata_matched_subjects.length;
-    if(!covered&&!match.filename_matched_subjects.length)return 0;
-    const complete=match.coverage==="FULL"?1_000_000:0;
+    const complete=match.coverage==="FULL"?3_000_000:match.coverage==="PARTIAL"?2_000_000:0;
     const coverage=Math.round(100_000*covered/groups.length);
-    const evidence=covered?3_000:match.filename_matched_subjects.length?1_000:0;
+    const evidence=match.filename_matched_subjects.length?1_000:0;
     return complete+coverage+evidence;
   }));
   return identity+(candidate.origin==="ARTICLE"?100:0)+candidate.score;
 }
 /**
- * Fail-closed: unknown player metadata never enters the automatic probe budget.
- * A human can manually inspect unscreened images through a later review UI.
+ * Names rank candidates; article-origin photos without name metadata may enter
+ * the bounded, private owner-review flow. They never verify a player's identity.
  */
 export async function harvestArticlePhotos(
   job:M9PhotoHarvestJob, opts:M9PhotoHarvestOptions,
@@ -98,9 +98,10 @@ export async function harvestArticlePhotos(
   const candidates=uniquePhotoCandidates(await collectPublisherImages(sources,{
     fetch:opts.fetch,timeoutMs:opts.timeoutMs??5500,maxPages:maxSourcePages,
   }));
-  const eligible=candidates.filter(candidate=>job.slots.some(s=>{
+  const eligible=candidates.filter(candidate=>!isObviousNonPhotoAsset(candidate) && job.slots.some(s=>{
     const match=matchPhotoSubjectGroups(candidate,subjectGroups(s));
-    return match.metadata_matched_subjects.length>0||match.filename_matched_subjects.length>0;
+    return match.metadata_matched_subjects.length>0||match.filename_matched_subjects.length>0||
+      (candidate.origin==="ARTICLE"&&s.slot!=="PLAYER_PROFILE");
   }))
     .sort((a,b)=>candidateRelevance(b,job.slots)-candidateRelevance(a,job.slots));
   const toProbe=eligible.slice(0,maxProbes);

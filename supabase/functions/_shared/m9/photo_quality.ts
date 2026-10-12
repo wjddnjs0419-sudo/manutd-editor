@@ -230,6 +230,15 @@ export function matchPhotoSubjectGroups(
   };
 }
 
+/** Obvious non-editorial assets must never enter photo review or acquisition. */
+export function isObviousNonPhotoAsset(candidate: PhotoCandidate): boolean {
+  const path = (() => {
+    try { return new URL(candidate.image_url).pathname; } catch { return candidate.image_url; }
+  })();
+  const description = `${path} ${candidate.caption ?? ""}`.toLocaleLowerCase("en-US").normalize("NFKC");
+  return /(?:^|[^a-z0-9])(?:logos?|icons?|sponsors?|sponsorship|adverts?|advertisements?|banners?|infographics?|illustrations?|badges?)(?:$|[^a-z0-9])/u.test(description);
+}
+
 // Resolution and exact 4:5 crop scale are enforced after the full image reaches
 // Python. Keep low-resolution candidates (including >2x cases) in the bounded
 // shortlist so the crop gate can report the precise rejection reason.
@@ -313,7 +322,9 @@ export function selectPublisherPhoto(
   }];
   const assessed=candidates.map((candidate,i)=>assessPublisherPhoto(candidate,probes[i]!,aliases,slot,now,groups));
   const usable=assessed.filter(x=>!x.flags.includes("INSUFFICIENT_DIMENSIONS") &&
-    x.probe.status==="VALID" && x.identity_evidence!=="UNCONFIRMED" &&
+    x.probe.status==="VALID" && !isObviousNonPhotoAsset(x.candidate) &&
+    (x.identity_evidence!=="UNCONFIRMED" ||
+      (x.candidate.origin==="ARTICLE" && slot!=="PLAYER_PROFILE")) &&
     !x.flags.includes("FUTURE_PHOTO_DATE") &&
     (slot!=="PLAYER_PROFILE"||x.identity_evidence==="ALT_OR_CAPTION_MATCH"));
   const subjectCoverage=(assessment:M9PhotoAssessment)=>
