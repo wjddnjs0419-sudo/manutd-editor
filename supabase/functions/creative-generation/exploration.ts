@@ -130,9 +130,16 @@ export function assessExplorationSnapshot(
     const reason = (snapshot.exploration_articles ?? []).map((article) => assessExplorationArticle(article, now, config).reason).find(Boolean) ?? "ARTICLE_EVIDENCE_MISSING";
     return { eligible: false, reason, articles: [] };
   }
+  // Publisher RSS headlines can omit the club even when the extracted page
+  // opens with a direct United match report. Keep that short lead beside the
+  // story title so a later Manchester City comparison does not mask the
+  // article's primary subject.
+  const articleTexts = articles.map((article) => article.article_text ?? "");
+  const articleLead = articleTexts.map((article) => article.trim().slice(0, 240)).join(" ");
   const relevance = classifyManchesterUnitedRelevance({
     canonicalTitle: snapshot.story.canonical_title,
-    body: articles.map((article) => article.article_text ?? "").join(" "),
+    primaryText: articleLead,
+    body: articleTexts.join(" "),
     entities: snapshot.candidate.score_inputs.entities,
     topic: snapshot.candidate.score_inputs.topic,
   });

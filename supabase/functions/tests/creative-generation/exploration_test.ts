@@ -70,6 +70,19 @@ Deno.test("Exploration rejects an article with only an incidental United mention
   assertEquals(result.reason, "UNITED_SIGNAL_NOT_CENTRAL");
 });
 
+Deno.test("Exploration accepts a United fixture article whose later context mentions Manchester City", async () => {
+  const { assessExplorationSnapshot, DEFAULT_EXPLORATION_CONFIG } = await import("../../creative-generation/exploration.ts");
+  const base = {
+    candidate: { id: "c", story_cluster_id: "story-1", ranking_date: "2026-10-12", rank: 1, priority_score: 50, data_confidence: 50, first_mover_flag: null, must_cover_flag: null, korea_coverage_status: "UNCERTAIN" as const, score_version: null, score_inputs: { entities: [], topic: "DISCOVERY" } },
+    story: { id: "story-1", canonical_title: "Boos, anguish & fading belief - worrying day for Carrick", status: "STALE", first_seen_at: "2026-10-10T20:00:00Z", last_seen_at: "2026-10-10T20:00:00Z" },
+    posts: [], sources: [],
+    exploration_articles: [{ source_observation_id: "article-1", publisher_name: "BBC Sport", canonical_url: "https://www.bbc.co.uk/sport/football/articles/c62e9g09e781o", published_at: "2026-10-10T20:54:46Z", extraction_status: "EXTRACTED", article_text: "Solanke scores in added time as 10-man Spurs draw with Man Utd. For the second time in successive home Premier League games, Manchester United failed to beat opponents reduced to 10 men. Four weeks ago, Manchester City needed an incorrect VAR decision to take advantage of an ineffective United performance. " + "The report explains the match and Carrick's response. ".repeat(8), content_fingerprint: "fp", verified: false as const }],
+  } as unknown as CandidateEvidenceInput;
+  const result = assessExplorationSnapshot(buildEvidenceSnapshot(base, true), new Date("2026-10-12T12:00:00Z"), { ...DEFAULT_EXPLORATION_CONFIG, enabled: true });
+  assertEquals(result.eligible, true);
+  assertEquals(result.reason, null);
+});
+
 Deno.test("Exploration slide bounds vary by content mode", async () => {
   const { explorationSlideBounds } = await import("../../creative-generation/exploration.ts");
   assertEquals(explorationSlideBounds("NEWS_UPDATE"), { min: 2, max: 4 });

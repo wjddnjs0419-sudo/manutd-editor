@@ -79,6 +79,18 @@ Deno.test("rejects unrelated football and Manchester City-only stories", () => {
   assertEquals(isManchesterUnitedFocusedSource("todayfootball"), false);
 });
 
+Deno.test("rejects a Manchester City-led article when United appears later in its lead", () => {
+  const result = classifyManchesterUnitedRelevance({
+    title: "Manager discusses the weekend",
+    primaryText: "Manchester City dominated the report before Manchester United appeared as a comparison.",
+    body: "Manchester City are the subject. Manchester United are mentioned once as a comparison.",
+    topic: "DISCOVERY",
+  });
+  assertEquals(result.classification, "INCIDENTAL_MENTION");
+  assertEquals(result.reasonCodes, ["MANCHESTER_CITY_ONLY_OR_COMPARISON"]);
+  assertEquals(result.autoEligible, false);
+});
+
 Deno.test("rejects broad-source listicles where United is only a secondary mention", () => {
   assertFalse(isManchesterUnitedRelevant({
     canonicalTitle: "토트넘 초비상 토트넘 최하위 추락, 다음 상대 맨유",
