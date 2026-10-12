@@ -66,10 +66,20 @@ class TestM9RunPipeline(unittest.TestCase):
         self.assertEqual(used.claimed[0][0],retry2)
         self.assertEqual(used.claimed[0][2]["retry_attempt"],2)
 
+        used_again=Remote({
+            original:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},
+            retry:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},
+            retry2:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},
+        })
+        retry3=retry.rsplit(":v",1)[0]+":v000"
+        self.assertEqual(claim_cloud_preview(used_again,brief),retry3)
+        self.assertEqual(used_again.claimed[0][2]["retry_attempt"],3)
+
         exhausted=Remote({
             original:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},
             retry:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},
             retry2:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},
+            retry3:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},
         })
         with self.assertRaisesRegex(ValueError,"M9_JOB_RETRY_ALREADY_USED"):
             claim_cloud_preview(exhausted,brief)

@@ -279,6 +279,13 @@ def pre_send_retry_job_key(brief: dict[str, Any]) -> str:
     return base_key.rsplit(":v", 1)[0] + ":v0"
 
 
+def pre_send_retry_job_keys(brief: dict[str, Any]) -> list[str]:
+    """Finite reserved keys for separately approved retries after proven pre-send failures."""
+    first = pre_send_retry_job_key(brief)
+    prefix = first.rsplit(":v", 1)[0]
+    return [first, prefix + ":v00", prefix + ":v000"]
+
+
 class RemoteError(RuntimeError):
     def __init__(self, status: int, message: str):
         super().__init__(message)
@@ -629,7 +636,7 @@ def run_preview(brief: dict[str, Any], media: dict[str, Any], media_root: Path,
     checked_media(media, media_root)
     key = job_key(brief, media)
     if job_key_override is not None:
-        if job_key_override not in (key, pre_send_retry_job_key(brief)):
+        if job_key_override not in (key, *pre_send_retry_job_keys(brief)):
             raise ValueError("M9_JOB_KEY_INVALID")
         key = job_key_override
     payload = prepared_render_job(brief, media)

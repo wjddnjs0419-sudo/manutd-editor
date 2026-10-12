@@ -28,7 +28,7 @@ from pathlib import Path
 from m9_source_request_from_brief import build_request
 from m9_preview_workflow import (
     Http, SupabaseGateway, TelegramGateway, job_key, safe_failure_category,
-    pre_send_retry_job_key, validate_preview_status,
+    pre_send_retry_job_keys, validate_preview_status,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -85,8 +85,7 @@ def claim_cloud_preview(remote: SupabaseGateway, brief: dict) -> str:
                 previous.get("status") != "FAILED" or
                 previous.get("telegram_message_ids") != []):
             raise ValueError("M9_JOB_ALREADY_CLAIMED_NO_RETRY")
-        first_retry_key = pre_send_retry_job_key(brief)
-        retry_keys = [first_retry_key, first_retry_key.rsplit(":v", 1)[0] + ":v00"]
+        retry_keys = pre_send_retry_job_keys(brief)
         retry_records = [remote.get_preview(retry_key) for retry_key in retry_keys]
         for attempt, (retry_key, retry_record) in enumerate(zip(retry_keys, retry_records), start=1):
             if retry_record is None:
@@ -159,7 +158,7 @@ def launch(argv: list[str] | None = None) -> Path:
     if brief_data.get("status") in ("DRAFT", "SELECTED") and args.send_telegram and not args.allow_draft_preview:
         raise ValueError("M9_DRAFT_TELEGRAM_SEND_REQUIRES_OWNER_OPT_IN")
     claimed_key = claim_cloud_preview(remote, brief_data) if args.upload and remote else None
-    is_pre_send_recovery = claimed_key == pre_send_retry_job_key(brief_data) if claimed_key else False
+    is_pre_send_recovery = claimed_key in pre_send_retry_job_keys(brief_data) if claimed_key else False
     try:
         telegram = None
         if args.send_telegram:

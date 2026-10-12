@@ -357,15 +357,18 @@ class M9IntegrationContracts(unittest.TestCase):
 
     @unittest.skipUnless(find_font(), "M9_TEST_FONT needed")
     def test_renderer_continues_reserved_pre_send_retry_claim(self):
-        store, tel = FakeGateway(), FakeTelegram()
-        key = pre_send_retry_job_key(self.brief)
-        store.claim(key, self.brief["id"], {"retry_reason": "CONFIRMED_PRE_SEND_FAILURE"})
-        result = run_preview(self.brief, self.media, self.root, self.root / "retry-preclaimed",
-                             self.font, None, store, tel, send=False,
-                             cta_file=self.root / "cta.png", job_already_claimed=True,
-                             job_key_override=key)
-        self.assertEqual(result["job_key"], key)
-        self.assertEqual(store.claimed, {key})
+        first = pre_send_retry_job_key(self.brief)
+        retry_keys = [first, first.rsplit(":v", 1)[0] + ":v00", first.rsplit(":v", 1)[0] + ":v000"]
+        for index, key in enumerate(retry_keys):
+            with self.subTest(key=key):
+                store, tel = FakeGateway(), FakeTelegram()
+                store.claim(key, self.brief["id"], {"retry_reason": "CONFIRMED_PRE_SEND_FAILURE"})
+                result = run_preview(self.brief, self.media, self.root, self.root / f"retry-preclaimed-{index}",
+                                     self.font, None, store, tel, send=False,
+                                     cta_file=self.root / "cta.png", job_already_claimed=True,
+                                     job_key_override=key)
+                self.assertEqual(result["job_key"], key)
+                self.assertEqual(store.claimed, {key})
 
     def test_renderer_rejects_unrecognized_job_key_override(self):
         store, tel = FakeGateway(), FakeTelegram()
