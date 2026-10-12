@@ -28,20 +28,34 @@ export async function dispatchPrivateExplorationPreview(
       !/^[A-Za-z0-9._/-]+$/u.test(options.workflowRef) || options.workflowRef.includes("..")) {
     throw new Error("M9_PREVIEW_DISPATCH_NOT_CONFIGURED");
   }
-  const endpoint = `https://api.github.com/repos/${options.repository}/actions/workflows/m9-private-preview.yml/dispatches`;
+  const apiBase = `https://api.github.com/repos/${options.repository}`;
+  const headers = {
+    authorization: `Bearer ${options.token}`,
+    accept: "application/vnd.github+json",
+    "content-type": "application/json",
+    "x-github-api-version": "2022-11-28",
+  };
+  let expectedSha: unknown;
   let response: Response;
   try {
-    response = await (options.fetchImpl ?? fetch)(endpoint, {
+    const refResponse = await (options.fetchImpl ?? fetch)(
+      `${apiBase}/git/ref/heads/${encodeURIComponent(options.workflowRef)}`,
+      { method: "GET", headers },
+    );
+    if (refResponse.status !== 200) throw new Error("M9_PREVIEW_REF_NOT_FOUND");
+    const ref = await refResponse.json();
+    expectedSha = ref && typeof ref === "object" && "object" in ref && ref.object && typeof ref.object === "object" && "sha" in ref.object
+      ? ref.object.sha
+      : null;
+    if (typeof expectedSha !== "string" || !/^[0-9a-f]{40}$/u.test(expectedSha)) {
+      throw new Error("M9_PREVIEW_REF_SHA_INVALID");
+    }
+    response = await (options.fetchImpl ?? fetch)(`${apiBase}/actions/workflows/m9-private-preview.yml/dispatches`, {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${options.token}`,
-        accept: "application/vnd.github+json",
-        "content-type": "application/json",
-        "x-github-api-version": "2022-11-28",
-      },
+      headers,
       body: JSON.stringify({
         ref: options.workflowRef,
-        inputs: { brief_id: brief.id, brief_status: "DRAFT", mode: "owner_review" },
+        inputs: { brief_id: brief.id, brief_status: "DRAFT", expected_sha: expectedSha, mode: "owner_review" },
       }),
     });
   } catch {
