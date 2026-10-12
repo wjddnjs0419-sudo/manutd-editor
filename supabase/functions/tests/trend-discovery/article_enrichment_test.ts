@@ -56,3 +56,28 @@ Deno.test("extracts relevant article paragraphs from publisher HTML larger than 
   assertStringIncludes(result.excerpt ?? "", "Manchester United completed another training session");
   assertEquals(result.metadata.article_enrichment, "EXTRACTED");
 });
+
+
+Deno.test("resolved Google News publisher URL is the body extraction target", async () => {
+  const resolvedPublisherUrl = "https://www.bbc.com/sport/football/articles/united-story";
+  const requested: string[] = [];
+  const source = observation({
+    providerId: "google-news",
+    sourceRole: "DISCOVERY_COMMUNITY",
+    canonicalUrl: resolvedPublisherUrl,
+    excerpt: null,
+    metadata: { google_news_original_url: "https://news.google.com/rss/articles/opaque-article-id" },
+  });
+  const enrich = createArticleEnricher({
+    fetch: async (input) => {
+      requested.push(String(input));
+      return new Response("<article><p>Manchester United confirmed a team update in the BBC report.</p></article>");
+    },
+  });
+
+  const result = await enrich(source);
+
+  assertEquals(requested, [resolvedPublisherUrl]);
+  assertEquals(result.metadata.article_enrichment, "EXTRACTED");
+  assertStringIncludes(result.excerpt ?? "", "Manchester United confirmed");
+});

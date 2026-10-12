@@ -24,10 +24,10 @@ export interface EditorialRanking extends EditorialRankingInput {
 }
 
 export interface EditorialRankingRepository {
-  listInputs(asOf?: Date, rankingDate?: string): Promise<readonly EditorialRankingInput[]>;
+  listInputs(asOf?: Date, rankingDate?: string, requestId?: string): Promise<readonly EditorialRankingInput[]>;
   /** Replace the derived ranking projection for one date/version. */
-  clearRankings?: (rankingDate: string, rankingVersion: string) => Promise<void>;
-  upsertRanking(ranking: EditorialRanking): Promise<void>;
+  clearRankings?: (rankingDate: string, rankingVersion: string, requestId?: string) => Promise<void>;
+  upsertRanking(ranking: EditorialRanking, requestId?: string): Promise<void>;
 }
 
 export interface EditorialRankingRunInput {

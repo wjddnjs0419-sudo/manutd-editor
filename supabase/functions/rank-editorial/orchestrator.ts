@@ -4,18 +4,19 @@ import type { EditorialRankingRepository, EditorialRankingRunInput, EditorialRan
 interface RunEditorialRankingOptions extends EditorialRankingRunInput {
   readonly repository: EditorialRankingRepository;
   readonly rankingDate: string;
+  readonly requestId?: string;
   readonly version?: string;
 }
 
 export async function runEditorialRanking(options: RunEditorialRankingOptions): Promise<EditorialRankingSummary> {
   const version = options.version ?? "m8-c-v1";
-  const inputs = await options.repository.listInputs(options.asOf, options.rankingDate);
+  const inputs = await options.repository.listInputs(options.asOf, options.rankingDate, options.requestId);
   const rankings = rankEditorialInputs(inputs, version);
   // editorial_rankings is a derived projection. Replace one date/version
   // before writing so a previously ranked but now irrelevant story cannot
   // remain visible or keep an old rank in the current editorial window.
-  await options.repository.clearRankings?.(options.rankingDate, version);
-  await Promise.all(rankings.map((ranking) => options.repository.upsertRanking(ranking)));
+  await options.repository.clearRankings?.(options.rankingDate, version, options.requestId);
+  await Promise.all(rankings.map((ranking) => options.repository.upsertRanking(ranking, options.requestId)));
   const newsEligible = rankings.filter((ranking) => ranking.newsEligible).length;
   return {
     status: "COMPLETED",

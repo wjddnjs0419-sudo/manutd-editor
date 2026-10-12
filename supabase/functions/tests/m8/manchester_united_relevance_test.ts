@@ -1,8 +1,65 @@
 import { assert, assertFalse, assertEquals } from "jsr:@std/assert@1.0.8";
 import {
+  classifyManchesterUnitedRelevance,
   isManchesterUnitedFocusedSource,
   isManchesterUnitedRelevant,
 } from "../../_shared/m8/manchester_united_relevance.ts";
+
+Deno.test("classifies United centered story", () => {
+  assertEquals(classifyManchesterUnitedRelevance({ title: "Manchester United confirm Bruno Fernandes injury", body: "The club confirmed its captain will miss the next match.", entities: ["Manchester United", "Bruno Fernandes"], topic: "INJURY" }).classification, "UNITED_PRIMARY");
+});
+
+Deno.test("classifies opponent article with United fixture context", () => {
+  const result = classifyManchesterUnitedRelevance({ title: "Everton prepare for Manchester United clash", body: "The sides meet at Old Trafford on Saturday.", entities: ["Everton", "Manchester United"], topic: "MATCH_PREVIEW" });
+  assertEquals(result.classification, "OPPONENT_MATCH_CONTEXT");
+  assertEquals(result.autoEligible, true);
+});
+
+Deno.test("rejects fleeting United mention", () => {
+  const result = classifyManchesterUnitedRelevance({ title: "Chelsea confirm midfielder signing", body: "Chelsea say the player joins this week. Manchester United were mentioned in a comparison last season.", entities: ["Chelsea", "Manchester United"], topic: "TRANSFER" });
+  assertEquals(result.classification, "INCIDENTAL_MENTION");
+  assertEquals(result.autoEligible, false);
+});
+
+Deno.test("rejects another sport despite a United keyword", () => {
+  const result = classifyManchesterUnitedRelevance({ title: "Jaguars sign a new running back", body: "The NFL side made the move today. A player briefly mentioned Manchester United in an interview.", entities: ["Jacksonville Jaguars"], topic: "NFL" });
+  assertEquals(result.classification, "OTHER_SPORT");
+  assertEquals(result.autoEligible, false);
+});
+
+Deno.test("rejects multi club transfer rumor roundup", () => {
+  const result = classifyManchesterUnitedRelevance({ title: "Sancho transfer rumors: United, Chelsea, Arsenal and Spurs linked", body: "The roundup lists several clubs as possible destinations without a confirmed bid.", entities: ["Jadon Sancho", "Manchester United", "Chelsea", "Arsenal", "Tottenham"], topic: "TRANSFER_RUMOR_ROUNDUP" });
+  assertEquals(result.classification, "TRANSFER_ROUNDUP");
+  assertEquals(result.autoEligible, false);
+});
+
+Deno.test("rejects real transfer news list headlines when United is one club in the roundup", () => {
+  const standard = classifyManchesterUnitedRelevance({
+    title: "Transfer news LIVE: Arsenal triple deal close, Haaland twist; Man Utd windfall; Chelsea, Liverpool latest",
+    body: "Arsenal, Chelsea, Manchester United, Liverpool and Tottenham are all back on the hunt for statement new signings.",
+    entities: ["Arsenal", "Manchester United", "Chelsea", "Liverpool", "Tottenham"],
+    topic: "TRANSFER",
+  });
+  const espn = classifyManchesterUnitedRelevance({
+    title: "Transfer rumors, news: Man City, Man Utd, Spurs eye Atlético's Simeone",
+    body: "Manchester City, Manchester United and Tottenham are all looking at bringing Atlético Madrid's manager.",
+    entities: ["Manchester City", "Manchester United", "Tottenham", "Atlético Madrid"],
+    topic: "TRANSFER_RUMOR_ROUNDUP",
+  });
+  assertEquals(standard.classification, "TRANSFER_ROUNDUP");
+  assertEquals(standard.autoEligible, false);
+  assertEquals(espn.classification, "TRANSFER_ROUNDUP");
+  assertEquals(espn.autoEligible, false);
+});
+
+Deno.test("title body entity topic disagreement cannot auto qualify", () => {
+  const result = classifyManchesterUnitedRelevance({ title: "Jacksonville Jaguars injury update", body: "Manchester United appear once in a comparison.", entities: ["Manchester United"], topic: "NFL" });
+  assertEquals(result.autoEligible, false);
+});
+
+Deno.test("focused source usernames are normalized but cannot override contradiction", () => {
+  assertEquals(classifyManchesterUnitedRelevance({ title: "Jaguars injury report", topic: "NFL", sourceUsernames: ["@UtdReport"] }).autoEligible, false);
+});
 
 Deno.test("accepts explicit Manchester United signals", () => {
   assert(isManchesterUnitedRelevant({ canonicalTitle: "맨유 떠난 가르나초의 현재" }));

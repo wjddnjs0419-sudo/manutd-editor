@@ -134,8 +134,8 @@ const CREATIVE_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        properties: { evidence_id: { type: "string" }, label: { type: "string" } },
-        required: ["evidence_id", "label"],
+        properties: { evidence_id: { type: "string" }, label: { type: "string" }, url: { type: ["string", "null"] } },
+        required: ["evidence_id", "label", "url"],
       },
     },
     editor_warning: { type: ["string", "null"] },

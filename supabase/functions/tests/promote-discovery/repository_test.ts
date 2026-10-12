@@ -111,7 +111,12 @@ Deno.test("Google publisher provenance reaches M8 source observations without re
         metadata: { google_news_original_url: "https://news.google.com/rss/articles/google-article-1" },
         story_cluster_id: null,
       }]));
-      if (url.includes("/information_sources?")) return new Response(JSON.stringify([{ id: "bbc-source" }]));
+      if (url.includes("/information_sources?")) {
+        const query = new URL(url).searchParams;
+        if (query.get("canonical_name") === "eq.Google News") return Response.json([{ id: "google-news-source" }]);
+        if (query.has("active")) return Response.json([{ id: "bbc-source", canonical_name: "BBC Sport", website_url: "https://www.bbc.com/sport", editorial_role: "FACT_INDEPENDENT", reliability_score: 8, active: true }]);
+        return Response.json([{ id: "bbc-source" }]);
+      }
       if (url.includes("/source_observations?")) return new Response(JSON.stringify([{ id: "bbc-observation" }]));
       return new Response("[]");
     },
@@ -125,10 +130,16 @@ Deno.test("Google publisher provenance reaches M8 source observations without re
   assertEquals(item.excerpt, "BBC article body excerpt about Manchester United.");
 
   await repository.ensureSourceObservation(item);
-  const sourceWrite = requests.find((entry) => entry.url.includes("/source_observations?"));
-  assertEquals(sourceWrite?.body?.canonical_url, "https://www.bbc.com/sport/football/united-story");
-  assertEquals(sourceWrite?.body?.excerpt, "BBC article body excerpt about Manchester United.");
-  assertEquals((sourceWrite?.body?.metadata as Record<string, unknown>).google_news_original_url, "https://news.google.com/rss/articles/google-article-1");
+  await repository.ensureReviewedPublisherObservation(item);
+  const sourceWrites = requests.filter((entry) => entry.url.includes("/source_observations?") && entry.method === "POST");
+  const discoveryWrite = sourceWrites.find((entry) => entry.body?.information_source_id === "google-news-source");
+  const publisherWrite = sourceWrites.find((entry) => entry.body?.information_source_id === "bbc-source");
+  assertEquals(discoveryWrite?.body?.editorial_role, "DISCOVERY_COMMUNITY");
+  assertEquals(discoveryWrite?.body?.canonical_url, "https://news.google.com/rss/articles/google-article-1");
+  assertEquals((discoveryWrite?.body?.metadata as Record<string, unknown>).google_news_original_url, "https://news.google.com/rss/articles/google-article-1");
+  assertEquals(publisherWrite?.body?.canonical_url, "https://www.bbc.com/sport/football/united-story");
+  assertEquals(publisherWrite?.body?.excerpt, "BBC article body excerpt about Manchester United.");
+  assertEquals((publisherWrite?.body?.metadata as Record<string, unknown>).google_news_original_url, "https://news.google.com/rss/articles/google-article-1");
   const discoveryQuery = new URL(requests.find((entry) => entry.url.includes("/discovery_observations?"))!.url).searchParams;
   assertEquals(decodeURIComponent(discoveryQuery.get("and") ?? "").includes("url_resolution_status.eq.RESOLVED"), true);
 });
@@ -189,4 +200,94 @@ Deno.test("M8 promotion only queries the fresh window and places the newest obse
   assertEquals(query.get("order"), "last_observed_at.desc,id.asc");
   assertEquals(query.get("and")?.includes("story_cluster_id.is.null"), true);
   assertEquals(query.getAll("last_observed_at"), ["gte.2026-10-09T12:00:00.000Z", "lte.2026-10-12T12:00:00.000Z"]);
+});
+
+Deno.test("publisher observation stores reviewed source and article provenance separately", async () => {
+  const requests: { url: string; method: string; body: Record<string, unknown> | null }[] = [];
+  const repository = createDiscoveryPromotionRepository({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "service-role-key",
+    request: async (input, init) => {
+      const url = String(input);
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      requests.push({ url, method: init?.method ?? "GET", body });
+      if (url.includes("/information_sources?")) return Response.json([{
+        id: "bbc-source", canonical_name: "BBC Sport", website_url: "https://www.bbc.com/sport",
+        editorial_role: "FACT_INDEPENDENT", reliability_score: 8, active: true,
+      }]);
+      if (url.includes("/source_observations?")) return Response.json([{ id: "bbc-article-observation" }]);
+      return Response.json([]);
+    },
+  });
+  const ensure = (repository as unknown as { ensureReviewedPublisherObservation: (item: PromotionObservation) => Promise<string | null> }).ensureReviewedPublisherObservation;
+
+  const id = await ensure.call(repository, {
+    ...observation,
+    excerpt: "BBC reports that United are considering a move, but no agreement has been reached.",
+    publisherCanonicalUrl: "https://www.bbc.com/sport/football/story?utm_source=google-news",
+    articleFetchStatus: "FETCHED",
+    articleExtractionStatus: "EXTRACTED",
+    publishedAt: "2026-09-29T13:00:00.000Z",
+    metadata: { supporting_sentence: "United are considering a move, but no agreement has been reached." },
+  });
+
+  assertEquals(id, "bbc-article-observation");
+  const write = requests.find((request) => request.url.includes("/source_observations?") && request.method === "POST");
+  assert(write);
+  assertEquals(write.body?.information_source_id, "bbc-source");
+  assertEquals(write.body?.editorial_role, "FACT_INDEPENDENT");
+  assertEquals(write.body?.external_id, "https://www.bbc.com/sport/football/story?utm_source=google-news");
+  assertEquals(write.body?.canonical_url, "https://www.bbc.com/sport/football/story?utm_source=google-news");
+  assertEquals(write.body?.excerpt, "BBC reports that United are considering a move, but no agreement has been reached.");
+  assertEquals(write.body?.published_at, "2026-09-29T13:00:00.000Z");
+  assertEquals((write.body?.metadata as Record<string, unknown>).google_news_original_url, observation.googleNewsOriginalUrl);
+  assertEquals((write.body?.metadata as Record<string, unknown>).publisher_canonical_name, "BBC Sport");
+  assertEquals((write.body?.metadata as Record<string, unknown>).supporting_sentence, "United are considering a move, but no agreement has been reached.");
+});
+
+Deno.test("publisher observation requires extracted non-empty body", async () => {
+  const requests: string[] = [];
+  const repository = createDiscoveryPromotionRepository({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "service-role-key",
+    request: async (input) => { requests.push(String(input)); return Response.json([]); },
+  });
+  const ensure = (repository as unknown as { ensureReviewedPublisherObservation: (item: PromotionObservation) => Promise<string | null> }).ensureReviewedPublisherObservation;
+
+  const blocked = await ensure.call(repository, { ...observation, articleExtractionStatus: "PAYWALL", excerpt: null });
+  const empty = await ensure.call(repository, { ...observation, articleExtractionStatus: "EXTRACTED", excerpt: "   " });
+
+  assertEquals(blocked, null);
+  assertEquals(empty, null);
+  assertEquals(requests.length, 0);
+});
+
+
+Deno.test("publisher report claim links exact article sentence and preserves rumor modality", async () => {
+  const requests: { url: string; method: string; body: Record<string, unknown> | null }[] = [];
+  const repository = createDiscoveryPromotionRepository({
+    supabaseUrl: "https://example.supabase.co", serviceRoleKey: "service-role-key",
+    request: async (input, init) => {
+      const url = String(input);
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      requests.push({ url, method: init?.method ?? "GET", body });
+      return Response.json([]);
+    },
+  });
+
+  await repository.ensurePublisherReportClaims({
+    observation: { ...observation, excerpt: "Manchester United are considering a move for Player A, according to BBC Sport.", articleExtractionStatus: "EXTRACTED", metadata: { publisher_canonical_name: "BBC Sport" } },
+    storyClusterId: "story-1", publisherSourceObservationId: "bbc-source-observation-1",
+  });
+
+  const claim = requests.find((request) => request.url.includes("/story_claims?") && request.method === "POST");
+  assert(claim);
+  assertEquals(claim.body?.origin, "publisher_article");
+  assertEquals(claim.body?.claim_scope, "PUBLISHER_REPORT");
+  assertEquals(claim.body?.claim_modality, "RUMOR");
+  assertEquals(claim.body?.publisher_source_observation_id, "bbc-source-observation-1");
+  assertEquals(claim.body?.discovery_observation_id, "observation-1");
+  assertEquals(claim.body?.object, "Manchester United are considering a move for Player A, according to BBC Sport.");
+  assertEquals(claim.body?.claim_text, "BBC Sport reports: Manchester United are considering a move for Player A, according to BBC Sport.");
+  assertEquals(claim.body?.grounding_status, "INSUFFICIENT");
 });

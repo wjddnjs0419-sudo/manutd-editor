@@ -7,6 +7,7 @@ import type {
 } from "./types.ts";
 import { validateManutdEditorDraft } from "../_shared/editorial-style/validator.ts";
 import type { ManutdEditorCarouselDraft } from "../_shared/editorial-style/types.ts";
+import { validPublisherUrl, verifiedNewsSources } from "./evidence.ts";
 
 export interface QualityGateConfig {
   readonly min_slides: number;
@@ -53,6 +54,25 @@ function nonblank(value: unknown): value is string {
 
 function error(code: string, path: string): ValidationError {
   return { code, path };
+}
+
+function safeText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function modalityPreserved(modality: string | undefined, claimText: string): boolean {
+  const normalized = claimText.toLocaleLowerCase("ko-KR");
+  if (modality === "RUMOR" || modality === "PREDICTION") return /루머|이적설|가능성|거론|관심|협상|예상|전망|보도에 따르면|reports?|could|may|might|rumou?r|linked/u.test(normalized);
+  if (modality === "DENIAL") return /부인|아니라고|사실이 아니|반박|denied|not true|dismiss/u.test(normalized);
+  if (modality === "OPINION") return /의견|평가|분석|견해|believes?|opinion|analysis/u.test(normalized);
+  return true;
+}
+
+function unsupportedConfirmation(modality: string | undefined, value: string): boolean {
+  if (modality === "CONFIRMED") return false;
+  const confirmation = /(?:이적|영입|합류|계약).{0,12}(?:확정|성사|완료|공식 발표)|(?:transfer|signing|deal).{0,20}(?:confirmed|completed|officially signed)/iu;
+  if (!confirmation.test(value)) return false;
+  return !/(?:아직|현재까지|결코|not|never|isn't|is not).{0,10}(?:확정|성사|완료|confirmed|completed)|(?:확정|성사|완료|confirmed|completed).{0,8}(?:아니|않|되지 않|not)/iu.test(value);
 }
 
 function styleDraft(value: CreativeBriefOutput, evidence: EvidenceSnapshot): ManutdEditorCarouselDraft {
@@ -162,8 +182,44 @@ export function validateCreativeBrief(
   }
 
   if (mode === "NEWS_UPDATE") {
-    const reliableSource = evidence.sources.some((source) => (source.reliability_score ?? 0) >= 8);
-    if (!reliableSource || !Array.isArray(output.sources) || output.sources.length === 0) errors.push(error("NEWS_EVIDENCE_BLOCKED", "sources"));
+    const reliableSources = verifiedNewsSources(evidence);
+    if (reliableSources.length === 0) errors.push(error("NEWS_EVIDENCE_BLOCKED", "sources"));
+    const strictEvidenceIds = new Set<string>(reliableSources.map((source) => source.evidence_id));
+    const claims = Array.isArray(output.slides) ? output.slides.flatMap((slide) => object(slide) && Array.isArray(slide.claims) ? slide.claims.filter(object) : []) : [];
+    const referencedIds = new Set<string>();
+    claims.forEach((claim, index) => {
+      const evidenceRefs = Array.isArray(claim.evidence_ids) ? claim.evidence_ids.filter((entry): entry is string => typeof entry === "string") : [];
+      const supported = evidenceRefs.filter((id) => strictEvidenceIds.has(id));
+      if (supported.length === 0) errors.push(error("NEWS_CLAIM_UNGROUNDED", `slides.claims[${index}].evidence_ids`));
+      supported.forEach((id) => referencedIds.add(id));
+      const linked = reliableSources.filter((source) => supported.includes(source.evidence_id));
+      for (const source of linked) {
+        if (source.claim_scope === "PUBLISHER_REPORT" && !/보도|전했|밝혔|따르면|reported|reports/u.test(safeText(claim.text))) errors.push(error("PUBLISHER_ATTRIBUTION_MISSING", `slides.claims[${index}].text`));
+        if (!modalityPreserved(source.claim_modality, safeText(claim.text))) errors.push(error("CLAIM_MODALITY_LOST", `slides.claims[${index}].text`));
+        if (unsupportedConfirmation(source.claim_modality, safeText(claim.text))) errors.push(error("CLAIM_MODALITY_OVERRIDDEN", `slides.claims[${index}].text`));
+      }
+    });
+    const outputSources = Array.isArray(output.sources) ? output.sources.filter(object) : [];
+    const cited = outputSources.filter((source) => {
+      const evidenceId = safeText(source.evidence_id);
+      const evidenceSource = reliableSources.find((candidate) => candidate.evidence_id === evidenceId);
+      if (!evidenceSource || !referencedIds.has(evidenceId)) return false;
+      if (!validPublisherUrl(source.url) || source.url !== evidenceSource.canonical_url) {
+        errors.push(error("NEWS_SOURCE_URL_MISSING", "sources.url"));
+        return false;
+      }
+      if (!safeText(source.label).includes(evidenceSource.canonical_name)) errors.push(error("NEWS_SOURCE_LABEL_MISMATCH", "sources.label"));
+      return true;
+    });
+    if (cited.length === 0) errors.push(error("NEWS_SOURCE_CITATION_MISSING", "sources"));
+    const citedEvidence = cited.flatMap((source) => reliableSources.filter((candidate) => candidate.evidence_id === source.evidence_id));
+    const slideCopy = Array.isArray(output.slides) ? output.slides.flatMap((slide) => object(slide) ? [safeText(slide.headline), safeText(slide.body), safeText(slide.highlight)] : []).join(" ") : "";
+    const caption = object(output.caption) ? safeText(output.caption.body) : "";
+    for (const source of citedEvidence) {
+      const reportMarker = source.claim_scope !== "PUBLISHER_REPORT" || /보도|전했|밝혔|따르면|reported|reports/u.test(slideCopy);
+      if (!slideCopy.includes(source.canonical_url ?? "") || !slideCopy.includes(source.canonical_name) || !reportMarker) errors.push(error("NEWS_SLIDE_CITATION_MISSING", "slides"));
+      if (!caption.includes(source.canonical_url ?? "") || !caption.includes(source.canonical_name) || (source.claim_scope === "PUBLISHER_REPORT" && !/보도|전했|밝혔|따르면|reported|reports/u.test(caption))) errors.push(error("NEWS_CAPTION_CITATION_MISSING", "caption.body"));
+    }
   }
 
   if (config.enable_style_validator === true) {

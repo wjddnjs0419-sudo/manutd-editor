@@ -10,6 +10,7 @@ Deno.test("generation evidence includes M8 grounded fact sources", async () => {
     serviceKey: "service-role",
     request: async (input) => {
       const url = String(input);
+      if (url.includes("/editorial_rankings")) return Response.json([]);
       if (url.includes("content_candidates")) return new Response(JSON.stringify([{
         id: candidateId,
         story_cluster_id: clusterId,
@@ -32,9 +33,9 @@ Deno.test("generation evidence includes M8 grounded fact sources", async () => {
       }]));
       if (url.includes("story_cluster_posts")) return new Response(JSON.stringify([]));
       if (url.includes("story_cluster_sources")) return new Response(JSON.stringify([]));
-      if (url.includes("story_claims")) return new Response(JSON.stringify([{ id: "claim-1", grounding_status: "VERIFIED" }]));
-      if (url.includes("claim_evidence")) return new Response(JSON.stringify([{ claim_id: "claim-1", source_observation_id: "observation-1", editorial_role: "FACT_INDEPENDENT", relation: "SUPPORTS", is_grounding: true }]));
-      if (url.includes("source_observations")) return new Response(JSON.stringify([{ id: "observation-1", information_source_id: "source-bbc", canonical_url: "https://bbc.test/article/1", title: "Sancho is still looking for a club", excerpt: "BBC confirms the latest status.", editorial_role: "FACT_INDEPENDENT" }]));
+      if (url.includes("story_claims")) return new Response(JSON.stringify([{ id: "claim-1", grounding_status: "VERIFIED", claim_scope: "PUBLISHER_REPORT", claim_modality: "RUMOR" }]));
+      if (url.includes("claim_evidence")) return new Response(JSON.stringify([{ claim_id: "claim-1", source_observation_id: "observation-1", editorial_role: "FACT_INDEPENDENT", relation: "SUPPORTS", is_grounding: true, evidence_text: "BBC Sport reports that Sancho could join a new club." }]));
+      if (url.includes("source_observations")) return new Response(JSON.stringify([{ id: "observation-1", information_source_id: "source-bbc", canonical_url: "https://bbc.test/article/1", title: "Sancho is still looking for a club", published_at: "2026-10-11T12:00:00Z", metadata: { google_news_original_url: "https://news.google.com/rss/articles/abc" }, editorial_role: "FACT_INDEPENDENT" }]));
       if (url.includes("information_sources")) return new Response(JSON.stringify([{ id: "source-bbc", canonical_name: "BBC Sport", entity_type: "MEDIA_OUTLET", reliability_score: 8 }]));
       throw new Error(`Unexpected request: ${url}`);
     },
@@ -43,12 +44,47 @@ Deno.test("generation evidence includes M8 grounded fact sources", async () => {
   const evidence = await repository.getCandidateEvidence(candidateId);
 
   assertEquals(evidence?.sources, [{
-    source_id: "m8-observation:observation-1",
+    source_id: "m8-claim:claim-1:observation:observation-1",
     canonical_name: "BBC Sport",
     entity_type: "MEDIA_OUTLET",
     reliability_score: 8,
-    evidence_text: "BBC Sport: Sancho is still looking for a club — BBC confirms the latest status.",
+    evidence_text: "BBC Sport reports that Sancho could join a new club.",
     first_cited_post_id: null,
     citation_count: 1,
+    claim_id: "claim-1",
+    editorial_role: "FACT_INDEPENDENT",
+    relation: "SUPPORTS",
+    is_grounding: true,
+    claim_scope: "PUBLISHER_REPORT",
+    claim_modality: "RUMOR",
+    canonical_url: "https://bbc.test/article/1",
+    google_news_original_url: "https://news.google.com/rss/articles/abc",
+    published_at: "2026-10-11T12:00:00Z",
+    verified: true,
   }]);
+});
+
+Deno.test("priority candidates require current news eligible ranking and freshness", async () => {
+  const repository = createRestGenerationRepository({
+    supabaseUrl: "https://example.supabase.co", serviceKey: "service-role", now: () => new Date("2026-10-12T06:00:00Z"),
+    request: async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/editorial_rankings")) return Response.json([
+        { story_cluster_id: "cluster-1", ranking_date: "2026-10-12", rank: 2, news_eligible: true },
+        { story_cluster_id: "cluster-2", ranking_date: "2026-10-12", rank: 1, news_eligible: false },
+        { story_cluster_id: "cluster-3", ranking_date: "2026-10-11", rank: 3, news_eligible: true },
+        { story_cluster_id: "cluster-4", ranking_date: "2026-10-12", rank: 4, news_eligible: true },
+      ]);
+      if (url.pathname.endsWith("/content_candidates")) return Response.json([
+        { id: "candidate-1", story_cluster_id: "cluster-1", ranking_date: "2026-10-12" }, { id: "candidate-2", story_cluster_id: "cluster-2", ranking_date: "2026-10-12" },
+        { id: "candidate-3", story_cluster_id: "cluster-3", ranking_date: "2026-10-12" }, { id: "candidate-4", story_cluster_id: "cluster-4", ranking_date: "2026-10-12" },
+      ]);
+      if (url.pathname.endsWith("/story_clusters")) return Response.json([
+        { id: "cluster-1", last_seen_at: "2026-10-11T22:00:00Z" }, { id: "cluster-2", last_seen_at: "2026-10-11T22:00:00Z" },
+        { id: "cluster-3", last_seen_at: "2026-10-11T22:00:00Z" }, { id: "cluster-4", last_seen_at: "2026-10-01T22:00:00Z" },
+      ]);
+      throw new Error(`Unexpected request: ${url}`);
+    },
+  });
+  assertEquals(await repository.listPriorityCandidateIds!("2026-10-12"), ["candidate-1"]);
 });

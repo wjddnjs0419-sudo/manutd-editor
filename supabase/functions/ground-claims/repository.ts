@@ -1,5 +1,7 @@
 import type { GroundingClaim, GroundingClaimPage, GroundingEvidence, GroundingObservation, GroundingPageOptions, GroundingRepository } from "./types.ts";
 import { GROUNDING_DEFAULT_LIMIT, GROUNDING_MAX_LIMIT, isGroundingCursor } from "./contract.ts";
+import { inferClaimModality } from "./matcher.ts";
+import { matchReviewedPublisher, type PublisherRegistryEntry } from "../promote-discovery/publisher_evidence.ts";
 
 interface RepositoryOptions {
   readonly supabaseUrl: string;
@@ -57,7 +59,7 @@ export function createGroundingRepository(options: RepositoryOptions): Grounding
   const baseUrl = options.supabaseUrl.replace(/\/$/u, "");
   const fetchImpl = options.request ?? fetch;
   async function request(path: string, init: RequestInit, profile?: string): Promise<unknown> {
-    const response = await fetchImpl(`${baseUrl}${path}`, { ...init, headers: { apikey: options.serviceRoleKey, ...(profile ? { "accept-profile": profile, "content-profile": profile } : {}), ...init.headers } });
+    const response = await fetchImpl(`${baseUrl}${path}`, { ...init, headers: { apikey: options.serviceRoleKey, authorization: `Bearer ${options.serviceRoleKey}`, ...(profile ? { "accept-profile": profile, "content-profile": profile } : {}), ...init.headers } });
     if (!response.ok) { await response.body?.cancel(); throw new Error("DATABASE_HTTP_ERROR"); }
     const body = await response.text();
     return body.trim() === "" ? null : JSON.parse(body);
@@ -147,8 +149,10 @@ export function createGroundingRepository(options: RepositoryOptions): Grounding
                   if (resume && resume.postId === postId && resume.createdAt === createdAt && resume.id === analysisId && claimFingerprint <= resume.claimFingerprint) continue;
                   rowFingerprints.push(claimFingerprint);
                   const origin = item.origin === "image" || item.origin === "carousel_slide" || item.origin === "thumbnail" ? item.origin : "caption";
+                  const inputModality = item.claim_modality;
+                  const claimModality = inputModality === "CONFIRMED" || inputModality === "RUMOR" || inputModality === "PREDICTION" || inputModality === "DENIAL" || inputModality === "OPINION" || inputModality === "UNKNOWN" ? inputModality : inferClaimModality(claimText);
                   const itemCursor = analysisCursor({ postId, createdAt, id: analysisId, claimFingerprint });
-                  if (!byKey.has(key)) byKey.set(key, { cursor: itemCursor, claim: { storyClusterId: clusterId, rawPostId: postId, claimFingerprint, subject, predicate, object, claimText, origin, extractionConfidence: number(item.confidence) } });
+                  if (!byKey.has(key)) byKey.set(key, { cursor: itemCursor, claim: { storyClusterId: clusterId, rawPostId: postId, claimFingerprint, subject, predicate, object, claimText, origin, claimScope: "EVENT", claimModality, publisherSourceObservationId: null, extractionConfidence: number(item.confidence) } });
                 }
                 const lastFingerprint = [...rowFingerprints].sort().at(-1);
                 if (lastFingerprint) resumeCursor = analysisCursor({ postId, createdAt, id: analysisId, claimFingerprint: lastFingerprint });
@@ -186,7 +190,7 @@ export function createGroundingRepository(options: RepositoryOptions): Grounding
         const discoveryScanLimit = 500;
         while (collected.length <= limit && discoveryRowsScanned < discoveryScanLimit) {
           const discoveryLimit = Math.min(limit + 1 - collected.length, discoveryScanLimit - discoveryRowsScanned);
-          const discoveryQuery = new URLSearchParams({ select: "id,story_cluster_id,raw_post_id,discovery_observation_id,claim_fingerprint,subject,predicate,object,claim_text,origin,extraction_confidence", discovery_observation_id: "not.is.null", order: "id.asc", limit: String(discoveryLimit) });
+          const discoveryQuery = new URLSearchParams({ select: "id,story_cluster_id,raw_post_id,discovery_observation_id,publisher_source_observation_id,claim_fingerprint,subject,predicate,object,claim_text,origin,claim_scope,claim_modality,extraction_confidence", discovery_observation_id: "not.is.null", order: "id.asc", limit: String(discoveryLimit) });
           if (scope) discoveryQuery.set("story_cluster_id", scope);
           if (asOf) discoveryQuery.set("created_at", `lte.${asOf}`);
           if (lastId) discoveryQuery.set("id", `gt.${lastId}`);
@@ -212,8 +216,12 @@ export function createGroundingRepository(options: RepositoryOptions): Grounding
             const key = `d:${id}`;
             if (seenKeys.has(key)) continue;
             seenKeys.add(key);
-            const origin = item.origin === "image" || item.origin === "carousel_slide" || item.origin === "thumbnail" ? item.origin : rawPostId ? "caption" : "discovery_observation";
-            collected.push({ key, cursor: key, claim: { storyClusterId, rawPostId, discoveryObservationId, claimFingerprint, subject, predicate, object, claimText, origin, extractionConfidence: number(item.extraction_confidence) } });
+            const origin = item.origin === "publisher_article" ? "publisher_article" : item.origin === "image" || item.origin === "carousel_slide" || item.origin === "thumbnail" ? item.origin : rawPostId ? "caption" : "discovery_observation";
+            const rawScope = item.claim_scope;
+            const claimScope = rawScope === "PUBLISHER_REPORT" || rawScope === "EVENT" ? rawScope : origin === "publisher_article" ? "PUBLISHER_REPORT" : "EVENT";
+            const rawModality = item.claim_modality;
+            const claimModality = rawModality === "CONFIRMED" || rawModality === "RUMOR" || rawModality === "PREDICTION" || rawModality === "DENIAL" || rawModality === "OPINION" || rawModality === "UNKNOWN" ? rawModality : inferClaimModality(claimText);
+            collected.push({ key, cursor: key, claim: { storyClusterId, rawPostId, discoveryObservationId, publisherSourceObservationId: string(item.publisher_source_observation_id), claimFingerprint, subject, predicate, object, claimText, origin, claimScope, claimModality, extractionConfidence: number(item.extraction_confidence) } });
             if (collected.length > limit) break;
           }
           if (collected.length > limit || !progressed || rows.length < discoveryLimit) break;
@@ -227,24 +235,43 @@ export function createGroundingRepository(options: RepositoryOptions): Grounding
       return { claims: page.map((item) => item.claim), hasMore, nextCursor: hasMore ? page.at(-1)?.cursor ?? null : null };
     },
     async listObservations(asOf?: Date) {
-      const observationQuery = new URLSearchParams({ select: "id,information_source_id,editorial_role,title,excerpt,metadata", order: "created_at.desc,id.desc", limit: "500" });
+      const observationQuery = new URLSearchParams({ select: "id,information_source_id,editorial_role,canonical_url,title,excerpt,published_at,metadata", order: "created_at.desc,id.desc", limit: "500" });
       if (asOf) observationQuery.set("created_at", `lte.${asOf.toISOString()}`);
       const [value, sources] = await Promise.all([
         request(`/rest/v1/source_observations?${observationQuery}`, { method: "GET" }, "app_private"),
-        request("/rest/v1/information_sources?select=id,canonical_name&limit=500", { method: "GET" }),
+        request("/rest/v1/information_sources?select=id,canonical_name,website_url,editorial_role,reliability_score,active&limit=500", { method: "GET" }),
       ]);
       if (!Array.isArray(value)) return [];
-      const sourceNames = new Map<string, string>();
-      if (Array.isArray(sources)) for (const source of sources) if (record(source) && typeof source.id === "string" && typeof source.canonical_name === "string") sourceNames.set(source.id, source.canonical_name);
+      const sourceRegistry = new Map<string, PublisherRegistryEntry>();
+      if (Array.isArray(sources)) for (const source of sources) {
+        if (!record(source) || typeof source.id !== "string" || typeof source.canonical_name !== "string" || typeof source.editorial_role !== "string" || typeof source.reliability_score !== "number" || typeof source.active !== "boolean") continue;
+        sourceRegistry.set(source.id, { id: source.id, canonical_name: source.canonical_name, website_url: string(source.website_url), editorial_role: source.editorial_role, reliability_score: source.reliability_score, active: source.active });
+      }
       return value.flatMap((item): GroundingObservation[] => {
         if (!record(item) || typeof item.id !== "string" || typeof item.editorial_role !== "string" || typeof item.title !== "string") return [];
         const metadata = record(item.metadata) ? item.metadata : {};
         const relation = metadata.relation === "CONTRADICTS" ? "CONTRADICTS" : "SUPPORTS";
-        return [{ id: item.id, editorialRole: item.editorial_role as GroundingObservation["editorialRole"], canonicalName: typeof item.information_source_id === "string" ? sourceNames.get(item.information_source_id) ?? "Unknown source" : "Unknown source", title: item.title, excerpt: string(item.excerpt), relation }];
+        const sourceId = typeof item.information_source_id === "string" ? item.information_source_id : null;
+        const source = sourceId ? sourceRegistry.get(sourceId) : undefined;
+        const role = item.editorial_role as GroundingObservation["editorialRole"];
+        if ((role === "FACT_PRIMARY" || role === "FACT_INDEPENDENT") &&
+          (!source || !matchReviewedPublisher(string(item.canonical_url) ?? "", [source]) || source.editorial_role !== role)) return [];
+        return [{
+          id: item.id,
+          editorialRole: role,
+          canonicalName: source?.canonical_name ?? "Unknown source",
+          title: item.title,
+          excerpt: string(item.excerpt),
+          relation,
+          canonicalUrl: string(item.canonical_url),
+          publishedAt: string(item.published_at),
+          originalGoogleNewsUrl: string(metadata.google_news_original_url),
+          publisherReportOnly: metadata.publisher_report_only === true,
+        }];
       });
     },
     async upsertClaim(claim, version) {
-      const value = await request("/rest/v1/story_claims?on_conflict=story_cluster_id%2Cclaim_fingerprint%2Cgrounding_version", { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify({ story_cluster_id: claim.storyClusterId, raw_post_id: claim.rawPostId, discovery_observation_id: claim.discoveryObservationId ?? null, claim_fingerprint: claim.claimFingerprint, subject: claim.subject, predicate: claim.predicate, object: claim.object, claim_text: claim.claimText, origin: claim.origin, extraction_confidence: claim.extractionConfidence, grounding_status: claim.status, grounding_confidence: claim.confidence, grounding_version: version, decision_reason: claim.decisionReason }) }, "app_private");
+      const value = await request("/rest/v1/story_claims?on_conflict=story_cluster_id%2Cclaim_fingerprint%2Cgrounding_version", { method: "POST", headers: { "content-type": "application/json", prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify({ story_cluster_id: claim.storyClusterId, raw_post_id: claim.rawPostId, discovery_observation_id: claim.discoveryObservationId ?? null, publisher_source_observation_id: claim.publisherSourceObservationId ?? null, claim_scope: claim.claimScope, claim_modality: claim.claimModality, claim_fingerprint: claim.claimFingerprint, subject: claim.subject, predicate: claim.predicate, object: claim.object, claim_text: claim.claimText, origin: claim.origin, extraction_confidence: claim.extractionConfidence, grounding_status: claim.status, grounding_confidence: claim.confidence, grounding_version: version, decision_reason: claim.decisionReason }) }, "app_private");
       if (!Array.isArray(value) || !record(value[0]) || typeof value[0].id !== "string") throw new Error("CLAIM_PERSISTENCE_ERROR");
       return value[0].id;
     },

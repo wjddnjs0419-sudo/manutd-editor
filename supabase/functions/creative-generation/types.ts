@@ -13,11 +13,19 @@ export interface CandidateEvidenceInput {
     readonly rank: number | null;
     readonly priority_score: number | null;
     readonly data_confidence: number | null;
-    readonly first_mover_flag: boolean;
-    readonly must_cover_flag: boolean;
+    readonly first_mover_flag: boolean | null;
+    readonly must_cover_flag: boolean | null;
     readonly korea_coverage_status: "KNOWN" | "UNCERTAIN";
-    readonly score_version: string;
+    readonly score_version: string | null;
     readonly score_inputs: Record<string, JsonValue>;
+    readonly editorial_ranking?: {
+      readonly story_cluster_id: string;
+      readonly ranking_date: string;
+      readonly ranking_version: string;
+      readonly rank: number | null;
+      readonly editorial_score: number | null;
+      readonly news_eligible: boolean;
+    };
   };
   readonly story: {
     readonly id: string;
@@ -49,6 +57,16 @@ export interface EvidenceSourceInput {
   readonly evidence_text: string | null;
   readonly first_cited_post_id: string | null;
   readonly citation_count: number;
+  readonly claim_id?: string;
+  readonly editorial_role?: "FACT_PRIMARY" | "FACT_INDEPENDENT" | "OFFICIAL" | "DISCOVERY_COMMUNITY" | "DISCOVERY_OFFICIAL";
+  readonly relation?: "SUPPORTS" | "CONTRADICTS";
+  readonly is_grounding?: boolean;
+  readonly claim_scope?: "PUBLISHER_REPORT" | "EVENT";
+  readonly claim_modality?: "CONFIRMED" | "RUMOR" | "PREDICTION" | "DENIAL" | "OPINION" | "UNKNOWN";
+  readonly canonical_url?: string | null;
+  readonly google_news_original_url?: string | null;
+  readonly published_at?: string | null;
+  readonly verified?: boolean;
 }
 
 export interface EvidencePost extends EvidencePostInput {
@@ -118,7 +136,7 @@ export interface CreativeBriefOutput {
   readonly hooks: readonly { id: string; text: string }[];
   readonly slides: readonly CreativeBriefSlide[];
   readonly caption: { body: string; cta: string };
-  readonly sources: readonly { evidence_id: string; label: string }[];
+  readonly sources: readonly { evidence_id: string; label: string; url?: string | null }[];
   readonly style_profile?: "manutd_editor";
   readonly style_version?: "manutd-editor-v1";
   readonly editor_warning?: string | null;

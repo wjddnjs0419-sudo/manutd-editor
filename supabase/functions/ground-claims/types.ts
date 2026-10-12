@@ -2,6 +2,8 @@ import type { EditorialSourceRole } from "../source-discovery/types.ts";
 
 export type GroundingStatus = "VERIFIED" | "DISCOVERY_ONLY" | "INSUFFICIENT" | "CONTRADICTED";
 export type GroundingRelation = "SUPPORTS" | "CONTRADICTS";
+export type GroundingClaimScope = "PUBLISHER_REPORT" | "EVENT";
+export type GroundingClaimModality = "CONFIRMED" | "RUMOR" | "PREDICTION" | "DENIAL" | "OPINION" | "UNKNOWN";
 
 export interface GroundingClaim {
   readonly storyClusterId: string;
@@ -12,7 +14,10 @@ export interface GroundingClaim {
   readonly predicate: string;
   readonly object: string;
   readonly claimText: string;
-  readonly origin: "caption" | "image" | "carousel_slide" | "thumbnail" | "discovery_observation";
+  readonly origin: "caption" | "image" | "carousel_slide" | "thumbnail" | "discovery_observation" | "publisher_article";
+  readonly claimScope: GroundingClaimScope;
+  readonly claimModality: GroundingClaimModality;
+  readonly publisherSourceObservationId?: string | null;
   readonly extractionConfidence: number | null;
 }
 
@@ -23,6 +28,10 @@ export interface GroundingObservation {
   readonly title: string;
   readonly excerpt: string | null;
   readonly relation: GroundingRelation;
+  readonly canonicalUrl?: string | null;
+  readonly publishedAt?: string | null;
+  readonly originalGoogleNewsUrl?: string | null;
+  readonly publisherReportOnly?: boolean;
 }
 
 export interface GroundingEvidence {

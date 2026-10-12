@@ -3,7 +3,7 @@ import { runClaimGrounding } from "../../ground-claims/orchestrator.ts";
 import type { GroundingClaim, GroundingRepository } from "../../ground-claims/types.ts";
 
 Deno.test("claim grounding persists one role-aware result per claim", async () => {
-  const claims: GroundingClaim[] = [{ storyClusterId: "cluster-1", rawPostId: "post-1", claimFingerprint: "claim-1", subject: "Manchester United", predicate: "signed", object: "Bruno Fernandes", claimText: "Manchester United signed Bruno Fernandes", origin: "caption", extractionConfidence: 0.9 }];
+  const claims: GroundingClaim[] = [{ storyClusterId: "cluster-1", rawPostId: "post-1", claimFingerprint: "claim-1", subject: "Manchester United", predicate: "signed", object: "Bruno Fernandes", claimText: "Manchester United signed Bruno Fernandes", origin: "caption", claimScope: "EVENT", claimModality: "CONFIRMED", extractionConfidence: 0.9 }];
   const saved: string[] = [];
   const repository: GroundingRepository = {
     listClaims: async () => ({ claims, hasMore: false, nextCursor: null }) as never,
@@ -18,7 +18,7 @@ Deno.test("claim grounding persists one role-aware result per claim", async () =
 });
 
 function claim(index: number): GroundingClaim {
-  return { storyClusterId: "cluster-1", rawPostId: `post-${index}`, claimFingerprint: `claim-${index}`, subject: "Manchester United", predicate: "signed", object: "Bruno Fernandes", claimText: "Manchester United signed Bruno Fernandes", origin: "caption", extractionConfidence: 0.9 };
+  return { storyClusterId: "cluster-1", rawPostId: `post-${index}`, claimFingerprint: `claim-${index}`, subject: "Manchester United", predicate: "signed", object: "Bruno Fernandes", claimText: "Manchester United signed Bruno Fernandes", origin: "caption", claimScope: "EVENT", claimModality: "CONFIRMED", extractionConfidence: 0.9 };
 }
 
 Deno.test("claim grounding honors the configured page limit and continuation status", async () => {

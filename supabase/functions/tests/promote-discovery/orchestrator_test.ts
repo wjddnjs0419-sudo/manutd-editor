@@ -36,14 +36,12 @@ const observation = (overrides: Partial<PromotionObservation> = {}): PromotionOb
 function repository(
   observations: PromotionObservation[],
   stories: PromotionStory[] = [],
-): DiscoveryPromotionRepository & { calls: string[]; claims: unknown[]; candidates: unknown[] } {
+): DiscoveryPromotionRepository & { calls: string[]; claims: unknown[] } {
   const calls: string[] = [];
   const claims: unknown[] = [];
-  const candidates: unknown[] = [];
   return {
     calls,
     claims,
-    candidates,
     async listFreshUnassigned() { return observations.filter((item) => item.storyClusterId === null); },
     async listStories() { return stories; },
     async upsertStory(input) {
@@ -60,17 +58,19 @@ function repository(
       if (item) item.storyClusterId = storyClusterId;
     },
     async ensureSourceObservation(value) { calls.push(`source:${value.id}`); return `source-${value.id}`; },
+    async ensureReviewedPublisherObservation(value) { calls.push(`publisher:${value.id}`); return value.articleExtractionStatus === "EXTRACTED" ? `publisher-source-${value.id}` : null; },
+    async ensurePublisherReportClaims(value) { calls.push(`report-claims:${value.storyClusterId}:${value.publisherSourceObservationId}`); },
     async ensureDiscoveryClaim(value) { claims.push(value); },
-    async ensureEditorialCandidate(value) { candidates.push(value); calls.push(`candidate:${value.storyClusterId}`); },
   };
 }
 
-Deno.test("promotion uses the Seoul business date for candidates at a UTC day boundary", async () => {
+Deno.test("promotion does not create unranked zero score candidate", async () => {
   const repo = repository([observation()]);
 
-  await promoteDiscovery({ asOf: "2026-09-29T17:40:00.000Z", repository: repo });
+  const result = await promoteDiscovery({ asOf: "2026-09-29T17:40:00.000Z", repository: repo });
 
-  assertEquals((repo.candidates[0] as { rankingDate: string }).rankingDate, "2026-09-30");
+  assertEquals(result.editorialCandidatesEnsured, 0);
+  assertEquals(repo.calls.some((call) => call.startsWith("candidate:")), false);
 });
 
 Deno.test("promotion attaches fresh observations to an existing safe story", async () => {
@@ -86,10 +86,12 @@ Deno.test("promotion attaches fresh observations to an existing safe story", asy
   };
   const repo = repository([observation({ contentFingerprint: "new-fingerprint" })], [existing]);
   const result = await promoteDiscovery({ asOf: "2026-09-29T00:10:00.000Z", repository: repo });
-  assertEquals(result as unknown, { status: "COMPLETED", observationsProcessed: 1, storiesCreated: 0, storiesUpdated: 1, claimsCreated: 1, editorialCandidatesEnsured: 1, affectedStoryIds: ["story-existing"] });
+  assertEquals(result as unknown, { status: "COMPLETED", observationsProcessed: 1, storiesCreated: 0, storiesUpdated: 1, claimsCreated: 1, editorialCandidatesEnsured: 0, affectedStoryIds: ["story-existing"] });
   assertEquals(repo.calls.filter((item) => item.startsWith("upsertStory")).length, 1);
   assertEquals(repo.calls.some((item) => item === "assign:observation-1:story-existing:source-observation-1"), true);
-  assertEquals(repo.calls.indexOf("source:observation-1") < repo.calls.indexOf("assign:observation-1:story-existing:source-observation-1"), true);
+  assertEquals(repo.calls.indexOf("source:observation-1") < repo.calls.indexOf("publisher:observation-1"), true);
+  assertEquals(repo.calls.indexOf("publisher:observation-1") < repo.calls.indexOf("report-claims:story-existing:publisher-source-observation-1"), true);
+  assertEquals(repo.calls.indexOf("report-claims:story-existing:publisher-source-observation-1") < repo.calls.indexOf("assign:observation-1:story-existing:source-observation-1"), true);
   assertEquals(repo.claims[0], {
     observationId: "observation-1",
     storyClusterId: "story-existing",
@@ -105,7 +107,7 @@ Deno.test("promotion creates one canonical story and is idempotent on repeat run
   const second = await promoteDiscovery({ asOf: "2026-09-29T00:10:00.000Z", repository: repo });
   assertEquals(first.storiesCreated, 1);
   assertEquals(second.observationsProcessed, 0);
-  assertEquals(repo.calls.filter((item) => item.startsWith("candidate:")).length, 1);
+  assertEquals(repo.calls.filter((item) => item.startsWith("candidate:")).length, 0);
 });
 
 Deno.test("promotion never creates a verified claim from discovery evidence", async () => {
@@ -125,7 +127,7 @@ Deno.test("Google News articles without Manchester United relevance do not creat
   const result = await promoteDiscovery({ asOf: "2026-09-29T00:10:00.000Z", repository: repo });
 
   assertEquals(result.observationsProcessed, 0);
-  assertEquals(repo.candidates.length, 0);
+  assertEquals(repo.calls.some((call) => call.startsWith("candidate:")), false);
   assertEquals(repo.claims.length, 0);
 });
 
@@ -159,7 +161,7 @@ Deno.test("promotion summary lists each created and updated story ID once", asyn
     storiesCreated: 1,
     storiesUpdated: 1,
     claimsCreated: 3,
-    editorialCandidatesEnsured: 3,
+    editorialCandidatesEnsured: 0,
     affectedStoryIds: ["story-existing", "story-2"],
   });
 });
@@ -204,7 +206,7 @@ Deno.test("trusted fact refresh rechecks only recent existing canonical stories 
   assertEquals(result.affectedStoryIds, [current.id]);
   assertEquals(result.observationsProcessed, 0);
   assertEquals(repo.claims.length, 0);
-  assertEquals(repo.candidates.length, 0);
+  assertEquals(repo.calls.some((call) => call.startsWith("candidate:")), false);
 });
 
 Deno.test("refresh has strict per-run scope cap and no writes for existing stories", async () => {

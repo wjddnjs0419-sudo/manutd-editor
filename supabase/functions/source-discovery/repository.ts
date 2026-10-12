@@ -22,6 +22,7 @@ export function createSourceDiscoveryRepository(options: RepositoryOptions): Sou
       ...init,
       headers: {
         apikey: options.serviceRoleKey,
+        authorization: `Bearer ${options.serviceRoleKey}`,
         ...(profile ? { "accept-profile": profile, "content-profile": profile } : {}),
         ...init.headers,
       },

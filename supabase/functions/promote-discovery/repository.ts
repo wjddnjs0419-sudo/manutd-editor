@@ -1,5 +1,7 @@
 import type { DiscoveryObservation } from "../trend-discovery/types.ts";
-import { safePublisherUrl } from "../trend-discovery/google_news_resolution.ts";
+import { isGoogleNewsArticleUrl, safePublisherUrl } from "../trend-discovery/google_news_resolution.ts";
+import { matchReviewedPublisher, type PublisherRegistryEntry } from "./publisher_evidence.ts";
+import { articleEvidenceSentences, inferClaimModality } from "../ground-claims/matcher.ts";
 import type { DiscoveryPromotionRepository, PromotionObservation, PromotionStory, PromotionStoryInput } from "./types.ts";
 
 interface RepositoryOptions {
@@ -179,17 +181,107 @@ export function createDiscoveryPromotionRepository(options: RepositoryOptions): 
       await request(`/rest/v1/discovery_observations?id=eq.${encodeURIComponent(observationId)}&story_cluster_id=is.null`, { method: "PATCH", headers: { prefer: "return=minimal" }, body: JSON.stringify({ story_cluster_id: storyClusterId, source_observation_id: sourceObservationId, ...(promotionJobId ? { promotion_job_id: promotionJobId } : {}) }) }, "app_private");
     },
     async ensureSourceObservation(item) {
-      const sourceQuery = new URLSearchParams({ select: "id", canonical_name: `eq.${item.sourceCanonicalName}`, limit: "1" });
+      const isGoogleNews = item.providerId === "google-news";
+      const sourceCanonicalName = isGoogleNews ? "Google News" : item.sourceCanonicalName;
+      const sourceUrl = isGoogleNews ? item.canonicalUrl : item.publisherCanonicalUrl ?? item.canonicalUrl;
+      const sourceQuery = new URLSearchParams({ select: "id", canonical_name: `eq.${sourceCanonicalName}`, limit: "1" });
       let source = await first(`/rest/v1/information_sources?${sourceQuery}`);
       if (!source || typeof source.id !== "string") {
-        source = await first("/rest/v1/information_sources", { method: "POST", headers: { prefer: "return=representation" }, body: JSON.stringify({ canonical_name: item.sourceCanonicalName, entity_type: "MEDIA_OUTLET", aliases: [], website_url: new URL(item.publisherCanonicalUrl ?? item.canonicalUrl).origin, reliability_score: 0, reliability_rationale: "Discovery provider; not a verification source.", editorial_role: item.sourceRole, active: true }) });
+        source = await first("/rest/v1/information_sources", { method: "POST", headers: { prefer: "return=representation" }, body: JSON.stringify({ canonical_name: sourceCanonicalName, entity_type: "MEDIA_OUTLET", aliases: [], website_url: isGoogleNews ? "https://news.google.com" : new URL(sourceUrl).origin, reliability_score: 0, reliability_rationale: "Discovery provider; not a verification source.", editorial_role: isGoogleNews ? "DISCOVERY_COMMUNITY" : item.sourceRole, active: true }) });
       }
       if (!source || typeof source.id !== "string") throw new Error("SOURCE_REGISTRY_PERSISTENCE_ERROR");
-      const sourceUrl = item.publisherCanonicalUrl ?? item.canonicalUrl;
-      const payload = { information_source_id: source.id, editorial_role: item.sourceRole, external_id: item.externalId, canonical_url: sourceUrl, title: item.title, excerpt: item.excerpt, published_at: item.publishedAt, observed_at: item.lastObservedAt, discovery_signal: 0.7, content_fingerprint: item.contentFingerprint, metadata: { ...item.metadata, discovery_observation_id: item.id, discovery_provider_id: item.providerId, discovery_external_id: item.externalId, ...(item.providerId === "google-news" ? { google_news_original_url: item.googleNewsOriginalUrl ?? item.canonicalUrl, google_news_article_id: item.metadata.google_news_article_id ?? null, resolved_publisher_url: sourceUrl, article_body_present: item.articleExtractionStatus === "EXTRACTED" } : {}) } };
+      const payload = { information_source_id: source.id, editorial_role: item.sourceRole, external_id: item.externalId, canonical_url: sourceUrl, title: item.title, excerpt: item.excerpt, published_at: item.publishedAt, observed_at: item.lastObservedAt, discovery_signal: 0.7, content_fingerprint: item.contentFingerprint, metadata: { ...item.metadata, discovery_observation_id: item.id, discovery_provider_id: item.providerId, discovery_external_id: item.externalId, ...(isGoogleNews ? { google_news_original_url: item.googleNewsOriginalUrl ?? item.canonicalUrl, google_news_article_id: item.metadata.google_news_article_id ?? null, resolved_publisher_url: item.publisherCanonicalUrl, article_extraction_status: item.articleExtractionStatus, article_fetch_status: item.articleFetchStatus, article_body_present: item.articleExtractionStatus === "EXTRACTED" && Boolean(item.excerpt?.trim()) } : {}) } };
       const saved = await first("/rest/v1/source_observations?on_conflict=information_source_id%2Cexternal_id", { method: "POST", headers: { prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify(payload) }, "app_private");
       if (!saved || typeof saved.id !== "string") throw new Error("SOURCE_OBSERVATION_PERSISTENCE_ERROR");
       return saved.id;
+    },
+    async ensureReviewedPublisherObservation(item) {
+      if (item.providerId !== "google-news" || item.articleExtractionStatus !== "EXTRACTED" || !item.excerpt?.trim()) return null;
+      const publisherUrl = safePublisherUrl(item.publisherCanonicalUrl ?? "");
+      const originalGoogleNewsUrl = item.googleNewsOriginalUrl ?? item.canonicalUrl;
+      if (!publisherUrl || !isGoogleNewsArticleUrl(originalGoogleNewsUrl)) return null;
+      const registryQuery = new URLSearchParams({
+        select: "id,canonical_name,website_url,editorial_role,reliability_score,active",
+        active: "eq.true",
+        editorial_role: "in.(FACT_PRIMARY,FACT_INDEPENDENT)",
+        reliability_score: "gte.8",
+        limit: "500",
+      });
+      const registryValue = await request(`/rest/v1/information_sources?${registryQuery}`);
+      const registry = Array.isArray(registryValue) ? registryValue.flatMap((value) => {
+        const row = record(value);
+        if (typeof row.id !== "string" || typeof row.canonical_name !== "string" || typeof row.editorial_role !== "string" || typeof row.reliability_score !== "number" || typeof row.active !== "boolean") return [];
+        return [{ id: row.id, canonical_name: row.canonical_name, website_url: string(row.website_url), editorial_role: row.editorial_role, reliability_score: row.reliability_score, active: row.active } satisfies PublisherRegistryEntry];
+      }) : [];
+      const match = matchReviewedPublisher(publisherUrl, registry);
+      if (!match) return null;
+      const excerpt = item.excerpt.trim().slice(0, 2_000);
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${match.id}\u0000${publisherUrl}\u0000${excerpt}`));
+      const contentFingerprint = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+      const rawSupportingSentence = string(item.metadata.supporting_sentence);
+      const supportingSentence = rawSupportingSentence && excerpt.includes(rawSupportingSentence) ? rawSupportingSentence : null;
+      const metadata = {
+        google_news_original_url: originalGoogleNewsUrl,
+        resolved_publisher_url: publisherUrl,
+        article_fetch_status: item.articleFetchStatus,
+        article_extraction_status: item.articleExtractionStatus,
+        publisher_canonical_name: match.canonical_name,
+        publisher_report_only: true,
+        supporting_sentence: supportingSentence,
+      };
+      const payload = {
+        information_source_id: match.id,
+        editorial_role: match.editorial_role,
+        external_id: publisherUrl,
+        canonical_url: publisherUrl,
+        title: item.title,
+        excerpt,
+        published_at: item.publishedAt,
+        observed_at: item.lastObservedAt,
+        discovery_signal: 0,
+        content_fingerprint: contentFingerprint,
+        metadata,
+      };
+      const saved = await first("/rest/v1/source_observations?on_conflict=information_source_id%2Cexternal_id", { method: "POST", headers: { prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify(payload) }, "app_private");
+      if (saved && typeof saved.id === "string") return saved.id;
+      const lookup = new URLSearchParams({ select: "id", information_source_id: `eq.${match.id}`, external_id: `eq.${publisherUrl}`, limit: "1" });
+      const existing = await first(`/rest/v1/source_observations?${lookup}`, {}, "app_private");
+      return existing && typeof existing.id === "string" ? existing.id : null;
+    },
+    async ensurePublisherReportClaims(input) {
+      const observation = input.observation;
+      if (observation.providerId !== "google-news" || observation.articleExtractionStatus !== "EXTRACTED" || !observation.excerpt?.trim()) return;
+      const publisherName = string(observation.metadata.publisher_canonical_name) ?? string(observation.metadata.publisher_name) ?? observation.sourceCanonicalName;
+      const sentences = articleEvidenceSentences(observation.excerpt).filter((sentence) =>
+        /\b(?:manchester united|manchester utd|man utd|man united|mufc)\b|맨유/iu.test(sentence)
+      ).slice(0, 4);
+      for (const sentence of sentences) {
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${input.storyClusterId}\u0000${input.publisherSourceObservationId}\u0000${sentence}`));
+        const fingerprint = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+        await request("/rest/v1/story_claims?on_conflict=story_cluster_id%2Cclaim_fingerprint%2Cgrounding_version", {
+          method: "POST",
+          headers: { prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            story_cluster_id: input.storyClusterId,
+            raw_post_id: null,
+            discovery_observation_id: observation.id,
+            publisher_source_observation_id: input.publisherSourceObservationId,
+            claim_fingerprint: fingerprint,
+            subject: "Manchester United",
+            predicate: "reported",
+            object: sentence,
+            claim_text: `${publisherName} reports: ${sentence}`,
+            origin: "publisher_article",
+            claim_scope: "PUBLISHER_REPORT",
+            claim_modality: inferClaimModality(sentence),
+            extraction_confidence: null,
+            grounding_status: "INSUFFICIENT",
+            grounding_confidence: null,
+            grounding_version: "m8-b-v1",
+            decision_reason: "PUBLISHER_REPORT_PENDING_GROUNDING",
+          }),
+        }, "app_private");
+      }
     },
     async ensureDiscoveryClaim(input) {
       const source = await first(`/rest/v1/discovery_observations?select=title,excerpt,editorial_role&id=eq.${encodeURIComponent(input.observationId)}&limit=1`, {}, "app_private");
@@ -200,12 +292,6 @@ export function createDiscoveryPromotionRepository(options: RepositoryOptions): 
       const claim = await first("/rest/v1/story_claims?on_conflict=story_cluster_id%2Cclaim_fingerprint%2Cgrounding_version", { method: "POST", headers: { prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify({ story_cluster_id: input.storyClusterId, raw_post_id: null, discovery_observation_id: input.observationId, claim_fingerprint: fingerprint, subject: "Manchester United", predicate: "reported", object: title, claim_text: title, origin: "discovery_observation", extraction_confidence: null, grounding_status: input.status, grounding_confidence: null, grounding_version: "m8-6-discovery-v1", decision_reason: "DISCOVERY_SIGNAL_WITHOUT_FACT_GROUNDING" }) }, "app_private");
       if (!claim || typeof claim.id !== "string") throw new Error("DISCOVERY_CLAIM_PERSISTENCE_ERROR");
       await request("/rest/v1/claim_evidence?on_conflict=claim_id%2Csource_observation_id%2Crelation", { method: "POST", headers: { prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify({ claim_id: claim.id, source_observation_id: input.sourceObservationId, relation: "SUPPORTS", editorial_role: role, evidence_text: title, evidence_confidence: 0.5, is_grounding: false }) }, "app_private");
-    },
-    async ensureEditorialCandidate(input) {
-      const scoring = await first("/rest/v1/scoring_configs?select=id&is_active=eq.true&limit=1");
-      if (!scoring || typeof scoring.id !== "string") throw new Error("SCORING_CONFIG_UNAVAILABLE");
-      const zero = { story_cluster_id: input.storyClusterId, scoring_config_id: scoring.id, global_spread_score: 0, engagement_outperformance_score: 0, engagement_velocity_score: 0, velocity_acceleration_score: 0, korea_gap_score: 0, first_mover_score: 0, korean_saturation_score: 0, reliability_score: 0, source_diversity_score: 0, freshness_score: 0, data_confidence: 0, first_mover_flag: false, must_cover_flag: false, rank: null, ranking_date: input.rankingDate, recommendation_reason: "DISCOVERY_LEAD", score_inputs: { source: input.observation.providerId, content_fingerprint: input.observation.contentFingerprint } };
-      await request("/rest/v1/content_candidates?on_conflict=story_cluster_id%2Cranking_date%2Cscoring_config_id", { method: "POST", headers: { prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(zero) });
     },
   };
 }

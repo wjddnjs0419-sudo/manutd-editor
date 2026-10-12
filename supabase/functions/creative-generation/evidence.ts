@@ -4,6 +4,28 @@ import type {
   JsonValue,
 } from "./types.ts";
 
+export function validPublisherUrl(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase();
+    return url.protocol === "https:" && !url.username && !url.password &&
+      hostname.includes(".") && hostname !== "news.google.com" && !hostname.endsWith(".google.com") &&
+      !hostname.endsWith(".googleusercontent.com") && !hostname.endsWith(".internal") && !hostname.endsWith(".localhost");
+  } catch { return false; }
+}
+
+export function verifiedNewsSources(snapshot: EvidenceSnapshot): EvidenceSnapshot["sources"] {
+  return snapshot.sources.filter((source) =>
+    source.verified === true && source.is_grounding === true && source.relation === "SUPPORTS" &&
+    (source.editorial_role === "FACT_PRIMARY" || source.editorial_role === "FACT_INDEPENDENT") &&
+    (source.reliability_score ?? 0) >= 8 && typeof source.claim_id === "string" && source.claim_id.length > 0 &&
+    typeof source.evidence_text === "string" && source.evidence_text.trim().length > 0 && validPublisherUrl(source.canonical_url) &&
+    ((source.claim_scope === "PUBLISHER_REPORT" && source.claim_modality !== undefined && source.claim_modality !== "UNKNOWN") ||
+      (source.claim_scope === "EVENT" && source.claim_modality === "CONFIRMED"))
+  );
+}
+
 function hasId(value: string): boolean {
   return value.trim().length > 0;
 }

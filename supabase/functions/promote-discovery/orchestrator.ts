@@ -1,6 +1,5 @@
 import { clusterObservations } from "../trend-discovery/clustering.ts";
 import { isTrendRelevant } from "../trend-discovery/relevance.ts";
-import { businessDate } from "../_shared/m6/business_date.ts";
 import type { PromotionObservation, PromotionStory, DiscoveryPromotionRepository, PromotionSummary } from "./types.ts";
 
 interface PromoteDiscoveryOptions {
@@ -120,7 +119,6 @@ export async function promoteDiscovery(options: PromoteDiscoveryOptions): Promis
   if (observations.length === 0 && !options.refreshExistingGrounding) return { status: "COMPLETED", observationsProcessed: 0, storiesCreated: 0, storiesUpdated: 0, claimsCreated: 0, editorialCandidatesEnsured: 0, affectedStoryIds: [] };
   const stories = [...await options.repository.listStories(asOf)];
   const clusters = clusterObservations(observations);
-  const rankingDate = options.rankingDate ?? businessDate(asOf, "Asia/Seoul");
   let storiesCreated = 0;
   let storiesUpdated = 0;
   let claimsCreated = 0;
@@ -148,11 +146,11 @@ export async function promoteDiscovery(options: PromoteDiscoveryOptions): Promis
     affectedStoryIds.add(story.id);
     for (const item of items) {
       const sourceObservationId = await options.repository.ensureSourceObservation(item);
+      const publisherSourceObservationId = await options.repository.ensureReviewedPublisherObservation(item);
+      if (publisherSourceObservationId) await options.repository.ensurePublisherReportClaims({ observation: item, storyClusterId: story.id, publisherSourceObservationId });
       await options.repository.assignObservation(item.id, story.id, sourceObservationId, options.promotionJobId);
       await options.repository.ensureDiscoveryClaim({ observationId: item.id, storyClusterId: story.id, sourceObservationId, status: "DISCOVERY_ONLY" });
-      await options.repository.ensureEditorialCandidate({ storyClusterId: story.id, rankingDate, observation: item });
       claimsCreated += 1;
-      editorialCandidatesEnsured += 1;
     }
   }
   if (options.refreshExistingGrounding && affectedStoryIds.size < 100) {

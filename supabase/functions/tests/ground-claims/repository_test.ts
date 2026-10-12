@@ -23,13 +23,13 @@ Deno.test("grounding repository joins private observations to public source regi
     request: async (input) => {
       const url = String(input);
       urls.push(url);
-      if (url.includes("source_observations")) return new Response(JSON.stringify([{ id: "observation-1", information_source_id: "source-1", editorial_role: "FACT_PRIMARY", title: "Official update", excerpt: "Manchester United official update", metadata: {} }]));
-      if (url.includes("information_sources")) return new Response(JSON.stringify([{ id: "source-1", canonical_name: "Manchester United" }]));
+      if (url.includes("source_observations")) return new Response(JSON.stringify([{ id: "observation-1", information_source_id: "source-1", editorial_role: "FACT_PRIMARY", canonical_url: "https://www.manutd.com/en/news/update", published_at: "2026-09-27T01:00:00Z", title: "Official update", excerpt: "Manchester United official update.", metadata: {} }]));
+      if (url.includes("information_sources")) return new Response(JSON.stringify([{ id: "source-1", canonical_name: "Manchester United", website_url: "https://www.manutd.com", editorial_role: "FACT_PRIMARY", reliability_score: 10, active: true }]));
       return new Response(JSON.stringify([]));
     },
   });
   const observations = await repository.listObservations();
-  assert.deepEqual(observations, [{ id: "observation-1", editorialRole: "FACT_PRIMARY", canonicalName: "Manchester United", title: "Official update", excerpt: "Manchester United official update", relation: "SUPPORTS" }]);
+  assert.deepEqual(observations, [{ id: "observation-1", editorialRole: "FACT_PRIMARY", canonicalName: "Manchester United", title: "Official update", excerpt: "Manchester United official update.", relation: "SUPPORTS", canonicalUrl: "https://www.manutd.com/en/news/update", publishedAt: "2026-09-27T01:00:00Z", originalGoogleNewsUrl: null, publisherReportOnly: false }]);
   assert.equal(urls.some((url) => url.includes("information_sources(canonical_name)")), false);
 });
 
@@ -196,4 +196,82 @@ Deno.test("grounding repository does not skip a later analysis row when fingerpr
   assert.deepEqual(new Set(claimTexts), new Set(["Alpha claim", "Zulu claim"]));
   assert.equal(claimTexts.length, 2);
   assert.equal(hasMore, false);
+});
+
+
+Deno.test("grounding repository sends service-role authorization and app_private profiles", async () => {
+  const privateHeaders: Headers[] = [];
+  const repository = createGroundingRepository({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "service-role-secret",
+    request: async (input, init) => {
+      if (new URL(String(input)).pathname.endsWith("/source_observations")) privateHeaders.push(new Headers(init?.headers));
+      return Response.json([]);
+    },
+  });
+
+  await repository.listObservations();
+
+  assert.equal(privateHeaders.length, 1);
+  const headers = privateHeaders[0]!;
+  assert.equal(headers.get("apikey"), "service-role-secret");
+  assert.equal(headers.get("authorization"), "Bearer service-role-secret");
+  assert.equal(headers.get("accept-profile"), "app_private");
+  assert.equal(headers.get("content-profile"), "app_private");
+});
+
+
+Deno.test("grounding repository reads publisher report scope and source observation link", async () => {
+  const repository = createGroundingRepository({
+    supabaseUrl: "https://example.supabase.co", serviceRoleKey: "service-role-secret",
+    request: async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/story_claims")) return Response.json([{
+        id: "publisher-claim-id", story_cluster_id: "cluster-1", raw_post_id: null,
+        discovery_observation_id: "google-discovery-id", publisher_source_observation_id: "bbc-article-id",
+        claim_fingerprint: "publisher-fingerprint", subject: "Manchester United", predicate: "reported",
+        object: "Manchester United are considering Player A.", claim_text: "BBC Sport reports: Manchester United are considering Player A.",
+        origin: "publisher_article", claim_scope: "PUBLISHER_REPORT", claim_modality: "RUMOR", extraction_confidence: null,
+      }]);
+      return Response.json([]);
+    },
+  });
+
+  const page = await repository.listClaims({ storyClusterIds: ["cluster-1"], limit: 5 });
+
+  const claims = "claims" in page ? page.claims : page;
+  assert.equal(claims.length, 1);
+  assert.deepEqual(claims[0], {
+    storyClusterId: "cluster-1", rawPostId: null, discoveryObservationId: "google-discovery-id",
+    publisherSourceObservationId: "bbc-article-id", claimFingerprint: "publisher-fingerprint",
+    subject: "Manchester United", predicate: "reported", object: "Manchester United are considering Player A.",
+    claimText: "BBC Sport reports: Manchester United are considering Player A.", origin: "publisher_article",
+    claimScope: "PUBLISHER_REPORT", claimModality: "RUMOR", extractionConfidence: null,
+  });
+});
+
+Deno.test("grounding claim write persists scope modality and publisher source identity", async () => {
+  const payloads: Record<string, unknown>[] = [];
+  const repository = createGroundingRepository({
+    supabaseUrl: "https://example.supabase.co", serviceRoleKey: "service-role-secret",
+    request: async (_input, init) => {
+      payloads.push(JSON.parse(String(init?.body ?? "{}")));
+      return Response.json([{ id: "publisher-claim-id" }]);
+    },
+  });
+  const upsert = repository.upsertClaim as unknown as (claim: Record<string, unknown>, version: string) => Promise<string>;
+
+  const id = await upsert.call(repository, {
+    storyClusterId: "cluster-1", rawPostId: null, discoveryObservationId: "google-id", publisherSourceObservationId: "bbc-id",
+    claimFingerprint: "fingerprint", subject: "Manchester United", predicate: "reported", object: "a rumor",
+    claimText: "BBC Sport reports a rumor", origin: "publisher_article", claimScope: "PUBLISHER_REPORT", claimModality: "RUMOR",
+    extractionConfidence: null, status: "VERIFIED", confidence: 0.9, decisionReason: "VERIFIED_PUBLISHER_REPORT", evidence: [],
+  }, "m8-b-v1");
+
+  assert.equal(id, "publisher-claim-id");
+  assert.equal(payloads[0]?.claim_scope, "PUBLISHER_REPORT");
+  assert.equal(payloads[0]?.claim_modality, "RUMOR");
+  assert.equal(payloads[0]?.origin, "publisher_article");
+  assert.equal(payloads[0]?.publisher_source_observation_id, "bbc-id");
+  assert.equal(payloads[0]?.discovery_observation_id, "google-id");
 });

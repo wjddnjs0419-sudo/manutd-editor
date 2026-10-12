@@ -35,7 +35,7 @@ const output: CreativeBriefOutput = {
 
 function evidence(overrides: Partial<CandidateEvidenceInput> = {}): CandidateEvidenceInput {
   return {
-    candidate: { id: "candidate-1", story_cluster_id: "cluster-1", ranking_date: "2026-09-18", rank: 1, priority_score: 90, data_confidence: 90, first_mover_flag: true, must_cover_flag: false, korea_coverage_status: "KNOWN", score_version: "v1", score_inputs: { global_coverage: 0.8 } },
+    candidate: { id: "candidate-1", story_cluster_id: "cluster-1", ranking_date: "2026-09-18", rank: 1, priority_score: 90, data_confidence: 90, first_mover_flag: true, must_cover_flag: false, korea_coverage_status: "KNOWN", score_version: "v1", score_inputs: { global_coverage: 0.8 }, editorial_ranking: { story_cluster_id: "cluster-1", ranking_date: "2026-09-18", ranking_version: "m8-v1", rank: 1, editorial_score: 86, news_eligible: true } },
     story: { id: "cluster-1", canonical_title: "Why United struggled tactically", status: "ACTIVE", first_seen_at: "2026-09-18T08:00:00Z", last_seen_at: "2026-09-18T09:00:00Z" },
     posts: [{ raw_post_id: "post-1", source_account_id: "account-1", account_username: "utdreport", region: "GLOBAL", caption: "Why United struggled tactically", permalink: "https://test/post-1", published_at: "2026-09-18T09:00:00Z", media_type: "IMAGE" }],
     sources: [],
@@ -49,6 +49,7 @@ class MemoryRepository implements GenerationRepository {
   briefs: StoredCreativeBrief[] = [];
   leaseOwners = new Set<string>();
   config: unknown = config;
+  requestedRankingDate = "";
   async getCandidateEvidence() { return this.candidate; }
   async getActiveConfig() { return this.config; }
   async findReadyBrief(candidateId: string, fingerprint: string) { return this.briefs.find((brief) => brief.candidate_id === candidateId && brief.input_fingerprint === fingerprint && brief.status === "READY") ?? null; }
@@ -58,6 +59,7 @@ class MemoryRepository implements GenerationRepository {
   async updateJob(jobId: string, patch: Partial<GenerationJob>) { const job = this.jobs.find((entry) => entry.id === jobId)!; Object.assign(job, patch); }
   async nextRevision(candidateId: string) { return Math.max(0, ...this.briefs.filter((brief) => brief.candidate_id === candidateId).map((brief) => brief.version)) + 1; }
   async insertCreativeBrief(input: CreativeBriefInsert) { const brief = { ...input, id: `brief-${this.briefs.length + 1}` }; this.briefs.push(brief); return brief; }
+  async listPriorityCandidateIds(rankingDate: string) { this.requestedRankingDate = rankingDate; return []; }
 }
 
 function dependencies(repository: MemoryRepository, overrides: Partial<GenerationDependencies> = {}): GenerationDependencies {
@@ -148,6 +150,52 @@ Deno.test("returns FAILED_VALIDATION and FAILED_PROVIDER safely", async () => {
   assertEquals(invalid.status, "FAILED_VALIDATION");
   const providerFailure = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" }, dependencies(new MemoryRepository(), { provider: { ...dependencies(repository).provider, generate: async () => { throw new Error("provider detail"); } } }));
   assertEquals(providerFailure.status, "FAILED_PROVIDER");
+});
+
+Deno.test("AUTO_PRIORITY requires an eligible editorial ranking", async () => {
+  const repository = new MemoryRepository();
+  repository.candidate = evidence({ candidate: { ...repository.candidate.candidate, first_mover_flag: true, must_cover_flag: true, editorial_ranking: { ...repository.candidate.candidate.editorial_ranking!, news_eligible: false } } });
+  let providerCalls = 0;
+  const deps = dependencies(repository, { provider: { ...dependencies(repository).provider, classify: async () => { providerCalls += 1; return { content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 1, reason_code: "TEST" }; } } });
+  assertEquals((await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" }, deps)).status, "NOT_ELIGIBLE");
+  assertEquals(providerCalls, 0);
+});
+
+Deno.test("AUTO_PRIORITY does not require M4 flags when M8 rank is eligible", async () => {
+  const repository = new MemoryRepository();
+  repository.candidate = evidence({ candidate: { ...repository.candidate.candidate, first_mover_flag: null, must_cover_flag: null } });
+  const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" }, dependencies(repository));
+  assertEquals(result.status, "READY");
+});
+
+Deno.test("manual NEWS_UPDATE with verified report but noneligible rank saves a review draft", async () => {
+  const repository = new MemoryRepository();
+  const sourceId = "m8-claim:claim-bbc:observation-bbc";
+  const sourceUrl = "https://www.bbc.com/sport/football/article";
+  repository.candidate = evidence({
+    candidate: { ...repository.candidate.candidate, first_mover_flag: null, must_cover_flag: null, editorial_ranking: { ...repository.candidate.candidate.editorial_ranking!, news_eligible: false } },
+    story: { ...repository.candidate.story, canonical_title: "United injury update" },
+    posts: [{ ...repository.candidate.posts[0]!, caption: "United injury update" }],
+    sources: [{ source_id: sourceId, canonical_name: "BBC Sport", entity_type: "MEDIA_OUTLET", reliability_score: 9, evidence_text: "BBC Sport reports that Sancho could join another club.", first_cited_post_id: null, citation_count: 1, claim_id: "claim-bbc", editorial_role: "FACT_INDEPENDENT", relation: "SUPPORTS", is_grounding: true, claim_scope: "PUBLISHER_REPORT", claim_modality: "RUMOR", canonical_url: sourceUrl, published_at: "2026-09-18T08:00:00Z", verified: true }],
+  });
+  const draftOutput: CreativeBriefOutput = {
+    ...output,
+    content_mode: "NEWS_UPDATE",
+    slides: output.slides.map((slide, index) => ({ ...slide, body: index === 0 ? `BBC Sport 보도에 따르면 산초의 이적 가능성은 아직 확정되지 않았습니다. ${sourceUrl}` : slide.body, claims: [{ claim_id: `report-${index}`, type: "FACT", text: "BBC Sport가 산초의 이적 가능성을 보도했으며 아직 확정되지 않았다.", evidence_ids: [`source:${sourceId}`] }] })),
+    caption: { body: `BBC Sport 보도에 따르면 산초의 이적 가능성은 아직 확정되지 않았습니다. ${sourceUrl}`, cta: "어떻게 보시나요?" },
+    sources: [{ evidence_id: `source:${sourceId}`, label: "BBC Sport", url: sourceUrl }],
+  };
+  const result = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL" }, dependencies(repository, { provider: { ...dependencies(repository).provider, classify: async () => ({ content_mode: "NEWS_UPDATE", match_phase: null, confidence: 0.99, reason_code: "REPORTED_NEWS" }), generate: async () => draftOutput } }));
+  assertEquals(result.status, "DRAFT");
+  assertEquals(repository.briefs[0]?.status, "DRAFT");
+  assertEquals(repository.jobs[0]?.status, "DRAFT");
+});
+
+Deno.test("priority runner requests ranking for the Seoul business date", async () => {
+  const repository = new MemoryRepository();
+  const { runPriorityCreativeGeneration } = await import("../../creative-generation/orchestrator.ts");
+  await runPriorityCreativeGeneration(dependencies(repository));
+  assertEquals(repository.requestedRankingDate, "2026-09-18");
 });
 
 Deno.test("stores the ManUtd Editor style identity on a canonical brief", async () => {

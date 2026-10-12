@@ -1,4 +1,4 @@
-import type { GroundedClaim, GroundingClaim, GroundingEvidence, GroundingObservation, GroundingStatus } from "./types.ts";
+import type { GroundedClaim, GroundingClaim, GroundingClaimModality, GroundingEvidence, GroundingObservation, GroundingStatus } from "./types.ts";
 
 const FACT_ROLES = new Set(["FACT_PRIMARY", "FACT_INDEPENDENT"]);
 const IGNORED_ROLES = new Set(["MATCH_CONTEXT", "OWN_PERFORMANCE"]);
@@ -59,17 +59,41 @@ function strongAnchors(claim: GroundingClaim): readonly string[] {
     });
 }
 
-export interface PreparedGroundingObservation {
-  readonly observation: GroundingObservation;
+export function articleEvidenceSentences(value: string): readonly string[] {
+  return value.split(/(?<=[.!?])\s+|\n+/u).map((sentence) => sentence.trim()).filter((sentence) => sentence.length > 0);
+}
+
+export function inferClaimModality(value: string): GroundingClaimModality {
+  const text = normalizedPhrase(value);
+  if (/\b(?:deny|denies|denied|denial|not agreed|no agreement|no deal|has not agreed|have not agreed|hasn't agreed|haven't agreed|did not agree|do not agree|is not true|are not true|false claim)\b/u.test(text)) return "DENIAL";
+  if (/\b(?:opinion|editorial|believe|believes|think|thinks|in my view|in our view|arguably)\b/u.test(text)) return "OPINION";
+  if (/\b(?:predict|predicts|predicted|prediction|forecast|forecasts|expected to|expect to|likely to|set to)\b/u.test(text)) return "PREDICTION";
+  if (/\b(?:rumou?r|speculation|speculative|reportedly|could|may|might|considering|interested|interest in|linked with|linked to|targeting|target|eyeing|monitoring|talks with|negotiating)\b/u.test(text)) return "RUMOR";
+  return text ? "CONFIRMED" : "UNKNOWN";
+}
+
+interface PreparedSentence {
+  readonly text: string;
   readonly haystack: string;
   readonly terms: ReadonlySet<string>;
+  readonly modality: GroundingClaimModality;
+}
+
+export interface PreparedGroundingObservation {
+  readonly observation: GroundingObservation;
+  readonly sentences: readonly PreparedSentence[];
 }
 
 export function prepareGroundingObservations(observations: readonly GroundingObservation[]): readonly PreparedGroundingObservation[] {
   return observations.map((observation) => ({
     observation,
-    haystack: normalizedPhrase(`${observation.title} ${observation.excerpt ?? ""}`),
-    terms: terms(`${observation.title} ${observation.excerpt ?? ""}`),
+    // A headline can help retrieval but is never the exact evidence sentence.
+    sentences: articleEvidenceSentences(observation.excerpt ?? "").map((text) => ({
+      text,
+      haystack: normalizedPhrase(text),
+      terms: terms(text),
+      modality: inferClaimModality(text),
+    })),
   }));
 }
 
@@ -103,26 +127,39 @@ export function classifyPreparedClaimEvidence(
   const anchors = strongAnchors(claim);
   const claimTerms = terms(`${claim.subject} ${claim.predicate} ${claim.object} ${claim.claimText}`);
   const objectTerms = distinctiveTerms(claim.object);
+  const claimScope = claim.claimScope ?? "EVENT";
+  const claimModality = claim.claimModality ?? "UNKNOWN";
   for (const prepared of observations) {
     const { observation } = prepared;
     if (IGNORED_ROLES.has(observation.editorialRole)) continue;
-    if (objectTerms.length === 0 || !objectTerms.some((term) => prepared.terms.has(term))) continue;
-    if (!hasEntityAnchor(anchors, prepared.haystack)) continue;
-    const score = overlap(claimTerms, prepared.terms);
-    if (score < 0.25) continue;
+    if (claimScope === "PUBLISHER_REPORT" && (observation.id !== claim.publisherSourceObservationId || observation.publisherReportOnly !== true)) continue;
+    let best: { sentence: PreparedSentence; score: number } | null = null;
+    for (const sentence of prepared.sentences) {
+      if (objectTerms.length === 0 || !objectTerms.some((term) => sentence.terms.has(term))) continue;
+      if (!hasEntityAnchor(anchors, sentence.haystack)) continue;
+      const score = overlap(claimTerms, sentence.terms);
+      if (score < 0.25) continue;
+      if (!best || score > best.score) best = { sentence, score };
+    }
+    if (!best) continue;
     const fact = FACT_ROLES.has(observation.editorialRole);
+    const modalityMatches = claimModality !== "UNKNOWN" && best.sentence.modality === claimModality;
+    const semanticsGroundable = claimScope === "PUBLISHER_REPORT"
+      ? modalityMatches
+      : claimModality === "CONFIRMED" && best.sentence.modality === "CONFIRMED";
     evidence.push({
       sourceObservationId: observation.id,
       editorialRole: observation.editorialRole,
       relation: observation.relation,
-      evidenceText: `${observation.canonicalName}: ${observation.title}${observation.excerpt ? ` — ${observation.excerpt}` : ""}`.slice(0, 2_000),
-      evidenceConfidence: Number((fact ? Math.min(1, score) : Math.min(0.79, score * 0.5)).toFixed(4)),
-      isGrounding: fact && observation.relation === "SUPPORTS",
+      evidenceText: best.sentence.text,
+      evidenceConfidence: Number((fact && semanticsGroundable ? Math.min(1, best.score) : Math.min(0.79, best.score * 0.5)).toFixed(4)),
+      isGrounding: fact && observation.relation === "SUPPORTS" && semanticsGroundable,
     });
   }
   const factContradiction = evidence.some((item) => FACT_ROLES.has(item.editorialRole) && item.relation === "CONTRADICTS");
   const factSupport = evidence.some((item) => item.isGrounding);
   const discoverySignal = evidence.some((item) => item.editorialRole.startsWith("DISCOVERY_"));
+  const factEvidenceWithoutSemanticSupport = evidence.some((item) => FACT_ROLES.has(item.editorialRole) && !item.isGrounding && item.relation === "SUPPORTS");
   let status: GroundingStatus = "INSUFFICIENT";
   let decisionReason = "NO_MATCHING_SOURCE_EVIDENCE";
   if (factContradiction) {
@@ -130,14 +167,16 @@ export function classifyPreparedClaimEvidence(
     decisionReason = "FACT_SOURCE_CONTRADICTION";
   } else if (factSupport) {
     status = "VERIFIED";
-    decisionReason = "FACT_SOURCE_SUPPORT";
+    decisionReason = claimScope === "PUBLISHER_REPORT" ? "VERIFIED_PUBLISHER_REPORT" : "FACT_SOURCE_SUPPORT";
   } else if (discoverySignal) {
     status = "DISCOVERY_ONLY";
     decisionReason = "DISCOVERY_SIGNAL_WITHOUT_FACT_GROUNDING";
+  } else if (factEvidenceWithoutSemanticSupport) {
+    decisionReason = "FACT_EVIDENCE_MODALITY_MISMATCH";
   }
-  const groundingEvidence = evidence.filter((item) => item.isGrounding || FACT_ROLES.has(item.editorialRole));
+  const groundingEvidence = evidence.filter((item) => item.isGrounding);
   const confidence = groundingEvidence.length > 0
     ? Math.max(...groundingEvidence.map((item) => item.evidenceConfidence))
-    : evidence.length > 0 ? Math.min(...evidence.map((item) => item.evidenceConfidence)) : null;
-  return { ...claim, status, confidence, decisionReason, evidence };
+    : discoverySignal ? Math.min(...evidence.filter((item) => item.editorialRole.startsWith("DISCOVERY_")).map((item) => item.evidenceConfidence)) : null;
+  return { ...claim, claimScope, claimModality, status, confidence, decisionReason, evidence };
 }

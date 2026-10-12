@@ -38,8 +38,9 @@ export interface DiscoveryPromotionRepository {
   upsertStory(input: PromotionStoryInput): Promise<{ id: string; created: boolean }>;
   assignObservation(observationId: string, storyClusterId: string, sourceObservationId: string, promotionJobId?: string): Promise<void>;
   ensureSourceObservation(observation: PromotionObservation): Promise<string>;
+  ensureReviewedPublisherObservation(observation: PromotionObservation): Promise<string | null>;
+  ensurePublisherReportClaims(input: { observation: PromotionObservation; storyClusterId: string; publisherSourceObservationId: string }): Promise<void>;
   ensureDiscoveryClaim(input: { observationId: string; storyClusterId: string; sourceObservationId: string; status: "DISCOVERY_ONLY" }): Promise<void>;
-  ensureEditorialCandidate(input: { storyClusterId: string; rankingDate: string; observation: PromotionObservation }): Promise<void>;
 }
 
 export interface PromotionSummary {

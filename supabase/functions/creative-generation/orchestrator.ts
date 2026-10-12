@@ -1,18 +1,19 @@
 import { classifyWithFallback } from "./classifier.ts";
 import { validateGenerationConfig, type GenerationConfig } from "./config.ts";
-import { buildEvidenceSnapshot } from "./evidence.ts";
+import { buildEvidenceSnapshot, verifiedNewsSources } from "./evidence.ts";
 import { canonicalJson, hashGenerationInput, sha256 } from "./fingerprint.ts";
 import { generateWithOneRepair } from "./quality_gate.ts";
+import { businessDate } from "../_shared/m6/business_date.ts";
 import type { CreativeGenerationProvider } from "./provider.ts";
 import type { GenerationRepository, GenerationJob, StoredCreativeBrief, TriggerType } from "./repository.ts";
-import type { ContentMode, CreativeBriefOutput, EvidenceSnapshot } from "./types.ts";
+import type { CandidateEvidenceInput, ContentMode, CreativeBriefOutput, EvidenceSnapshot } from "./types.ts";
 
 export interface GenerationTrigger {
   readonly candidate_id: string;
   readonly trigger_type: TriggerType;
 }
 
-export type GenerationStatus = "READY" | "NOOP" | "CONCURRENT" | "NOT_ELIGIBLE" | "BLOCKED_EVIDENCE" | "CLASSIFICATION_UNCERTAIN" | "FAILED_VALIDATION" | "FAILED_PROVIDER";
+export type GenerationStatus = "READY" | "DRAFT" | "NOOP" | "CONCURRENT" | "NOT_ELIGIBLE" | "BLOCKED_EVIDENCE" | "CLASSIFICATION_UNCERTAIN" | "FAILED_VALIDATION" | "FAILED_PROVIDER";
 
 export interface GenerationResult {
   readonly status: GenerationStatus;
@@ -47,7 +48,15 @@ function qualityConfig(config: GenerationConfig) {
 }
 
 function strictNewsEvidence(snapshot: EvidenceSnapshot): boolean {
-  return snapshot.sources.some((source) => (source.reliability_score ?? 0) >= 8);
+  return verifiedNewsSources(snapshot).length > 0;
+}
+
+function currentEditorialEligibility(input: CandidateEvidenceInput, now: Date): boolean {
+  const ranking = input.candidate.editorial_ranking;
+  const age = now.getTime() - Date.parse(input.story.last_seen_at);
+  return Boolean(ranking && ranking.story_cluster_id === input.candidate.story_cluster_id && ranking.news_eligible === true &&
+    ranking.ranking_date === businessDate(now, "Asia/Seoul") && ranking.ranking_date === input.candidate.ranking_date &&
+    Number.isFinite(age) && age >= 0 && age <= 72 * 60 * 60 * 1000);
 }
 
 function uncertainFingerprint(candidateId: string, snapshot: EvidenceSnapshot, config: GenerationConfig): Promise<string> {
@@ -63,9 +72,8 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
   const runAt = now();
   const evidenceInput = await dependencies.repository.getCandidateEvidence(trigger.candidate_id);
   if (!evidenceInput) return { status: "FAILED_PROVIDER", candidate_id: trigger.candidate_id, error_codes: ["CANDIDATE_NOT_FOUND"] };
-  if (trigger.trigger_type === "AUTO_PRIORITY" && !evidenceInput.candidate.first_mover_flag && !evidenceInput.candidate.must_cover_flag) {
-    return { status: "NOT_ELIGIBLE", candidate_id: trigger.candidate_id };
-  }
+  const rankingEligible = currentEditorialEligibility(evidenceInput, runAt);
+  if (trigger.trigger_type === "AUTO_PRIORITY" && !rankingEligible) return { status: "NOT_ELIGIBLE", candidate_id: trigger.candidate_id };
   const rawConfig = await dependencies.repository.getActiveConfig();
   const config = validateGenerationConfig(rawConfig);
   dependencies.provider.configure?.(config);
@@ -109,17 +117,19 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
   }
   const output = checked.output;
   const revision = await dependencies.repository.nextRevision(trigger.candidate_id);
+  const briefStatus = mode === "NEWS_UPDATE" && trigger.trigger_type !== "AUTO_PRIORITY" && !rankingEligible ? "DRAFT" : "READY";
   const brief = await dependencies.repository.insertCreativeBrief({
     candidate_id: trigger.candidate_id, version: revision, headline: output.hooks[0]?.text ?? output.angle, angle: output.angle, format: "INSTAGRAM_CAROUSEL", slide_count: output.slides.length,
-    slides_json: { slides: output.slides, key_takeaway: output.key_takeaway, editor_warning: output.editor_warning ?? null, internal_grounding: output.internal_grounding ?? null }, design_json: { slides: output.slides.map((slide) => ({ slide_number: slide.slide_number, visual_direction: slide.visual_direction })) }, caption_draft: output.caption.body, cta: output.caption.cta, status: "READY", content_mode: output.content_mode, match_phase: output.match_phase, generation_config_id: config.id, input_fingerprint: fingerprint, evidence_snapshot: snapshot, hooks_json: output.hooks, grounding_json: { claims: output.slides.flatMap((slide) => slide.claims), internal_grounding: output.internal_grounding ?? null }, generation_metadata: { config_version: config.version, classifier_config_version: config.classifier_config.version, classification_source: classification.source, trigger_type: trigger.trigger_type }, generation_quality: output.generation_quality, model_name: String(config.generation_config.model), generated_at: runAt.toISOString(),
+    slides_json: { slides: output.slides, sources: output.sources, key_takeaway: output.key_takeaway, editor_warning: output.editor_warning ?? null, internal_grounding: output.internal_grounding ?? null }, design_json: { slides: output.slides.map((slide) => ({ slide_number: slide.slide_number, visual_direction: slide.visual_direction })) }, caption_draft: output.caption.body, cta: output.caption.cta, status: briefStatus, content_mode: output.content_mode, match_phase: output.match_phase, generation_config_id: config.id, input_fingerprint: fingerprint, evidence_snapshot: snapshot, hooks_json: output.hooks, grounding_json: { claims: output.slides.flatMap((slide) => slide.claims), internal_grounding: output.internal_grounding ?? null }, generation_metadata: { config_version: config.version, classifier_config_version: config.classifier_config.version, classification_source: classification.source, trigger_type: trigger.trigger_type, ranking_eligible: rankingEligible }, generation_quality: output.generation_quality, model_name: String(config.generation_config.model), generated_at: runAt.toISOString(),
     style_profile: output.style_profile ?? (qualityConfig(config).style_profile === "manutd_editor" ? "manutd_editor" : undefined), style_version: output.style_version ?? qualityConfig(config).style_version,
   });
-  await dependencies.repository.updateJob(job.id, { status: "READY", creative_brief_id: brief.id, repair_attempted: checked.repair_attempted, completed_at: runAt.toISOString(), lease_owner: null, lease_expires_at: null });
-  return { status: "READY", candidate_id: trigger.candidate_id, creative_brief_id: brief.id, revision, input_fingerprint: fingerprint };
+  await dependencies.repository.updateJob(job.id, { status: briefStatus, creative_brief_id: brief.id, repair_attempted: checked.repair_attempted, completed_at: runAt.toISOString(), lease_owner: null, lease_expires_at: null });
+  return { status: briefStatus, candidate_id: trigger.candidate_id, creative_brief_id: brief.id, revision, input_fingerprint: fingerprint };
 }
 
 export async function runPriorityCreativeGeneration(dependencies: GenerationDependencies): Promise<readonly GenerationResult[]> {
-  const ids = await dependencies.repository.listPriorityCandidateIds?.() ?? [];
+  const runAt = (dependencies.now ?? (() => new Date()))();
+  const ids = await dependencies.repository.listPriorityCandidateIds?.(businessDate(runAt, "Asia/Seoul")) ?? [];
   const results: GenerationResult[] = [];
   for (const candidateId of ids) results.push(await runCreativeGeneration({ candidate_id: candidateId, trigger_type: "AUTO_PRIORITY" }, dependencies));
   return results;

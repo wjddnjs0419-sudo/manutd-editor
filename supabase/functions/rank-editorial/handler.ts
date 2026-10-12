@@ -4,7 +4,7 @@ import { businessDate } from "../_shared/m6/business_date.ts";
 export interface RankEditorialHandlerDependencies {
   readonly collectorSecret: string;
   readonly requestId?: () => string;
-  readonly run: (input: EditorialRankingRunInput & { readonly rankingDate: string }) => Promise<EditorialRankingSummary>;
+  readonly run: (input: EditorialRankingRunInput & { readonly rankingDate: string }, requestId: string) => Promise<EditorialRankingSummary>;
   readonly log?: (entry: Record<string, unknown>) => void;
 }
 
@@ -43,23 +43,52 @@ export function createRankEditorialHandler(dependencies: RankEditorialHandlerDep
   if (!dependencies.collectorSecret) throw new Error("Collector secret is required");
   const requestId = dependencies.requestId ?? (() => crypto.randomUUID());
   const log = dependencies.log ?? ((entry) => console.log(JSON.stringify(entry)));
+  const emit = (entry: Record<string, unknown>) => {
+    try { log(entry); } catch { /* Logging must never change the request result. */ }
+  };
+  const stage = (id: string, name: string, startedAt: number, outcome: string, fields: Record<string, unknown> = {}) => {
+    emit({ requestId: id, event: "rank_editorial_stage", stage: name, elapsedMs: Math.max(0, Math.round(performance.now() - startedAt)), outcome, ...fields });
+  };
   return async (request) => {
     const id = requestId();
-    if (request.method !== "POST") return Response.json({ request_id: id, error: { code: "METHOD_NOT_ALLOWED", message: "POST required" } }, { status: 405, headers: { allow: "POST" } });
+    const totalStartedAt = performance.now();
+    const finish = (response: Response, outcome: string, code?: string) => {
+      stage(id, "total", totalStartedAt, outcome, { status: response.status, ...(code ? { code } : {}) });
+      return response;
+    };
+    if (request.method !== "POST") return finish(Response.json({ request_id: id, error: { code: "METHOD_NOT_ALLOWED", message: "POST required" } }, { status: 405, headers: { allow: "POST" } }), "rejected", "METHOD_NOT_ALLOWED");
+    const authStartedAt = performance.now();
     const supplied = bearer(request.headers.get("authorization"));
-    if (!supplied || !await equal(supplied, dependencies.collectorSecret)) { log({ requestId: id, event: "rank_editorial_rejected", code: "UNAUTHORIZED" }); return Response.json({ request_id: id, error: { code: "UNAUTHORIZED", message: "Unauthorized" } }, { status: 401 }); }
+    const authorized = Boolean(supplied) && await equal(supplied, dependencies.collectorSecret);
+    stage(id, "auth", authStartedAt, authorized ? "accepted" : "rejected", authorized ? {} : { code: "UNAUTHORIZED" });
+    if (!authorized) return finish(Response.json({ request_id: id, error: { code: "UNAUTHORIZED", message: "Unauthorized" } }, { status: 401 }), "rejected", "UNAUTHORIZED");
+    const parseStartedAt = performance.now();
+    let input: EditorialRankingRunInput;
     try {
-      const input = await body(request);
-      const rankingInput = {
-        ...input,
-        rankingDate: input.rankingDate ?? businessDate(input.asOf ?? new Date(), "Asia/Seoul"),
-      };
-      const result = await dependencies.run(rankingInput);
-      return Response.json({ request_id: id, status: result.status, ranked: result.ranked, news_eligible: result.newsEligible, research_leads: result.researchLeads, version: result.version });
+      input = await body(request);
     } catch (error) {
-      if (error instanceof InvalidRequestError) return Response.json({ request_id: id, error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 });
-      log({ requestId: id, event: "rank_editorial_failed", code: "RANK_EDITORIAL_FAILED" });
-      return Response.json({ request_id: id, error: { code: "RANK_EDITORIAL_FAILED", message: "Editorial ranking failed" } }, { status: 500 });
+      if (error instanceof InvalidRequestError) {
+        stage(id, "parse", parseStartedAt, "rejected", { code: "INVALID_REQUEST" });
+        return finish(Response.json({ request_id: id, error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 }), "rejected", "INVALID_REQUEST");
+      }
+      stage(id, "parse", parseStartedAt, "failed", { code: "REQUEST_PARSE_FAILED" });
+      emit({ requestId: id, event: "rank_editorial_failed", code: "REQUEST_PARSE_FAILED" });
+      return finish(Response.json({ request_id: id, error: { code: "RANK_EDITORIAL_FAILED", message: "Editorial ranking failed" } }, { status: 500 }), "failed", "REQUEST_PARSE_FAILED");
+    }
+    stage(id, "parse", parseStartedAt, "accepted");
+    const rankingInput = {
+      ...input,
+      rankingDate: input.rankingDate ?? businessDate(input.asOf ?? new Date(), "Asia/Seoul"),
+    };
+    const runStartedAt = performance.now();
+    try {
+      const result = await dependencies.run(rankingInput, id);
+      stage(id, "run", runStartedAt, "completed");
+      return finish(Response.json({ request_id: id, status: result.status, ranked: result.ranked, news_eligible: result.newsEligible, research_leads: result.researchLeads, version: result.version }), "completed");
+    } catch {
+      stage(id, "run", runStartedAt, "failed", { code: "RANK_EDITORIAL_FAILED" });
+      emit({ requestId: id, event: "rank_editorial_failed", code: "RANK_EDITORIAL_FAILED" });
+      return finish(Response.json({ request_id: id, error: { code: "RANK_EDITORIAL_FAILED", message: "Editorial ranking failed" } }, { status: 500 }), "failed", "RANK_EDITORIAL_FAILED");
     }
   };
 }

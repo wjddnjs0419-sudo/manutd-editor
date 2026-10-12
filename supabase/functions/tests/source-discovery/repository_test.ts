@@ -69,3 +69,34 @@ Deno.test("source discovery refreshes an existing observation after a duplicate"
   assertEquals(requests.at(-1)?.method, "PATCH");
   assertEquals(JSON.parse(requests.at(-1)?.body ?? "{}").excerpt, "The article body excerpt.");
 });
+
+
+Deno.test("source discovery repository sends service-role authorization and app_private profiles", async () => {
+  const privateHeaders: Headers[] = [];
+  const repository = createSourceDiscoveryRepository({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "service-role-secret",
+    request: async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/source_observations")) privateHeaders.push(new Headers(init?.headers));
+      if (url.pathname.endsWith("/information_sources")) return Response.json([{ id: "source-1" }]);
+      if (init?.method === "PATCH") return new Response(null, { status: 204 });
+      return Response.json([]);
+    },
+  });
+
+  await repository.saveObservation({
+    informationSourceId: "source-1", sourceCanonicalName: "BBC Sport", editorialRole: "FACT_INDEPENDENT",
+    externalId: "article-1", canonicalUrl: "https://bbc.test/article/1", title: "Report", excerpt: "Body",
+    publishedAt: null, observedAt: "2026-09-27T02:00:00.000Z", discoverySignal: 0.5,
+    contentFingerprint: "fingerprint", metadata: {},
+  });
+
+  assertEquals(privateHeaders.length, 2);
+  for (const headers of privateHeaders) {
+    assertEquals(headers.get("apikey"), "service-role-secret");
+    assertEquals(headers.get("authorization"), "Bearer service-role-secret");
+    assertEquals(headers.get("accept-profile"), "app_private");
+    assertEquals(headers.get("content-profile"), "app_private");
+  }
+});
