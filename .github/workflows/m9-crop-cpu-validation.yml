@@ -10,8 +10,6 @@ jobs:
   validate-cpu:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      M9_CROP_TEST_MODEL_PATH: ${{ runner.temp }}/m9-crop-model/blaze_face_short_range.tflite
     steps:
       - uses: actions/checkout@v4
 
@@ -31,7 +29,7 @@ jobs:
       - name: Verify model and run generated-image CPU smoke
         run: >-
           python scripts/m9_crop_cpu_smoke.py
-          --model-path "$M9_CROP_TEST_MODEL_PATH"
+          --model-path "$RUNNER_TEMP/m9-crop-model/blaze_face_short_range.tflite"
           --report "$RUNNER_TEMP/m9-crop-smoke.json"
 
       - name: Run M9 Python regressions
