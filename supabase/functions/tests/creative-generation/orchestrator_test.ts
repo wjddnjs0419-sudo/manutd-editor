@@ -695,3 +695,45 @@ Deno.test("explicit manual analysis retry resumes FAILED_PROVIDER without anothe
   assertEquals((await runCreativeGeneration(manual, deps)).status, "NOOP");
   assertEquals(generationCalls, 2);
 });
+
+
+Deno.test("explicit manual analysis retry resumes FAILED_VALIDATION without reclassification", async () => {
+  const repository = new MemoryRepository();
+  repository.candidate = explorationCandidate({ posts: [] });
+  let classifierCalls = 0;
+  let generationCalls = 0;
+  const usage = { provider_calls: 0, input_tokens: 0, output_tokens: 0, retry_count: 0 };
+  const deps = dependencies(repository, {
+    explorationConfig: EXPLORATION_COST_CONFIG,
+    provider: {
+      ...dependencies(repository).provider,
+      getUsageStats: () => ({ ...usage }),
+      classify: async () => {
+        classifierCalls += 1;
+        usage.provider_calls += 1;
+        return { content_mode: "ANALYSIS_CONTEXT" as const, match_phase: null, confidence: 0.2, reason_code: "WEAK" };
+      },
+      generate: async () => {
+        generationCalls += 1;
+        usage.provider_calls += 1;
+        usage.input_tokens += 1_000;
+        usage.output_tokens += 500;
+        const valid = explorationOutput("ANALYSIS_CONTEXT");
+        return generationCalls === 1
+          ? { ...valid, slides: valid.slides.map((slide, index) => index === 0 ? { ...slide, slide_number: 0 } : slide) }
+          : valid;
+      },
+    },
+  });
+  const trigger = { candidate_id: "candidate-1", trigger_type: "MANUAL" as const, generation_intent: "EXPLORATION" as const };
+  assertEquals((await runCreativeGeneration(trigger, deps)).status, "CLASSIFICATION_UNCERTAIN");
+  repository.leaseOwners.clear();
+  const manual = { ...trigger, content_mode_override: "ANALYSIS_CONTEXT" as const };
+  assertEquals((await runCreativeGeneration(manual, deps)).status, "FAILED_VALIDATION");
+  assertEquals(repository.jobs[0]?.last_error_category, "FAILED_VALIDATION");
+  repository.leaseOwners.clear();
+  assertEquals((await runCreativeGeneration(manual, deps)).status, "DRAFT");
+  assertEquals(classifierCalls, 1);
+  assertEquals(generationCalls, 2);
+  assertEquals(repository.briefs.length, 1);
+});
