@@ -216,7 +216,7 @@ export async function runPriorityCreativeGeneration(dependencies: GenerationDepe
   const results: GenerationResult[] = [];
   for (const candidateId of ids) results.push(await runCreativeGeneration({ candidate_id: candidateId, trigger_type: "AUTO_PRIORITY" }, dependencies));
   const explorationConfig = dependencies.explorationConfig ?? DEFAULT_EXPLORATION_CONFIG;
-  if (explorationConfig.enabled && dependencies.repository.listExplorationCandidateIds) {
+  if (explorationConfig.autoEnabled && dependencies.repository.listExplorationCandidateIds) {
     let created = 0;
     const explorationIds = await dependencies.repository.listExplorationCandidateIds(runAt);
     for (const candidateId of explorationIds) {

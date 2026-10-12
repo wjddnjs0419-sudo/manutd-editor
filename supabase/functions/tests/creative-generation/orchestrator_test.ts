@@ -71,6 +71,7 @@ class MemoryRepository implements GenerationRepository {
   leaseOwners = new Set<string>();
   config: unknown = config;
   requestedRankingDate = "";
+  explorationCandidateListingCalls = 0;
   dailyExplorationLimit = 10;
   async getCandidateEvidence() { return this.candidate; }
   async getActiveConfig() { return this.config; }
@@ -114,6 +115,7 @@ class MemoryRepository implements GenerationRepository {
   async nextRevision(candidateId: string) { return Math.max(0, ...this.briefs.filter((brief) => brief.candidate_id === candidateId).map((brief) => brief.version)) + 1; }
   async insertCreativeBrief(input: CreativeBriefInsert) { const brief = { ...input, id: `brief-${this.briefs.length + 1}` }; this.briefs.push(brief); return brief; }
   async listPriorityCandidateIds(rankingDate: string) { this.requestedRankingDate = rankingDate; return []; }
+  async listExplorationCandidateIds(_runAt: Date) { this.explorationCandidateListingCalls += 1; return []; }
 }
 
 function dependencies(repository: MemoryRepository, overrides: Partial<GenerationDependencies> = {}): GenerationDependencies {
@@ -545,6 +547,15 @@ Deno.test("priority runner requests ranking for the Seoul business date", async 
   const { runPriorityCreativeGeneration } = await import("../../creative-generation/orchestrator.ts");
   await runPriorityCreativeGeneration(dependencies(repository));
   assertEquals(repository.requestedRankingDate, "2026-09-18");
+});
+
+Deno.test("priority runner does not start Exploration without its separate auto-mode switch", async () => {
+  const repository = new MemoryRepository();
+  const { runPriorityCreativeGeneration } = await import("../../creative-generation/orchestrator.ts");
+  await runPriorityCreativeGeneration(dependencies(repository, {
+    explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
+  }));
+  assertEquals(repository.explorationCandidateListingCalls, 0);
 });
 
 Deno.test("stores the ManUtd Editor style identity on a canonical brief", async () => {

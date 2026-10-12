@@ -7,6 +7,7 @@ Deno.test("Exploration config defaults off and keeps limits centrally configured
   assertEquals(typeof exploration?.readExplorationConfig, "function");
   const defaults = exploration!.readExplorationConfig(() => undefined);
   assertEquals(defaults.enabled, false);
+  assertEquals(defaults.autoEnabled, false);
   assertEquals(defaults.maxDraftsPerDay, 10);
   assertEquals(defaults.maxArticleAgeHours, 72);
 });
@@ -43,10 +44,17 @@ Deno.test("Exploration config clamps daily and age limits and reads optional cos
     EDITORIAL_EXPLORATION_OUTPUT_COST_PER_MILLION_USD: "10",
   } as Record<string, string>)[name]);
   assertEquals(config.enabled, true);
+  assertEquals(config.autoEnabled, false);
   assertEquals(config.maxDraftsPerDay, 10);
   assertEquals(config.maxArticleAgeHours, 72);
   assertEquals(config.inputCostPerMillionUsd, 2.5);
   assertEquals(config.outputCostPerMillionUsd, 10);
+  const autoConfig = exploration.readExplorationConfig((name) => ({
+    EDITORIAL_EXPLORATION_MODE: "true",
+    EDITORIAL_EXPLORATION_AUTO_MODE: "true",
+  } as Record<string, string>)[name]);
+  assertEquals(autoConfig.enabled, true);
+  assertEquals(autoConfig.autoEnabled, true);
 });
 
 Deno.test("Exploration rejects an article with only an incidental United mention", async () => {

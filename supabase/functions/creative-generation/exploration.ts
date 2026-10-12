@@ -6,6 +6,8 @@ import type { ContentMode } from "./types.ts";
 
 export interface ExplorationConfig {
   readonly enabled: boolean;
+  /** Separate opt-in for the priority runner's automatic Exploration batch. */
+  readonly autoEnabled: boolean;
   readonly maxDraftsPerDay: number;
   readonly maxArticleAgeHours: number;
   readonly minArticleTextChars: number;
@@ -32,6 +34,7 @@ export interface ExplorationSnapshotAssessment {
 
 export const DEFAULT_EXPLORATION_CONFIG: ExplorationConfig = {
   enabled: false,
+  autoEnabled: false,
   maxDraftsPerDay: 10,
   maxArticleAgeHours: 72,
   minArticleTextChars: 300,
@@ -77,8 +80,11 @@ function readOptionalRate(readEnv: (name: string) => string | undefined, name: s
 
 export function readExplorationConfig(readEnv: (name: string) => string | undefined): ExplorationConfig {
   const enabledValue = (readEnv("EDITORIAL_EXPLORATION_MODE") ?? "").trim().toLocaleLowerCase("en-US");
+  const autoEnabledValue = (readEnv("EDITORIAL_EXPLORATION_AUTO_MODE") ?? "").trim().toLocaleLowerCase("en-US");
+  const enabled = enabledValue === "true" || enabledValue === "1" || enabledValue === "yes";
   return {
-    enabled: enabledValue === "true" || enabledValue === "1" || enabledValue === "yes",
+    enabled,
+    autoEnabled: enabled && (autoEnabledValue === "true" || autoEnabledValue === "1" || autoEnabledValue === "yes"),
     maxDraftsPerDay: readPositiveInteger(readEnv, "EDITORIAL_EXPLORATION_MAX_DRAFTS_PER_DAY", DEFAULT_EXPLORATION_CONFIG.maxDraftsPerDay, 10),
     maxArticleAgeHours: readPositiveInteger(readEnv, "EDITORIAL_EXPLORATION_MAX_ARTICLE_AGE_HOURS", DEFAULT_EXPLORATION_CONFIG.maxArticleAgeHours, 72),
     minArticleTextChars: readPositiveInteger(readEnv, "EDITORIAL_EXPLORATION_MIN_ARTICLE_CHARS", DEFAULT_EXPLORATION_CONFIG.minArticleTextChars, 6_000),
