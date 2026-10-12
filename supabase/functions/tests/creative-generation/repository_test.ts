@@ -77,6 +77,93 @@ Deno.test("generation evidence includes M8 grounded fact sources", async () => {
   }]);
 });
 
+Deno.test("unapproved Google News publisher extraction keeps publisher identity and URL in exploration evidence", async () => {
+  const publisherUrl = "https://www.teamtalk.com/manchester-united/example-report";
+  const articleText = "TEAMtalk reports that Manchester United are considering a move, but no agreement has been reached. " + "The report distinguishes current interest from a completed transfer. ".repeat(6);
+  const repository = createRestGenerationRepository({
+    supabaseUrl: "https://example.supabase.co",
+    serviceKey: "service-role",
+    request: async (input) => {
+      const url = String(input);
+      if (url.includes("/editorial_rankings")) return Response.json([]);
+      if (url.includes("content_candidates")) return Response.json([{
+        id: candidateId, story_cluster_id: clusterId, ranking_date: "2026-10-12", rank: 1,
+        priority_score: 0, data_confidence: 0, korea_coverage_status: "UNCERTAIN", score_inputs: {},
+      }]);
+      if (url.includes("story_clusters")) return Response.json([{
+        id: clusterId, canonical_title: "Manchester United transfer report", status: "OPEN",
+        first_seen_at: "2026-10-11T12:00:00Z", last_seen_at: "2026-10-11T12:00:00Z",
+      }]);
+      if (url.includes("story_cluster_posts") || url.includes("story_cluster_sources")) return Response.json([]);
+      if (url.includes("story_claims") || url.includes("claim_evidence")) return Response.json([]);
+      if (url.includes("discovery_observations")) return Response.json([{
+        id: "discovery-1", provider_id: "google-news", story_cluster_id: clusterId,
+        source_observation_id: "google-source-observation", source_canonical_name: "TEAMtalk",
+        canonical_url: "https://news.google.com/rss/articles/AbCdEfGhIjKlMnOp",
+        article_final_url: publisherUrl, resolved_publisher_url: publisherUrl,
+        title: "Manchester United transfer report", published_at: "2026-10-11T12:00:00Z",
+        last_observed_at: "2026-10-11T12:01:00Z", content_fingerprint: "feed-fingerprint",
+        article_extraction_status: "EXTRACTED", article_content_excerpt: articleText,
+        metadata: { publisher_name: "TEAMtalk" },
+      }]);
+      if (url.includes("source_observations")) return Response.json([{
+        id: "google-source-observation", information_source_id: "google-source", editorial_role: "DISCOVERY_COMMUNITY",
+        external_id: "google-article-1", canonical_url: "https://news.google.com/rss/articles/AbCdEfGhIjKlMnOp",
+        title: "Manchester United transfer report", excerpt: articleText,
+        published_at: "2026-10-11T12:00:00Z", observed_at: "2026-10-11T12:01:00Z",
+        content_fingerprint: "feed-fingerprint",
+        metadata: { article_extraction_status: "EXTRACTED", resolved_publisher_url: publisherUrl },
+      }]);
+      if (url.includes("information_sources")) return Response.json([{
+        id: "google-source", canonical_name: "Google News", entity_type: "MEDIA_OUTLET", reliability_score: 0,
+      }]);
+      throw new Error(`Unexpected request: ${url}`);
+    },
+  });
+
+  const evidence = await repository.getCandidateEvidence(candidateId);
+  assertEquals(evidence?.exploration_articles, [{
+    source_observation_id: "google-source-observation", publisher_name: "TEAMtalk", canonical_url: publisherUrl,
+    published_at: "2026-10-11T12:00:00Z", observed_at: "2026-10-11T12:01:00Z",
+    extraction_status: "EXTRACTED", article_text: articleText, content_fingerprint: "feed-fingerprint",
+    modality: "UNKNOWN", verified: false,
+  }]);
+});
+
+Deno.test("REST story duplicate guard ignores prior Exploration drafts unless a standard brief cites the same URL", async () => {
+  const publisherUrl = "https://www.teamtalk.com/manchester-united/revised-report";
+  const briefs: Record<string, unknown>[] = [
+    {
+      id: "old-exploration-brief", candidate_id: candidateId, version: 1, status: "DRAFT",
+      generation_metadata: { generation_intent: "EXPLORATION" }, exploration_fingerprint: "old-exploration-fingerprint",
+      evidence_snapshot: { story: { id: clusterId }, sources: [{ canonical_url: publisherUrl }] },
+    },
+    {
+      id: "unrelated-standard-brief", candidate_id: candidateId, version: 1, status: "READY",
+      generation_metadata: { generation_intent: "STANDARD" }, exploration_fingerprint: null,
+      evidence_snapshot: { story: { id: clusterId }, sources: [{ canonical_url: "https://www.teamtalk.com/manchester-united/other-report" }] },
+    },
+  ];
+  const repository = createRestGenerationRepository({
+    supabaseUrl: "https://example.supabase.co",
+    serviceKey: "service-role",
+    request: async (input) => {
+      const url = String(input);
+      if (url.includes("content_candidates")) return Response.json([{ id: candidateId }]);
+      if (url.includes("creative_briefs")) return Response.json(briefs);
+      throw new Error(`Unexpected request: ${url}`);
+    },
+  });
+
+  assertEquals(await repository.findExistingBriefForStory!(clusterId, [publisherUrl]), null);
+  briefs.push({
+    id: "matching-standard-brief", candidate_id: candidateId, version: 2, status: "READY",
+    generation_metadata: { generation_intent: "STANDARD" }, exploration_fingerprint: null,
+    evidence_snapshot: { story: { id: clusterId }, sources: [{ canonical_url: publisherUrl }] },
+  });
+  assertEquals((await repository.findExistingBriefForStory!(clusterId, [publisherUrl]))?.id, "matching-standard-brief");
+});
+
 Deno.test("priority candidates require current news eligible ranking and freshness", async () => {
   const repository = createRestGenerationRepository({
     supabaseUrl: "https://example.supabase.co", serviceKey: "service-role", now: () => new Date("2026-10-12T06:00:00Z"),

@@ -59,6 +59,10 @@ class MemoryRepository implements GenerationRepository {
   async findExistingBriefForStory(storyClusterId: string, urls: readonly string[]) {
     const wanted = new Set(urls);
     return this.briefs.find((brief) => {
+      const metadata = brief.generation_metadata && typeof brief.generation_metadata === "object"
+        ? brief.generation_metadata as Record<string, unknown>
+        : {};
+      if (metadata.generation_intent === "EXPLORATION" || brief.exploration_fingerprint) return false;
       if (brief.status !== "DRAFT" && brief.status !== "READY") return false;
       if (brief.evidence_snapshot && typeof brief.evidence_snapshot === "object") {
         const snapshot = brief.evidence_snapshot as EvidenceSnapshot;
@@ -337,6 +341,32 @@ Deno.test("story-level fingerprint prevents duplicate drafts across candidate da
   assertEquals(repeated.status, "NOOP");
   assertEquals(generations, 1);
   assertEquals(repository.briefs[0]?.status, "DRAFT");
+});
+
+Deno.test("new facts for the same story allow a revised exploration draft", async () => {
+  const repository = new MemoryRepository();
+  const original = explorationCandidate();
+  repository.candidate = original;
+  let generations = 0;
+  const deps = dependencies(repository, {
+    explorationConfig: { ...DEFAULT_EXPLORATION_CONFIG, enabled: true },
+    provider: { ...dependencies(repository).provider, classify: async () => ({ content_mode: "ANALYSIS_CONTEXT", match_phase: null, confidence: 0.95, reason_code: "MODEL" }), generate: async () => { generations += 1; return explorationOutput("ANALYSIS_CONTEXT"); } },
+  });
+  const first = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, deps);
+  const originalArticle = original.exploration_articles![0]!;
+  repository.candidate = explorationCandidate({ exploration_articles: [{
+    ...originalArticle,
+    article_text: `${originalArticle.article_text} A later update adds a new confirmed detail about the same report.`,
+    content_fingerprint: "exploration-article-1-revised",
+  }] });
+  const revised = await runCreativeGeneration({ candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }, deps);
+
+  assertEquals(first.status, "DRAFT");
+  assertEquals(revised.status, "DRAFT");
+  assertEquals(revised.input_fingerprint === first.input_fingerprint, false);
+  assertEquals(revised.revision, 2);
+  assertEquals(repository.briefs.length, 2);
+  assertEquals(generations, 2);
 });
 
 Deno.test("existing READY brief for the same article is reused without demotion", async () => {

@@ -120,9 +120,15 @@ export function assessExplorationSnapshot(
 }
 
 export async function explorationFingerprint(snapshot: EvidenceSnapshot, articles: readonly ExplorationArticleEvidenceInput[]): Promise<string> {
-  // The persisted M8 story identity is the event-level idempotency key. A new
-  // date-scoped candidate or a second outlet reporting the same event must not
-  // produce another carousel automatically.
-  void articles;
-  return await sha256(canonicalJson({ story_cluster_id: snapshot.story.id }));
+  // Keep retries and date-scoped candidates idempotent while allowing a new
+  // publisher-page revision to produce a review draft when its extracted facts
+  // have changed. Provider fingerprints can describe a feed item rather than
+  // the fetched article body, so hash the exact text frozen into the evidence.
+  const articleContentFingerprints = await Promise.all(articles.map((article) =>
+    sha256((article.article_text ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim())
+  ));
+  return await sha256(canonicalJson({
+    story_cluster_id: snapshot.story.id,
+    article_content_fingerprints: [...new Set(articleContentFingerprints)].sort((left, right) => left.localeCompare(right)),
+  }));
 }

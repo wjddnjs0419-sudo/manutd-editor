@@ -240,16 +240,22 @@ function m8ExplorationArticles(
     const extractionStatus = source && (metadata.article_extraction_status === "EXTRACTED" || metadata.article_enrichment === "EXTRACTED")
       ? "EXTRACTED"
       : discovery?.article_extraction_status === "EXTRACTED" ? "EXTRACTED"
+      : discoveryMetadata.article_enrichment === "EXTRACTED" ? "EXTRACTED"
       : typeof metadata.article_extraction_status === "string" ? metadata.article_extraction_status
       : typeof discovery?.article_extraction_status === "string" ? discovery.article_extraction_status
       : "NOT_EXTRACTED";
     const articleText = extractionStatus === "EXTRACTED"
-      ? (typeof metadata.article_content_excerpt === "string" ? metadata.article_content_excerpt : typeof source?.excerpt === "string" ? source.excerpt : typeof discovery?.article_content_excerpt === "string" ? discovery.article_content_excerpt : null)
+      ? (typeof metadata.article_content_excerpt === "string" ? metadata.article_content_excerpt : typeof discovery?.article_content_excerpt === "string" ? discovery.article_content_excerpt : typeof source?.excerpt === "string" ? source.excerpt : null)
       : null;
-    const canonicalUrl = typeof source?.canonical_url === "string" ? source.canonical_url : typeof discovery?.article_final_url === "string" ? discovery.article_final_url : typeof discovery?.resolved_publisher_url === "string" ? discovery.resolved_publisher_url : typeof discovery?.canonical_url === "string" ? discovery.canonical_url : "";
-    const publisherName = typeof source?.information_source_id === "string"
-      ? sourceNames.get(source.information_source_id) ?? (typeof discovery?.source_canonical_name === "string" ? discovery.source_canonical_name : "")
-      : typeof discovery?.source_canonical_name === "string" ? discovery.source_canonical_name : "";
+    const canonicalUrl = typeof discovery?.article_final_url === "string" ? discovery.article_final_url
+      : typeof discovery?.resolved_publisher_url === "string" ? discovery.resolved_publisher_url
+      : typeof metadata.resolved_publisher_url === "string" ? metadata.resolved_publisher_url
+      : typeof source?.canonical_url === "string" ? source.canonical_url
+      : typeof discovery?.canonical_url === "string" ? discovery.canonical_url : "";
+    const publisherName = typeof metadata.publisher_canonical_name === "string" ? metadata.publisher_canonical_name
+      : typeof discovery?.source_canonical_name === "string" ? discovery.source_canonical_name
+      : typeof discoveryMetadata.publisher_name === "string" ? discoveryMetadata.publisher_name
+      : typeof source?.information_source_id === "string" ? sourceNames.get(source.information_source_id) ?? "" : "";
     const publishedAt = typeof source?.published_at === "string" ? source.published_at : typeof discovery?.published_at === "string" ? discovery.published_at : null;
     const observedAt = typeof source?.observed_at === "string" ? source.observed_at : typeof discovery?.last_observed_at === "string" ? discovery.last_observed_at : null;
     const contentFingerprint = typeof source?.content_fingerprint === "string" ? source.content_fingerprint : typeof discovery?.content_fingerprint === "string" ? discovery.content_fingerprint : "";
@@ -391,13 +397,25 @@ export function createRestGenerationRepository(options: RestRepositoryOptions): 
       return row ? row as unknown as StoredCreativeBrief : null;
     },
     async findExistingBriefForStory(storyClusterId, publisherUrls) {
-      void publisherUrls;
+      if (publisherUrls.length === 0) return null;
       const candidates = await request(`/content_candidates?select=id&story_cluster_id=eq.${encodeURIComponent(storyClusterId)}&limit=1000`);
       const candidateIds = Array.isArray(candidates) ? candidates.map(object).map((row) => string(row.id)).filter(Boolean) : [];
       if (candidateIds.length === 0) return null;
       const candidateFilter = candidateIds.map(encodeURIComponent).join(",");
-      const row = await getOne(`/creative_briefs?select=*&candidate_id=in.(${candidateFilter})&status=in.(DRAFT,SELECTED,BRIEF_READY,DESIGNING,READY,PUBLISHED)&order=generated_at.desc.nullslast,created_at.desc&limit=1`);
-      return row ? row as unknown as StoredCreativeBrief : null;
+      const value = await request(`/creative_briefs?select=*&candidate_id=in.(${candidateFilter})&status=in.(DRAFT,SELECTED,BRIEF_READY,DESIGNING,READY,PUBLISHED)&order=generated_at.desc.nullslast,created_at.desc&limit=1000`);
+      const wantedUrls = new Set(publisherUrls);
+      if (!Array.isArray(value)) return null;
+      for (const item of value) {
+        const row = object(item);
+        const generationMetadata = object(row.generation_metadata);
+        if (generationMetadata.generation_intent === "EXPLORATION" || typeof row.exploration_fingerprint === "string") continue;
+        const snapshot = object(row.evidence_snapshot);
+        const sources = Array.isArray(snapshot.sources) ? snapshot.sources.map(object) : [];
+        if (sources.some((source) => typeof source.canonical_url === "string" && wantedUrls.has(source.canonical_url))) {
+          return row as unknown as StoredCreativeBrief;
+        }
+      }
+      return null;
     },
     async getCreativeBrief(creativeBriefId) {
       const row = await getOne(`/creative_briefs?select=*&id=eq.${encodeURIComponent(creativeBriefId)}&status=eq.READY&limit=1`);
