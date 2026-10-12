@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from m9_preview_workflow import (
     brief_slides, checked_media, prepared_render_job, split_hook, job_key, run_preview,
     SupabaseGateway, RemoteError, TelegramGateway, telegram_text_chunks, validate_preview_status,
+    safe_failure_category,
 )
 
 def find_font() -> Path | None:
@@ -51,6 +52,7 @@ def make_brief() -> dict:
 class FakeGateway:
     def __init__(self):
         self.claimed: set[str] = set()
+        self.briefs: dict[str, str] = {}
         self.changes: list[tuple[str, str]] = []
         self.patches: list[dict] = []
         self.uploaded: list[tuple[str, bytes]] = []
@@ -58,18 +60,22 @@ class FakeGateway:
         self.state: dict[str, str] = {}
         self.fail_sign = False
         self.fail_verify = False
+        self.fail_upload = False
         self.verified: list[str] = []
 
     def ensure_private_bucket(self):
         self.private_bucket_checked = True
 
     def get_preview(self, key):
-        return {"id": "a9a9a9a9-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}
+        return {"id": "a9a9a9a9-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "status": self.state.get(key, "CLAIMED"),
+                "creative_brief_id": self.briefs.get(key)}
 
     def claim(self, key, brief_id, media):
         if key in self.claimed:
             raise ValueError("M9_JOB_ALREADY_CLAIMED_NO_RETRY")
         self.claimed.add(key)
+        self.briefs[key] = brief_id
         self.state[key] = "CLAIMED"
 
     def transition(self, key, previous, next_status, patch=None):
@@ -80,6 +86,8 @@ class FakeGateway:
         self.patches.append(patch or {})
 
     def upload_png(self, path, data):
+        if self.fail_upload:
+            raise ValueError("M9_STORAGE_UPLOAD_FAILED")
         assert data.startswith(b"\x89PNG\r\n\x1a\n")
         assert path.startswith("previews/") and path.endswith(".png")
         self.uploaded.append((path, data))
@@ -272,6 +280,11 @@ class M9IntegrationContracts(unittest.TestCase):
             checked_media(altered, self.root)
         self.assertEqual(job_key(self.brief, self.media), job_key(self.brief, self.media))
 
+    def test_failure_category_persists_only_safe_m9_code(self):
+        self.assertEqual(safe_failure_category(ValueError("M9_STORAGE_UPLOAD_FAILED")), "STORAGE_UPLOAD_FAILED")
+        self.assertEqual(safe_failure_category(RuntimeError("M9_STAGE_TIMEOUT: m9_collect_media.ts")), "STAGE_TIMEOUT")
+        self.assertEqual(safe_failure_category(RuntimeError("secret-key: https://example.test")), "PREVIEW_PIPELINE_FAILED")
+
     @unittest.skipUnless(find_font(), "M9_TEST_FONT needed")
     def test_full_pipeline_sends_copyable_caption_separately_from_ordered_album(self):
         store, tel = FakeGateway(), FakeTelegram()
@@ -331,6 +344,33 @@ class M9IntegrationContracts(unittest.TestCase):
         self.assertEqual(len(tel.calls), 1)
 
     @unittest.skipUnless(find_font(), "M9_TEST_FONT needed")
+    def test_renderer_continues_existing_cloud_claim_without_claiming_a_second_job(self):
+        store, tel = FakeGateway(), FakeTelegram()
+        key = job_key(self.brief, {})
+        store.claim(key, self.brief["id"], {"source": "photo-pipeline-start"})
+        result = run_preview(self.brief, self.media, self.root, self.root / "preclaimed",
+                             self.font, None, store, tel, send=False,
+                             cta_file=self.root / "cta.png", job_already_claimed=True)
+        self.assertEqual(result["status"], "UPLOADED")
+        self.assertEqual(store.claimed, {key})
+        self.assertEqual(store.changes, [("CLAIMED", "RENDERED"), ("RENDERED", "UPLOADED")])
+
+    def test_renderer_rejects_a_missing_preclaim_without_making_one(self):
+        store, tel = FakeGateway(), FakeTelegram()
+        with self.assertRaisesRegex(ValueError, "M9_JOB_CLAIM_NOT_ACTIVE"):
+            run_preview(self.brief, self.media, self.root, self.root / "missing-preclaim",
+                        Path("unused"), None, store, tel, send=False,
+                        cta_file=self.root / "cta.png", job_already_claimed=True)
+        self.assertEqual(store.claimed, set())
+        self.assertEqual(tel.calls, [])
+
+    def test_preclaimed_job_cannot_be_used_without_remote_gateway(self):
+        with self.assertRaisesRegex(ValueError, "M9_JOB_CLAIM_REMOTE_REQUIRED"):
+            run_preview(self.brief, self.media, self.root, self.root / "local-preclaim",
+                        Path("unused"), None, None, None, send=False,
+                        cta_file=self.root / "cta.png", job_already_claimed=True)
+
+    @unittest.skipUnless(find_font(), "M9_TEST_FONT needed")
     def test_storage_sha_failure_prevents_any_telegram_send(self):
         store, tel = FakeGateway(), FakeTelegram()
         store.fail_verify = True
@@ -340,6 +380,32 @@ class M9IntegrationContracts(unittest.TestCase):
                         cta_file=self.root / "cta.png")
         self.assertEqual(len(tel.calls), 0)
         self.assertEqual(store.state[job_key(self.brief, self.media)], "FAILED")
+
+    @unittest.skipUnless(find_font(), "M9_TEST_FONT needed")
+    def test_storage_upload_failure_marks_job_failed_and_prevents_any_telegram_send(self):
+        store, tel = FakeGateway(), FakeTelegram()
+        store.fail_upload = True
+        with self.assertRaisesRegex(ValueError, "M9_STORAGE_UPLOAD_FAILED"):
+            run_preview(self.brief, self.media, self.root, self.root / "out-upload-fail",
+                        self.font, None, store, tel, send=True, chat_id="321",
+                        cta_file=self.root / "cta.png")
+        self.assertEqual(store.state[job_key(self.brief, self.media)], "FAILED")
+        self.assertEqual(tel.calls, [])
+        self.assertEqual(tel.text_calls, [])
+        self.assertEqual(store.patches[-1]["error_category"], "STORAGE_UPLOAD_FAILED")
+
+    def test_render_failure_marks_claim_failed_and_never_contacts_telegram(self):
+        from unittest.mock import patch
+        store, tel = FakeGateway(), FakeTelegram()
+        with patch("m9_preview_workflow.render", side_effect=ValueError("M9_RENDER_FAILED")):
+            with self.assertRaisesRegex(ValueError, "M9_RENDER_FAILED"):
+                run_preview(self.brief, self.media, self.root, self.root / "out-render-fail",
+                            Path("unused"), None, store, tel, send=True, chat_id="321",
+                            cta_file=self.root / "cta.png")
+        self.assertEqual(store.state[job_key(self.brief, self.media)], "FAILED")
+        self.assertEqual(tel.calls, [])
+        self.assertEqual(tel.text_calls, [])
+        self.assertEqual(store.patches[-1]["error_category"], "RENDER_FAILED")
 
     @unittest.skipUnless(find_font(), "M9_TEST_FONT needed")
     def test_uncertain_send_is_marked_uncertain_and_not_retried(self):

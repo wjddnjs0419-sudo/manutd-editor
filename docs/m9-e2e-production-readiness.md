@@ -11,12 +11,12 @@
 
 - A Telegram `GENERATE_CAROUSEL` action now reports that the article and sources are being checked while the existing Creative Generation call runs. Once an Exploration DRAFT is saved, the same owner request dispatches the existing cloud workflow in `owner_review` mode; if dispatch is unavailable, the saved DRAFT keeps its manual preview action. No second AI provider was added.
 - M9 generation and DRAFT preview callbacks are accepted only from the configured owner in that owner's private chat. Read-only M6 console actions retain their existing behavior. Duplicate `update_id` handling remains before the application callback.
-- The photo pipeline now accepts a reviewed selection for each content page (2–6) instead of requiring exactly two. Exploration's existing content-mode limits remain the final gate.
+- The cloud worker claims a unique brief/version job before any photo collection, so duplicate workflow requests stop before article-photo network work. It accepts a reviewed selection for each content page (2–6) instead of requiring exactly two. Exploration's existing content-mode limits remain the final gate.
 - The workflow installs the pinned MediaPipe/Pillow CPU dependencies. DRAFT dispatches use only the dedicated `m9-e2e-test` GitHub Environment secrets; they never fall back to the generic M9 secrets.
 - Every rendered content PNG and the byte-identical fixed CTA is uploaded under the unique job path. The worker requires a private bucket, downloads each object again, compares SHA-256, and confirms the anonymous public-object URL is denied before marking the job uploaded.
 - The private job manifest now retains job/brief/story IDs, content mode, generated time, ordered object paths and hashes, caption, publisher/source, photo credits, render manifest, review flags, and provider usage. The service-role-only `m9_get_preview` RPC returns that manifest for follow-up delivery.
 - An explicit owner DRAFT review sends the PNG bytes unchanged in order as a Telegram document group, then sends the copyable Korean caption separately. Telegram message length is split safely; uncertain sends are not retried. The older READY send path remains compatible.
-- GitHub Actions has bounded runtime/concurrency, no scheduled run, no automatic retry, and a failure status message for an owner-requested DRAFT job. The renderer continues to fail closed for missing content, failed render, or incomplete Storage verification.
+- GitHub Actions has bounded runtime/concurrency, no scheduled run, no automatic retry, and a failure status message for an owner-requested DRAFT job. Photo-stage timeouts and upload/render failures leave the job FAILED with a redacted error category; uncertain Telegram sends remain non-retryable. The renderer continues to fail closed for missing content or incomplete Storage verification.
 
 ## Existing gaps that remain intentionally outside the worker
 

@@ -26,16 +26,24 @@ import subprocess
 import sys
 from pathlib import Path
 from m9_source_request_from_brief import build_request
-from m9_preview_workflow import Http, SupabaseGateway, TelegramGateway, validate_preview_status
+from m9_preview_workflow import (
+    Http, SupabaseGateway, TelegramGateway, job_key, safe_failure_category,
+    validate_preview_status,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
 def command(cmd: list[str]) -> None:
     # Do not echo token-bearing output or untrusted news HTML on errors.
-    done = subprocess.run(cmd, text=True, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, check=False, timeout=240)
+    try:
+        done = subprocess.run(cmd, text=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, check=False, timeout=240)
+    except subprocess.TimeoutExpired:
+        stage = Path(cmd[1]).name if len(cmd) > 1 else "unknown"
+        raise RuntimeError("M9_STAGE_TIMEOUT: " + stage) from None
     if done.returncode:
-        raise RuntimeError("M9_STAGE_FAILED: " + Path(cmd[1]).name if len(cmd)>1 else "M9_STAGE_FAILED")
+        stage = Path(cmd[1]).name if len(cmd) > 1 else "unknown"
+        raise RuntimeError("M9_STAGE_FAILED: " + stage)
 
 def content_slide_count(brief: dict) -> int:
     raw = brief.get("slides_json")
@@ -62,6 +70,24 @@ def require_exploration_owner_draft(brief: dict) -> None:
     if brief.get("status") not in ("DRAFT", "SELECTED") or metadata.get("generation_intent") != "EXPLORATION":
         raise ValueError("M9_DRAFT_EXPLORATION_REQUIRED")
 
+def claim_cloud_preview(remote: SupabaseGateway, brief: dict) -> str:
+    key = job_key(brief, {})
+    remote.ensure_private_bucket()
+    remote.claim(key, brief["id"], {
+        "content_mode": brief.get("content_mode"),
+        "brief_version": brief.get("version"),
+        "source": "telegram_owner_preview",
+    })
+    return key
+
+def fail_unrendered_cloud_preview(remote: SupabaseGateway, key: str, error: BaseException) -> None:
+    try:
+        remote.transition(key, "CLAIMED", "FAILED", {
+            "error_category": safe_failure_category(error),
+        })
+    except Exception:
+        pass  # A later rendering stage may already have recorded a more precise terminal state.
+
 def launch(argv: list[str] | None = None) -> Path:
     p = argparse.ArgumentParser()
     g = p.add_mutually_exclusive_group(required=True)
@@ -85,6 +111,7 @@ def launch(argv: list[str] | None = None) -> Path:
         p.error("--send-telegram requires --upload and --chat-id")
     root = Path(args.workdir).resolve()
     root.mkdir(parents=True, exist_ok=True)
+    remote = None
     if args.brief_id:
         remote = SupabaseGateway(os.getenv("SUPABASE_URL", ""),
             os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SECRET_KEY", ""), Http())
@@ -103,60 +130,67 @@ def launch(argv: list[str] | None = None) -> Path:
             raise ValueError("M9_TELEGRAM_OWNER_CHAT_REQUIRED")
     if brief_data.get("status") in ("DRAFT", "SELECTED") and args.send_telegram and not args.allow_draft_preview:
         raise ValueError("M9_DRAFT_TELEGRAM_SEND_REQUIRES_OWNER_OPT_IN")
-    telegram = None
-    if args.send_telegram:
-        telegram = TelegramGateway(os.getenv("TELEGRAM_BOT_TOKEN", ""), Http())
-        telegram.send_text(args.chat_id, "📨 비공개 카드뉴스 작업을 접수했습니다. 기사 원문에 연결된 사진 후보를 수집합니다.")
-    if args.request:
-        request_path = Path(args.request).resolve()
-        request = json.loads(request_path.read_text(encoding="utf-8"))
-    else:
-        names = (args.approved_image_hosts or os.getenv("M9_APPROVED_IMAGE_HOSTS") or "").split(",")
-        approved_hosts = [name.strip().lower() for name in names if name.strip()]
-        request = build_request(brief_data, approved_hosts)
-        request_path = root / "derived_source_request.json"
-        request_path.write_text(json.dumps(request,ensure_ascii=False,indent=2),encoding="utf-8")
-    hosts = request.get("allowed_image_hosts")
-    if not isinstance(hosts, list) or not hosts or any(not isinstance(h, str) for h in hosts):
-        raise ValueError("M9_ALLOWLIST_REQUIRED")
-    candidate_file = root / "candidates.json"
-    command([args.deno, "run", "--allow-read", "--allow-write", "--allow-net",
-             str(ROOT / "scripts/m9_collect_media.ts"),
-             str(request_path), str(candidate_file)])
-    result = json.loads(candidate_file.read_text(encoding="utf-8"))
-    if result.get("status") != "CANDIDATES_FOR_REVIEW" or not reviewed_selections_match(
-        result, content_slide_count(brief_data)
-    ):
-        raise ValueError("M9_PHOTOS_REQUIRE_REVIEW_BEFORE_RENDER")
-    media_dir = root / "photo_sources"
-    command([sys.executable, str(ROOT / "scripts/m9_acquire_photos.py"),
-             "--candidates", str(candidate_file),
-             "--output", str(media_dir),
-             "--allowed-hosts", ",".join(hosts)])
-    if telegram:
-        telegram.send_text(args.chat_id, "🖼️ 사진 검토와 MediaPipe CPU 인물 분석을 마쳤습니다. 전체 페이지와 CTA를 렌더링하고 비공개 Storage를 검증합니다.")
-    next_command = [
-        sys.executable, str(ROOT / "scripts/m9_preview_workflow.py"),
-        "--media", str(media_dir / "media.json"),
-        "--out", str(root / "slides"),
-        "--font", str(Path(args.font).resolve()),
-    ]
-    next_command += (["--brief-id", args.brief_id] if args.brief_id else
-                     ["--brief-json", str(Path(args.brief_json).resolve())])
-    if args.logo: next_command += ["--logo", str(Path(args.logo).resolve())]
-    if args.cta: next_command += ["--cta", str(Path(args.cta).resolve())]
-    if args.body_font: next_command += ["--body-font", str(Path(args.body_font).resolve())]
-    if args.allow_draft_preview: next_command += ["--allow-draft-preview"]
-    if args.upload: next_command += ["--upload"]
-    if args.send_telegram: next_command += ["--send-telegram","--chat-id", args.chat_id]
-    command(next_command)
-    state = root / "slides/delivery-state.json"
-    if not state.exists():
-        raise RuntimeError("M9_RENDER_OUTPUT_MISSING")
-    report = json.loads(state.read_text(encoding="utf-8"))
-    print(json.dumps({"status":report["status"],"slides_dir":str(root / "slides"),
-                      "cta":"assets/cta.png","review_only":True},ensure_ascii=False))
-    return state
+    claimed_key = claim_cloud_preview(remote, brief_data) if args.upload and remote else None
+    try:
+        telegram = None
+        if args.send_telegram:
+            telegram = TelegramGateway(os.getenv("TELEGRAM_BOT_TOKEN", ""), Http())
+            telegram.send_text(args.chat_id, "📨 비공개 카드뉴스 작업을 접수했습니다. 기사 원문에 연결된 사진 후보를 수집합니다.")
+        if args.request:
+            request_path = Path(args.request).resolve()
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+        else:
+            names = (args.approved_image_hosts or os.getenv("M9_APPROVED_IMAGE_HOSTS") or "").split(",")
+            approved_hosts = [name.strip().lower() for name in names if name.strip()]
+            request = build_request(brief_data, approved_hosts)
+            request_path = root / "derived_source_request.json"
+            request_path.write_text(json.dumps(request,ensure_ascii=False,indent=2),encoding="utf-8")
+        hosts = request.get("allowed_image_hosts")
+        if not isinstance(hosts, list) or not hosts or any(not isinstance(h, str) for h in hosts):
+            raise ValueError("M9_ALLOWLIST_REQUIRED")
+        candidate_file = root / "candidates.json"
+        command([args.deno, "run", "--allow-read", "--allow-write", "--allow-net",
+                 str(ROOT / "scripts/m9_collect_media.ts"),
+                 str(request_path), str(candidate_file)])
+        result = json.loads(candidate_file.read_text(encoding="utf-8"))
+        if result.get("status") != "CANDIDATES_FOR_REVIEW" or not reviewed_selections_match(
+            result, content_slide_count(brief_data)
+        ):
+            raise ValueError("M9_PHOTOS_REQUIRE_REVIEW_BEFORE_RENDER")
+        media_dir = root / "photo_sources"
+        command([sys.executable, str(ROOT / "scripts/m9_acquire_photos.py"),
+                 "--candidates", str(candidate_file),
+                 "--output", str(media_dir),
+                 "--allowed-hosts", ",".join(hosts)])
+        if telegram:
+            telegram.send_text(args.chat_id, "🖼️ 사진 검토와 MediaPipe CPU 인물 분석을 마쳤습니다. 전체 페이지와 CTA를 렌더링하고 비공개 Storage를 검증합니다.")
+        next_command = [
+            sys.executable, str(ROOT / "scripts/m9_preview_workflow.py"),
+            "--media", str(media_dir / "media.json"),
+            "--out", str(root / "slides"),
+            "--font", str(Path(args.font).resolve()),
+        ]
+        next_command += (["--brief-id", args.brief_id] if args.brief_id else
+                         ["--brief-json", str(Path(args.brief_json).resolve())])
+        if args.logo: next_command += ["--logo", str(Path(args.logo).resolve())]
+        if args.cta: next_command += ["--cta", str(Path(args.cta).resolve())]
+        if args.body_font: next_command += ["--body-font", str(Path(args.body_font).resolve())]
+        if args.allow_draft_preview: next_command += ["--allow-draft-preview"]
+        if args.upload: next_command += ["--upload"]
+        if claimed_key: next_command += ["--job-already-claimed"]
+        if args.send_telegram: next_command += ["--send-telegram","--chat-id", args.chat_id]
+        command(next_command)
+        state = root / "slides/delivery-state.json"
+        if not state.exists():
+            raise RuntimeError("M9_RENDER_OUTPUT_MISSING")
+        report = json.loads(state.read_text(encoding="utf-8"))
+        print(json.dumps({"status":report["status"],"slides_dir":str(root / "slides"),
+                          "cta":"assets/cta.png","review_only":True},ensure_ascii=False))
+        return state
+    except Exception as exc:
+        if claimed_key and remote:
+            fail_unrendered_cloud_preview(remote, claimed_key, exc)
+        raise
 
 if __name__ == "__main__":
     launch()

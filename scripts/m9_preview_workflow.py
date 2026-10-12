@@ -547,6 +547,14 @@ def preview_caption(brief: dict[str, Any]) -> str:
     return "📋 Instagram 캡션 (복사)\n\n" + caption.strip()
 
 
+def safe_failure_category(error: BaseException) -> str:
+    """Persist only a stable, redacted M9 error code, never remote error text."""
+    code = str(error).splitlines()[0].split(":", 1)[0].strip() if str(error) else ""
+    if not re.fullmatch(r"M9_[A-Z0-9_]+", code):
+        return "PREVIEW_PIPELINE_FAILED"
+    return code.removeprefix("M9_")
+
+
 def storage_manifest(brief: dict[str, Any], media: dict[str, Any], rendered: dict[str, Any],
                      paths: list[str], hashes: list[str], job_id: str,
                      *, status: str) -> dict[str, Any]:
@@ -600,7 +608,10 @@ def run_preview(brief: dict[str, Any], media: dict[str, Any], media_root: Path,
                 gateway: SupabaseGateway | None, telegram: TelegramGateway | None,
                 *, send: bool, chat_id: str | None = None, cta_file: Path | None = None,
                 body_font_file: Path | None = None, allow_draft_preview: bool = False,
-                allow_draft_telegram_send: bool = False) -> dict[str, Any]:
+                allow_draft_telegram_send: bool = False,
+                job_already_claimed: bool = False) -> dict[str, Any]:
+    if job_already_claimed and gateway is None:
+        raise ValueError("M9_JOB_CLAIM_REMOTE_REQUIRED")
     validate_preview_status(brief, allow_draft_preview)
     if brief.get("status") in ("DRAFT", "SELECTED") and send and not allow_draft_telegram_send:
         raise ValueError("M9_DRAFT_TELEGRAM_SEND_REQUIRES_OWNER_OPT_IN")
@@ -611,7 +622,13 @@ def run_preview(brief: dict[str, Any], media: dict[str, Any], media_root: Path,
     output.mkdir(parents=True, exist_ok=True)
     if gateway:
         gateway.ensure_private_bucket()
-        gateway.claim(key, brief["id"], media)
+        if job_already_claimed:
+            claimed = gateway.get_preview(key)
+            if not isinstance(claimed, dict) or claimed.get("status") != "CLAIMED" or \
+                    claimed.get("creative_brief_id") != brief.get("id"):
+                raise ValueError("M9_JOB_CLAIM_NOT_ACTIVE")
+        else:
+            gateway.claim(key, brief["id"], media)
     stage = "CLAIMED"
     try:
         manifest = render(payload, workdir, output, font_file, logo, cta_path=cta_file, body_font_path=body_font_file)
@@ -668,11 +685,11 @@ def run_preview(brief: dict[str, Any], media: dict[str, Any], media_root: Path,
             state["status"] = "LOCAL_PREVIEW_ONLY"
         (output / "delivery-state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
         return state
-    except Exception:
+    except Exception as exc:
         if gateway:
             try:
                 gateway.transition(key, stage, "SEND_UNCERTAIN" if stage == "SENDING" else "FAILED",
-                                   {"error_category": "SEND_AMBIGUOUS" if stage == "SENDING" else "PREVIEW_PIPELINE_FAILED"})
+                                   {"error_category": "SEND_AMBIGUOUS" if stage == "SENDING" else safe_failure_category(exc)})
             except Exception:
                 pass  # Do not mask original, do not retry Telegram.
         raise
@@ -691,9 +708,12 @@ def main() -> None:
     cli.add_argument("--logo")
     cli.add_argument("--cta", help="Optional existing CTA PNG for local 3-slide review; never uploaded again")
     cli.add_argument("--upload", action="store_true", help="Upload private PNGs to Supabase")
+    cli.add_argument("--job-already-claimed", action="store_true", help="Continue a brief job claimed before cloud photo collection")
     cli.add_argument("--send-telegram", action="store_true", help="Send ONE private review album after upload")
     cli.add_argument("--chat-id", help="Owner-only Telegram chat ID")
     args = cli.parse_args()
+    if args.job_already_claimed and (not args.upload or not args.brief_id):
+        cli.error("--job-already-claimed requires --upload and --brief-id")
     if args.send_telegram and (not args.upload or not args.chat_id):
         cli.error("--send-telegram requires --upload and --chat-id")
     if args.send_telegram and os.getenv("M9_ENABLE_TELEGRAM_PREVIEW") != "YES":
@@ -719,7 +739,8 @@ def main() -> None:
                          allow_draft_preview=args.allow_draft_preview,
                          allow_draft_telegram_send=(args.send_telegram and
                              os.getenv("M9_ENABLE_TELEGRAM_PREVIEW") == "YES" and
-                             args.chat_id == os.getenv("TELEGRAM_OWNER_USER_ID")))
+                             args.chat_id == os.getenv("TELEGRAM_OWNER_USER_ID")),
+                         job_already_claimed=args.job_already_claimed)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
