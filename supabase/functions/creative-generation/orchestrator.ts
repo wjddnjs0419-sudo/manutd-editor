@@ -133,7 +133,7 @@ export async function runCreativeGeneration(trigger: GenerationTrigger, dependen
     }
     if (trigger.content_mode_override) {
       const previousJob = await dependencies.repository.getJob(trigger.candidate_id, fingerprint);
-      if (!dependencies.repository.reserveExplorationJob || previousJob?.status !== "CLASSIFICATION_UNCERTAIN" || previousJob.attempt_count < 1) {
+      if (!dependencies.repository.reserveExplorationJob || (!previousJob || !["CLASSIFICATION_UNCERTAIN", "FAILED_PROVIDER"].includes(previousJob.status)) || previousJob.attempt_count < 1) {
         return { status: "FAILED_VALIDATION", candidate_id: trigger.candidate_id, input_fingerprint: fingerprint, error_codes: ["MANUAL_MODE_OVERRIDE_REQUIRES_UNCERTAIN_JOB"] };
       }
       manualModeOverride = true;

@@ -88,3 +88,20 @@ $0.07–$0.08 for one generation. This is an arithmetic estimate, not verified
 pricing for the configured model, a bill, or an account-level spending cap.
 Reasoning/output usage and any prior timed-out request charge must be checked
 against actual provider usage after an approved call.
+
+## Pre-call blocker found after v33 deployment
+
+v33 was deployed and its three changed source files verified remotely. Before
+spending the separately approved generation request, the existing job was checked:
+it remains FAILED_PROVIDER. The manual mode override guard accepts only
+CLASSIFICATION_UNCERTAIN, so the approved request would be rejected before any
+OpenAI call. No live request was sent and no job state was reset.
+
+The minimal follow-up permits an explicit MANUAL/EXPLORATION/ANALYSIS_CONTEXT
+override for an existing attempted FAILED_PROVIDER job as well. The existing
+reservation RPC already supports FAILED_PROVIDER and preserves lease/duplicate
+checks. No migration, automatic retry, or classifier repeat is added. A mock
+regression covers uncertain -> failed -> explicit retry -> DRAFT -> NOOP, with one
+classifier call, cumulative usage preserved and no duplicate brief. All Deno
+nonintegration tests now pass: 693 (29 steps). This follow-up needs approval to
+deploy before consuming the already approved one-generation request.
