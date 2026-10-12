@@ -1,0 +1,58 @@
+name: M9 Free Crop CPU Validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      M9_CROP_TEST_MODEL_PATH: ${{ runner.temp }}/m9-crop-model/blaze_face_short_range.tflite
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: scripts/requirements-m9-crop.txt
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: "v2.x"
+
+      - name: Install pinned CPU dependencies
+        run: python -m pip install -r scripts/requirements-m9-crop.txt
+
+      - name: Verify model and run generated-image CPU smoke
+        run: >-
+          python scripts/m9_crop_cpu_smoke.py
+          --model-path "$M9_CROP_TEST_MODEL_PATH"
+          --report "$RUNNER_TEMP/m9-crop-smoke.json"
+
+      - name: Run M9 Python regressions
+        run: python -m unittest discover -s scripts/tests -p 'test_m9_*.py' -v
+
+      - name: Run M9 Deno regressions
+        run: deno test -A supabase/functions/tests/m9
+
+      - name: Write aggregate job summary
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          report = json.loads((Path(os.environ["RUNNER_TEMP"]) / "m9-crop-smoke.json").read_text())
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a", encoding="utf-8") as out:
+              out.write("## M9 CPU crop validation\n\n")
+              out.write(f"- Status: **{report['output_status']}**\n")
+              out.write(f"- Model SHA-256: `{report['model_sha256']}`\n")
+              out.write(f"- Runtime: Python {report['runtime_versions']['python']}; MediaPipe {report['runtime_versions']['mediapipe']}; Deno 2\n")
+              out.write(f"- Model load / inference: {report['model_load_ms']} / {report['inference_ms']} ms\n")
+              out.write(f"- Images / candidates / max per slot / detections: {report['image_count']} / {report['candidate_count']} / {report['max_candidates_per_slot']} / {report['face_count']}\n")
+              out.write(f"- Total elapsed: {report['total_elapsed_seconds']} s\n")
+          PY
