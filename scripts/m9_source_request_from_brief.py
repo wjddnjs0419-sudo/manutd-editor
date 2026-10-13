@@ -18,6 +18,7 @@ import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+from m9_content_policy import ordered_content_slides
 
 # Conservative fallback for known named football figures when
 # app_private.tracked_entities has not yet been configured.
@@ -142,19 +143,16 @@ def build_request(
     if not isinstance(slides,list) or len(slides)<2:
         raise ValueError("M9_BRIEF_SLIDES_MISSING")
     registry=from_tracked_entities(tracked_entities or [])
-    numbered_slides = sorted(
-        (slide for slide in slides if isinstance(slide, dict)),
-        key=lambda slide: int(slide.get("slide_number", slide.get("index", 0))),
-    )
+    numbered_slides = ordered_content_slides(slides)
     if len(numbered_slides) != len(slides) or len(numbered_slides) > 6:
         raise ValueError("M9_BRIEF_SLIDE_COUNT_INVALID")
     first_page_subjects: list[str] | None = None
     slots=[]
     for index, slide in enumerate(numbered_slides):
         if not isinstance(slide,dict):raise ValueError("M9_BRIEF_SLIDES_MISSING")
-        slide_number = int(slide.get("slide_number", slide.get("index", index + 1)))
-        if slide_number != index + 1:
-            raise ValueError("M9_BRIEF_SLIDE_NUMBERS_INVALID")
+        # Photo jobs use canonical rendered order: HOOK first, then the other
+        # content in saved index order, regardless of stale slide_number values.
+        slide_number = index + 1
         direction=slide.get("visual_direction")
         if not isinstance(direction,dict):direction={}
         scene=direction.get("subject") or ""
@@ -187,6 +185,7 @@ def build_request(
         slots.append({
             "slot": role,
             "slide_number": slide_number,
+            "content_role": str(slide.get("role") or ("HOOK" if index == 0 else "BODY")).strip().upper(),
             # Retain the legacy flat field for older readers. New collectors use
             # the grouped field so aliases for different people aren't confused.
             "subject_aliases": list(dict.fromkeys(flat_aliases))[:6],

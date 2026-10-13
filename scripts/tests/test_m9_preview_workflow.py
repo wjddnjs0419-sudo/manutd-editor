@@ -12,7 +12,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from m9_preview_workflow import (
     brief_slides, checked_media, prepared_render_job, split_hook, job_key, pre_send_retry_job_key, run_preview,
-    SupabaseGateway, RemoteError, TelegramGateway, telegram_text_chunks, validate_preview_status,
+    SupabaseGateway, RemoteError, TelegramGateway, telegram_text_chunks, validate_preview_status, preview_caption,
     safe_failure_category,
 )
 
@@ -168,6 +168,53 @@ class M9IntegrationContracts(unittest.TestCase):
         self.assertEqual(len(p["body_slides"]), 1)
         self.assertEqual(p["cover_photo_source"], self.media["cover"]["source_url"])
 
+    def test_hook_role_is_first_and_remaining_slides_keep_index_order(self):
+        self.brief["slides_json"] = {"slides": [
+            {"slide_number": 1, "index": 3, "role": "KEY_FACT", "headline": "세 번째", "body": "세 번째 근거."},
+            {"slide_number": 2, "index": 4, "role": "IMPLICATION", "headline": "네 번째", "body": "네 번째 해석."},
+            {"slide_number": 3, "index": 1, "role": "CONTEXT", "headline": "첫 배경", "body": "첫 배경 설명."},
+            {"slide_number": 4, "index": 2, "role": "HOOK", "headline": "실제 표지", "body": ""},
+        ]}
+        ordered = brief_slides(self.brief)
+        self.assertEqual([slide["role"] for slide in ordered], [
+            "HOOK", "CONTEXT", "KEY_FACT", "IMPLICATION",
+        ])
+        prepared = prepared_render_job(self.brief, self.media)
+        self.assertEqual(prepared["cover_source_role"], "HOOK")
+        self.assertEqual(prepared["cover_source_index"], 2)
+        self.assertEqual([slide["role"] for slide in prepared["body_slides"]], [
+            "CONTEXT", "KEY_FACT", "IMPLICATION",
+        ])
+        self.assertEqual([slide["source_index"] for slide in prepared["body_slides"]], [1, 3, 4])
+
+    def test_explicit_roles_must_be_complete_and_have_one_hook(self):
+        self.brief["slides_json"] = {"slides": [
+            {"index": 1, "role": "HOOK", "headline": "표지", "body": ""},
+            {"index": 2, "headline": "역할 누락", "body": "본문."},
+        ]}
+        with self.assertRaisesRegex(ValueError, "M9_BRIEF_SLIDE_ROLE_INVALID"):
+            brief_slides(self.brief)
+
+        self.brief["slides_json"]["slides"][1]["role"] = "HOOK"
+        with self.assertRaisesRegex(ValueError, "M9_BRIEF_HOOK_ROLE_INVALID"):
+            brief_slides(self.brief)
+
+    def test_preview_caption_keeps_original_and_appends_article_and_photo_credit(self):
+        self.brief["caption_draft"] = "기존 캡션 내용"
+        media = {
+            "cover": {**self.media["cover"], "credit": "Photo credit: BBC/Getty Images"},
+            "body": {**self.media["body"], "credit": "Photo credit: BBC/Getty Images"},
+            "pages": [
+                {"slide_number": 1, **self.media["cover"], "credit": "Photo credit: BBC/Getty Images"},
+                {"slide_number": 2, **self.media["body"], "credit": "Photo credit: BBC/Getty Images"},
+            ],
+        }
+        caption = preview_caption(self.brief, media)
+        self.assertIn("기존 캡션 내용", caption)
+        self.assertIn("https://publisher.example.org/news/1", caption)
+        self.assertIn("Photo credit: BBC/Getty Images", caption)
+        self.assertEqual(caption.count("Photo credit: BBC/Getty Images"), 1)
+
     def test_caption_split_respects_telegram_utf16_limit_without_losing_text(self):
         original = "📋 캡션\n" + ("맨유⚽ " * 1600)
         chunks = telegram_text_chunks(original)
@@ -303,7 +350,7 @@ class M9IntegrationContracts(unittest.TestCase):
         self.assertEqual([data for _, data in tel.calls[0][1]], [data for _, data in store.uploaded])
         self.assertEqual(tel.text_calls, [
             ("321", "🔒 비공개 Storage 업로드와 PNG SHA-256 검증을 마쳤습니다. 이제 전체 카드뉴스와 캡션을 전달합니다."),
-            ("321", "📋 Instagram 캡션 (복사)\n\n맨유 경기 최종 결과"),
+            ("321", "📋 Instagram 캡션 (복사)\n\n맨유 경기 최종 결과\n\n원문: https://publisher.example.org/news/1\n\n사진 크레딧: PHOTO: Reporter A / PHOTO: Reporter B"),
         ])
         manifest = store.patches[1]["rendered_manifest"]
         self.assertEqual(manifest["job_id"], "a9a9a9a9-aaaa-4aaa-8aaa-aaaaaaaaaaaa")

@@ -23,25 +23,29 @@ from m9_content_policy import validate_exploration_slide_count
 
 SIZE = (1080, 1350)
 YELLOW = "#FAC600"
+MUTD_RED = "#F04452"
 W, H = SIZE
 TYPE = {
-    "cover_label": 29,
-    "cover_headline": 61,
-    "cover_highlight": 79,
-    "body_headline": 80,
-    "body_text": 40,
-    "body_highlight": 50,
-    "body_line_advance": 62,
-    "paragraph_spacing": 9,
-    "highlight_line_advance": 76,
+    "cover_label": 26,
+    "cover_headline": 94,
+    "cover_highlight": 52,
+    "body_headline": 70,
+    "body_text": 43,
+    "body_highlight": 45,
+    "fact_stat": 96,
+    "analysis_note": 38,
+    "body_line_advance": 60,
+    "paragraph_spacing": 16,
+    "highlight_line_advance": 64,
     "text_margin": 80,
     "cover_text_margin": 40,
     "safe_text_bottom": 1110,
     "body_overlay_opacity": 179,
-    "cover_gradient_start_y": 940,
-    "cover_gradient_start_opacity": 0.22,
-    "cover_gradient_end_opacity": 0.98,
-    "cover_gradient_curve": 0.6,
+    "cover_gradient_start_y": round(H * 0.42),
+    "cover_gradient_mid_y": round(H * 0.72),
+    "cover_gradient_start_opacity": 0.0,
+    "cover_gradient_mid_opacity": 0.45,
+    "cover_gradient_end_opacity": 1.0,
 }
 
 def font(path: str, point_size: int) -> ImageFont.FreeTypeFont:
@@ -160,6 +164,90 @@ def full_bleed(source: Image.Image, *, crop: dict | CropPlan | None = None,
     return ImageOps.fit(source, SIZE, method=Image.Resampling.LANCZOS,
                         centering=centering).convert("RGBA")
 
+
+def _clean_source_markup(text: object) -> tuple[str, bool]:
+    """Remove citations and URLs from visible copy without editing its claims."""
+    original = str(text or "")
+    visible_lines: list[str] = []
+    for raw_line in original.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if re.match(r"^(?:출처|원문|source(?:\s+url)?|reference)\s*[:：]", line, re.IGNORECASE):
+            continue
+        line = re.sub(r"\s*(?:[|｜·•]\s*)?(?:출처|원문|source|reference)\s*[:：].*$", "", line,
+                      flags=re.IGNORECASE)
+        line = re.sub(r"https?://\S+", "", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s*[|｜·•]\s*$", "", line)
+        line = re.sub(r"\s+", " ", line).strip()
+        if line:
+            visible_lines.append(line)
+    visible = "\n".join(visible_lines)
+    return visible, visible != original.strip()
+
+
+def _source_label(data: dict) -> str:
+    publisher = str(data.get("source_publisher") or "").strip()
+    if not publisher:
+        from urllib.parse import urlsplit
+        publisher = (urlsplit(str(data.get("article_url") or "")).hostname or "").removeprefix("www.")
+    return f"SOURCE: {publisher}" if publisher else "SOURCE: ORIGINAL ARTICLE"
+
+
+def _cover_gradient_mask() -> Image.Image:
+    """A smooth alpha ramp: clear at 42%, 45% at 72%, black at the bottom."""
+    start = TYPE["cover_gradient_start_y"]
+    middle = TYPE["cover_gradient_mid_y"]
+    end = H - 1
+    alpha = Image.new("L", SIZE, 0)
+    draw = ImageDraw.Draw(alpha)
+    for y in range(start, H):
+        if y <= middle:
+            amount = (y - start) / max(1, middle - start)
+            opacity = TYPE["cover_gradient_mid_opacity"] * amount
+        else:
+            amount = (y - middle) / max(1, end - middle)
+            opacity = TYPE["cover_gradient_mid_opacity"] + (
+                TYPE["cover_gradient_end_opacity"] - TYPE["cover_gradient_mid_opacity"]
+            ) * amount
+        draw.line((0, y, W, y), fill=round(min(1.0, max(0.0, opacity)) * 255))
+    return alpha
+
+
+def _apply_cover_gradient(image: Image.Image) -> Image.Image:
+    layer = Image.new("RGBA", SIZE, (0, 0, 0, 0))
+    layer.putalpha(_cover_gradient_mask())
+    return Image.alpha_composite(image, layer)
+
+
+def _display_crop(crop: dict | None, source_size: tuple[int, int], faces: list[dict],
+                  offset_x: float) -> dict | None:
+    """Pan within the approved crop while keeping detected subjects in frame."""
+    if not isinstance(crop, dict) or abs(offset_x) < 0.0001:
+        return crop
+    x = float(crop["x"])
+    y = float(crop["y"])
+    width = float(crop["width"])
+    height = float(crop["height"])
+    minimum = 0.0
+    maximum = max(0.0, 1.0 - width)
+    if faces:
+        face_left = min(float(face["x"]) for face in faces)
+        face_right = max(float(face["x"]) + float(face["width"]) for face in faces)
+        margin = 0.02
+        minimum = max(minimum, face_right + margin - width)
+        maximum = min(maximum, face_left - margin)
+    if minimum > maximum:
+        return crop
+    x = min(maximum, max(minimum, x + offset_x))
+    source_width, source_height = source_size
+    scale = max(W / max(1, round(width * source_width)), H / max(1, round(height * source_height)))
+    result = {**crop, "x": x, "scale": scale,
+              "focus_x": min(1.0, max(0.0, x + width / 2)),
+              "focus_y": min(1.0, max(0.0, y + height / 2)),
+              "flags": list(crop.get("flags", []))}
+    return result
+
 class _StoredFaceDetector:
     def __init__(self, faces: list[NormalizedFace]):
         self.faces = faces
@@ -259,54 +347,57 @@ def _photo_state(source: Image.Image, data: dict, role: str) -> dict:
 
 
 def render_cover(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
-                 photo_state: dict | None = None) -> Image.Image:
-    selected_crop = photo_state["crop"] if photo_state else None
+                 photo_state: dict | None = None,
+                 logo_path: Path | None = None) -> Image.Image:
+    selected_crop = (photo_state.get("render_crop") or photo_state.get("crop")) if photo_state else None
     im = full_bleed(source, crop=selected_crop,
                     centering=(float(data.get("cover_focus_x", 0.5)),
                                float(data.get("cover_focus_y", 0.36))))
-    gradient = Image.new("RGBA", SIZE)
-    painter = ImageDraw.Draw(gradient)
-    for row in range(TYPE["cover_gradient_start_y"], H):
-        t = (row - TYPE["cover_gradient_start_y"]) / (H - TYPE["cover_gradient_start_y"])
-        opacity = round(min(249, (TYPE["cover_gradient_start_opacity"] +
-                                  (TYPE["cover_gradient_end_opacity"] - TYPE["cover_gradient_start_opacity"]) *
-                                  (t ** TYPE["cover_gradient_curve"])) * 255))
-        painter.line((0, row, W, row), fill=(0, 0, 0, opacity))
-    im = Image.alpha_composite(im, gradient)
+    im = _apply_cover_gradient(im)
     draw = ImageDraw.Draw(im)
     text_bounds: list[dict] = []
-    label = str(data.get("eyebrow", "■  MATCH  |  SOURCE")).strip()
-    line_one = str(data["cover_line_one"]).strip()
-    line_two = str(data["cover_line_two"]).strip()
-    for text, size, y, color in (
-        (label, TYPE["cover_label"], 1035, "#f4e5e5"),
-        (line_one, TYPE["cover_headline"], 1103, "#ffffff"),
-        (line_two, TYPE["cover_highlight"], 1191, YELLOW),
-    ):
-        f = ImageFont.truetype(face.path, size)
-        if measure(draw, text, f) > 998:
-            raise ValueError(f"Cover text too long at {size}px: {text}")
-        origin = (TYPE["cover_text_margin"], y)
-        bounds = draw.textbbox(origin, text, font=f)
+    label, _ = _clean_source_markup(data.get("eyebrow", "맨유 에디터 · 경기 브리핑"))
+    line_one, _ = _clean_source_markup(data["cover_line_one"])
+    line_two, _ = _clean_source_markup(data.get("cover_line_two", ""))
+    title_font = ImageFont.truetype(face.path, TYPE["cover_headline"])
+    support_font = ImageFont.truetype(face.path, TYPE["cover_highlight"])
+    title_lines = wrap_text(draw, line_one, title_font, 1000) if line_one else []
+    support_lines = wrap_text(draw, line_two, support_font, 1000) if line_two else []
+    if len(title_lines) + len(support_lines) > 2:
+        raise ValueError("Cover hook too long for two readable lines")
+
+    def draw_cover(text: str, origin: tuple[int, int], text_font: ImageFont.FreeTypeFont,
+                   color: str, kind: str) -> None:
+        bounds = draw.textbbox(origin, text, font=text_font)
         if bounds[0] < 0 or bounds[1] < 0 or bounds[2] > W or bounds[3] > H:
             raise ValueError("M9_COVER_TEXT_BOUNDING_BOX_INVALID")
         contrast = _contrast_ratio(im, bounds, color)
         if contrast < 3.0:
             raise ValueError("M9_COVER_TEXT_CONTRAST_TOO_LOW")
-        draw.text(origin, text, font=f, fill=color)
-        text_bounds.append({"kind": "cover_text", "origin": list(origin), "bounds": list(bounds), "contrast_ratio": round(contrast, 2)})
-    credit = str(data.get("cover_photo_credit", "")).strip()
-    if credit:
-        credit_font = ImageFont.truetype(face.path, 16)
-        credit = credit[:100]
-        credit_origin = (TYPE["cover_text_margin"], 1311)
-        bounds = draw.textbbox(credit_origin, credit, font=credit_font)
-        if bounds[2] > W or bounds[3] > H:
-            raise ValueError("M9_COVER_CREDIT_BOUNDING_BOX_INVALID")
-        contrast = _contrast_ratio(im, bounds, "#dadada")
-        draw.text(credit_origin, credit, font=credit_font, fill="#dadada")
-        text_bounds.append({"kind": "credit", "origin": list(credit_origin), "bounds": list(bounds),
+        draw.text(origin, text, font=text_font, fill=color)
+        text_bounds.append({"kind": kind, "origin": list(origin), "bounds": list(bounds),
                             "contrast_ratio": round(contrast, 2)})
+
+    if logo_path:
+        if not logo_path.is_file():
+            raise FileNotFoundError(logo_path)
+        with Image.open(logo_path) as opened:
+            logo = opened.convert("RGBA")
+        logo.thumbnail((104, 104), Image.Resampling.LANCZOS)
+        im.alpha_composite(logo, (40, 40))
+    if label:
+        label_font = ImageFont.truetype(face.path, TYPE["cover_label"])
+        draw_cover(label[:48], (TYPE["cover_text_margin"], 950), label_font, "#f1eeee", "eyebrow")
+    title_y = 1010 if len(title_lines) + len(support_lines) > 1 else 1050
+    for line in title_lines:
+        draw_cover(line, (TYPE["cover_text_margin"], title_y), title_font, "#ffffff", "headline")
+        title_y += 104
+    for line in support_lines:
+        draw_cover(line, (TYPE["cover_text_margin"], title_y), support_font, MUTD_RED, "highlight")
+        title_y += 72
+    source_font = ImageFont.truetype(face.path, 22)
+    source = _source_label(data)
+    draw_cover(source, (TYPE["cover_text_margin"], 1295), source_font, "#dedede", "source")
     data["_rendered_cover_text_bounds"] = text_bounds
     return im
 
@@ -342,9 +433,25 @@ def wrap_text(draw: ImageDraw.ImageDraw, text: str, face: ImageFont.FreeTypeFont
 def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
                 logo_path: Path | None, heading_face: ImageFont.FreeTypeFont | None = None,
                 photo_state: dict | None = None) -> Image.Image:
-    selected_crop = photo_state["crop"] if photo_state else None
-    im = full_bleed(source, crop=selected_crop, centering=(0.5, 0.5))
-    im = Image.alpha_composite(im, Image.new("RGBA", SIZE, (0, 0, 0, TYPE["body_overlay_opacity"])))
+    selected_crop = ((photo_state.get("render_crop") or photo_state.get("crop"))
+                     if photo_state else None)
+    centering = data.get("photo_centering", (0.5, 0.5))
+    im = full_bleed(source, crop=selected_crop, centering=centering)
+    role = str(data.get("role") or "BODY").strip().upper()
+    template = {"KEY_FACT": "FACT", "CONTEXT": "CONTEXT", "IMPLICATION": "ANALYSIS"}.get(role, "CONTEXT")
+    overlay_top, overlay_bottom = {
+        "FACT": (0.42, 0.68),
+        "CONTEXT": (0.52, 0.74),
+        "ANALYSIS": (0.48, 0.78),
+    }[template]
+    overlay = Image.new("RGBA", SIZE, (0, 0, 0, 0))
+    alpha = Image.new("L", SIZE, 0)
+    alpha_draw = ImageDraw.Draw(alpha)
+    for row in range(H):
+        value = overlay_top + (overlay_bottom - overlay_top) * row / max(1, H - 1)
+        alpha_draw.line((0, row, W, row), fill=round(value * 255))
+    overlay.putalpha(alpha)
+    im = Image.alpha_composite(im, overlay)
     draw = ImageDraw.Draw(im)
     text_bounds: list[dict] = []
 
@@ -360,76 +467,168 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
             "bounds": list(bounds), "contrast_ratio": round(contrast, 2),
         })
 
-    headline = str(data["body_headline"]).strip()
-    f80 = ImageFont.truetype((heading_face or face).path, TYPE["body_headline"])
-    headline_lines = wrap_text(draw, headline, f80, 915)
-    if len(headline_lines) > 2:
+    headline, headline_cleaned = _clean_source_markup(data["body_headline"])
+    if not headline:
+        raise ValueError("M9_BODY_HEADLINE_REQUIRED")
+    content_width = 430
+    headline_size = {"FACT": 48, "CONTEXT": 50, "ANALYSIS": 54}[template]
+    headline_lines: list[str] = []
+    heading_font = face
+    for candidate_size in range(headline_size, 37, -2):
+        candidate = ImageFont.truetype((heading_face or face).path, candidate_size)
+        candidate_lines = wrap_text(draw, headline, candidate, content_width)
+        if len(candidate_lines) <= 2:
+            heading_font, headline_lines = candidate, candidate_lines
+            break
+    if not headline_lines:
         raise ValueError("BODY_NEWS headline too long for two readable lines")
-    variant = data.get("layout_variant")
-    heading_y = 188 if variant == "ALTERNATE" else 168
-    headline_advance = TYPE["body_headline"] + 9
+    paragraphs = []
+    source_markup_removed = headline_cleaned
+    for value in data.get("body_paragraphs", []):
+        cleaned, changed = _clean_source_markup(value)
+        source_markup_removed = source_markup_removed or changed
+        if cleaned:
+            paragraphs.append(cleaned)
+    source_body = data.get("source_body")
+    if not isinstance(source_body, str):
+        source_body = "\n".join(str(value) for value in data.get("body_paragraphs", []))
+    visible_body = "\n".join(paragraphs)
+    highlight_source = data.get("source_highlight", data.get("body_highlight", ""))
+    highlight, highlight_cleaned = _clean_source_markup(data.get("body_highlight", ""))
+    source_markup_removed = source_markup_removed or highlight_cleaned
+    closing_source = str(data.get("closing_line") or "")
+    closing_line, closing_cleaned = _clean_source_markup(closing_source)
+    source_markup_removed = source_markup_removed or closing_cleaned
+
+    sentence_text = " ".join(paragraphs)
+    sentence_count = len(re.findall(r"[.!?。](?=[\s\"'”’」』)\]]|$)", sentence_text))
+    content_review_flags: list[str] = []
+    if sentence_count > 2:
+        content_review_flags.append("BODY_SENTENCE_LIMIT_REVIEW")
+
+    tag_font = ImageFont.truetype(face.path, 24)
+    draw.rectangle((TYPE["text_margin"], 205, TYPE["text_margin"] + 7, 241), fill=MUTD_RED)
+    tag = {"FACT": "KEY FACT", "CONTEXT": "MATCH CONTEXT", "ANALYSIS": "IMPLICATION · ANALYSIS"}[template]
+    draw_content(tag, (TYPE["text_margin"] + 24, 204), tag_font, "#ffffff", "template_label")
+
+    if template == "FACT":
+        headline_y, content_y, body_font_size, highlight_y_gap = 300, 650, 29, 12
+        highlight_font_size, highlight_line_advance = 34, 40
+    elif template == "ANALYSIS":
+        headline_y, content_y, body_font_size, highlight_y_gap = 300, 500, 34, 24
+        highlight_font_size, highlight_line_advance = TYPE["body_highlight"], TYPE["highlight_line_advance"]
+    else:
+        headline_y, content_y, body_font_size, highlight_y_gap = 300, 500, 36, 24
+        highlight_font_size, highlight_line_advance = TYPE["body_highlight"], TYPE["highlight_line_advance"]
+
+    heading_y = headline_y
     for line in headline_lines:
-        draw_content(line, (TYPE["text_margin"], heading_y), f80, "#ffffff", "headline")
-        heading_y += headline_advance
-    divider_y = max(324 if variant != "ALTERNATE" else 344, heading_y + 22)
-    draw.rectangle((TYPE["text_margin"], divider_y, 653, divider_y + 2), fill="#d9d9d9")
-    f40 = ImageFont.truetype(face.path, TYPE["body_text"])
-    paragraphs = [str(value).strip() for value in data["body_paragraphs"] if str(value).strip()]
-    wrapped_paragraphs = [wrap_text(draw, value, f40, 916) for value in paragraphs]
+        draw_content(line, (TYPE["text_margin"], heading_y), heading_font, "#ffffff", "headline")
+        heading_y += heading_font.size + 10
+
+    if template == "FACT":
+        stat, stat_cleaned = _clean_source_markup(data.get("stat_emphasis", ""))
+        source_markup_removed = source_markup_removed or stat_cleaned
+        if stat:
+            stat_font = ImageFont.truetype((heading_face or face).path, 74)
+            stat_lines = wrap_text(draw, stat, stat_font, content_width)
+            if len(stat_lines) > 1:
+                stat_font = ImageFont.truetype((heading_face or face).path, 62)
+                stat_lines = wrap_text(draw, stat, stat_font, content_width)
+            if len(stat_lines) > 2:
+                stat_font = ImageFont.truetype((heading_face or face).path, 52)
+                stat_lines = wrap_text(draw, stat, stat_font, content_width)
+            if len(stat_lines) > 2:
+                raise ValueError("M9_FACT_STAT_TOO_LONG")
+            stat_y = max(450, heading_y + 18)
+            for line in stat_lines:
+                origin = (TYPE["text_margin"] + 16, stat_y)
+                bounds = draw.textbbox(origin, line, font=stat_font)
+                panel = (bounds[0] - 12, bounds[1] - 8, bounds[2] + 12, bounds[3] + 8)
+                draw.rounded_rectangle(panel, radius=16, fill=MUTD_RED)
+                draw_content(line, origin, stat_font, "#ffffff", "stat")
+                stat_y = bounds[3] + 20
+            content_y = max(content_y, stat_y + 12)
+
+    if template == "CONTEXT":
+        draw.rectangle((TYPE["text_margin"], heading_y + 12, TYPE["text_margin"] + 72, heading_y + 17), fill=MUTD_RED)
+
+    body_font = ImageFont.truetype(face.path, body_font_size)
+    wrapped_paragraphs = [wrap_text(draw, value, body_font, content_width) for value in paragraphs]
     line_count = sum(len(lines) for lines in wrapped_paragraphs)
-    dense = line_count >= 7
-    line_advance = TYPE["body_line_advance"] - (5 if dense else 0)
-    paragraph_gap = TYPE["paragraph_spacing"] - (3 if dense else 0)
-    y = max(375 if variant != "ALTERNATE" else 396, divider_y + 49)
-    for lines in wrapped_paragraphs:
+    if line_count > 6:
+        content_review_flags.append("BODY_DENSITY_REVIEW")
+    y = max(content_y, heading_y + 36)
+    line_advance = body_font_size + (7 if template == "FACT" else 16)
+    paragraph_gap = 12 if template == "CONTEXT" else (0 if template == "FACT" else 8)
+    for paragraph_index, lines in enumerate(wrapped_paragraphs):
         for line in lines:
-            draw_content(line, (80, y), f40, "#ffffff", "paragraph")
+            draw_content(line, (TYPE["text_margin"], y), body_font, "#ffffff", "paragraph")
             y += line_advance
-        y += paragraph_gap
-    highlight = str(data.get("body_highlight", "")).strip()
+        if paragraph_index < len(wrapped_paragraphs) - 1:
+            y += paragraph_gap
+
     if highlight:
-        y += 25 if not dense else 14
-        f50 = ImageFont.truetype(face.path, TYPE["body_highlight"])
-        for line in wrap_text(draw, highlight, f50, 916):
-            draw_content(line, (80, y), f50, YELLOW, "highlight")
-            y += TYPE["highlight_line_advance"] - (8 if dense else 0)
+        y += highlight_y_gap
+        highlight_font = ImageFont.truetype((heading_face or face).path, highlight_font_size)
+        for line in wrap_text(draw, highlight, highlight_font, content_width):
+            draw_content(line, (TYPE["text_margin"], y), highlight_font, MUTD_RED, "highlight")
+            y += highlight_line_advance
+    if template == "ANALYSIS" and closing_line:
+        y = max(y + 24, 880)
+        if y + TYPE["analysis_note"] > TYPE["safe_text_bottom"]:
+            content_review_flags.append("ANALYSIS_NOTE_REVIEW")
+        else:
+            analysis_font = ImageFont.truetype(face.path, TYPE["analysis_note"])
+            draw.rectangle((TYPE["text_margin"], y, TYPE["text_margin"] + 5, y + 52), fill=MUTD_RED)
+            draw_content("해석", (TYPE["text_margin"] + 22, y - 2), tag_font, MUTD_RED, "analysis_label")
+            y += 48
+            for line in wrap_text(draw, closing_line, analysis_font, content_width - 22):
+                draw_content(line, (TYPE["text_margin"] + 22, y), analysis_font, "#ffffff", "analysis_note")
+                y += TYPE["analysis_note"] + 12
     if any(box["bounds"][0] < 0 or box["bounds"][1] < 0 or
            box["bounds"][2] > W or box["bounds"][3] > TYPE["safe_text_bottom"]
            for box in text_bounds):
         raise ValueError("BODY_NEWS text bounding box outside safe region")
     if y > TYPE["safe_text_bottom"]:
         raise ValueError("BODY_NEWS content overflows safe text region")
+    if source_markup_removed:
+        content_review_flags.append("SOURCE_MARKUP_REMOVED_FOR_VISUALS")
     if logo_path:
         if not logo_path.is_file():
             raise FileNotFoundError(logo_path)
-        logo = Image.open(logo_path).convert("RGBA")
-        logo.thumbnail((86, 86), Image.Resampling.LANCZOS)
+        with Image.open(logo_path) as opened:
+            logo = opened.convert("RGBA")
+        logo.thumbnail((104, 104), Image.Resampling.LANCZOS)
         im.alpha_composite(logo, (40, 40))
     draw = ImageDraw.Draw(im)
-    f20 = ImageFont.truetype(face.path, 20)
-    footer = "맨유 에디터 @manutd_editor"
-    source_label = str(data.get("body_photo_credit", "")).strip()
-    if source_label:
-        if measure(draw, source_label, f20) > 960:
-            raise ValueError("Source credit too long")
-        source_origin = (W - measure(draw, source_label, f20) - 50, 1130)
-        source_bounds = draw.textbbox(source_origin, source_label, font=f20)
-        if source_bounds[0] < 0 or source_bounds[1] < 0 or source_bounds[2] > W or source_bounds[3] > H:
-            raise ValueError("M9_BODY_CREDIT_BOUNDING_BOX_INVALID")
-        contrast = _contrast_ratio(im, source_bounds, "#d9d9d9")
-        draw.text(source_origin,
-                  source_label, font=f20, fill="#d9d9d9")
-        text_bounds.append({"kind": "credit", "origin": list(source_origin), "bounds": list(source_bounds),
-                            "contrast_ratio": round(contrast, 2)})
-    footer_origin = ((W - measure(draw, footer, f20)) // 2, 1286)
-    footer_bounds = draw.textbbox(footer_origin, footer, font=f20)
-    if footer_bounds[0] < 0 or footer_bounds[1] < 0 or footer_bounds[2] > W or footer_bounds[3] > H:
-        raise ValueError("M9_BODY_FOOTER_BOUNDING_BOX_INVALID")
-    contrast = _contrast_ratio(im, footer_bounds, "#d9d9d9")
-    draw.text(footer_origin, footer, font=f20, fill="#d9d9d9")
-    text_bounds.append({"kind": "footer", "origin": list(footer_origin), "bounds": list(footer_bounds),
-                        "contrast_ratio": round(contrast, 2)})
+    source_font = ImageFont.truetype(face.path, 22)
+    source_label = _source_label(data)
+    source_origin = (TYPE["text_margin"], 1295)
+    source_bounds = draw.textbbox(source_origin, source_label, font=source_font)
+    if source_bounds[0] < 0 or source_bounds[1] < 0 or source_bounds[2] > W or source_bounds[3] > H:
+        raise ValueError("M9_BODY_SOURCE_BOUNDING_BOX_INVALID")
+    source_contrast = _contrast_ratio(im, source_bounds, "#dedede")
+    if source_contrast < 3.0:
+        raise ValueError("M9_BODY_TEXT_CONTRAST_TOO_LOW")
+    draw.text(source_origin, source_label, font=source_font, fill="#dedede")
+    text_bounds.append({"kind": "source", "origin": list(source_origin), "bounds": list(source_bounds),
+                        "contrast_ratio": round(source_contrast, 2)})
     data["_rendered_text_bounds"] = text_bounds
+    data["_content_review_flags"] = list(dict.fromkeys(content_review_flags))
+    data["_rendered_content"] = {
+        "role": role,
+        "layout_template": template,
+        "source_headline": data.get("source_headline", data["body_headline"]),
+        "source_body": source_body,
+        "source_highlight": highlight_source,
+        "source_closing_line": closing_source,
+        "visible_headline": headline,
+        "visible_body": visible_body,
+        "visible_highlight": highlight,
+        "visible_closing_line": closing_line,
+        "source_label": source_label,
+    }
     return im
 
 
@@ -464,7 +663,7 @@ def _intersects(a: list[float], b: list[float]) -> bool:
 
 
 def _record_body_text_overlap(state: dict) -> None:
-    crop = state.get("crop")
+    crop = state.get("render_crop") or state.get("crop")
     if not crop:
         state["face_boxes_card"] = []
         state["text_overlap"] = False
@@ -508,6 +707,22 @@ def _photo_job(job: dict, role: str, photo: dict | None) -> dict:
     return result
 
 
+def _template_for_role(role: str) -> str:
+    normalized = str(role or "BODY").strip().upper()
+    return {"KEY_FACT": "FACT", "CONTEXT": "CONTEXT", "IMPLICATION": "ANALYSIS"}.get(
+        normalized, "CONTEXT"
+    )
+
+
+def _composition_for_role(role: str) -> tuple[float, tuple[float, float]]:
+    normalized = str(role or "BODY").strip().upper()
+    return {
+        "KEY_FACT": (-0.12, (0.58, 0.50)),
+        "CONTEXT": (-0.10, (0.44, 0.50)),
+        "IMPLICATION": (-0.075, (0.52, 0.42)),
+    }.get(normalized, (0.0, (0.50, 0.50)))
+
+
 def _draw_contact_sheet(output_dir: Path, slides: list[dict]) -> None:
     columns = min(3, max(1, len(slides)))
     rows = math.ceil(len(slides) / columns)
@@ -540,7 +755,7 @@ def _draw_crop_audit(output_dir: Path,
     label_font = ImageFont.load_default()
     for row, (slide_number, source_image, state, centering, card_image) in enumerate(pages):
         source = source_image.convert("RGB")
-        crop = state.get("crop") or _legacy_crop_rect(source.size, centering)
+        crop = state.get("render_crop") or state.get("crop") or _legacy_crop_rect(source.size, centering)
         y = top_margin + row * row_height
         x = left_margin
         draw.text((x, y), f"PAGE {slide_number:02d} SOURCE / CROP", font=label_font, fill="#ffffff")
@@ -605,6 +820,10 @@ def render(job: dict, workdir: Path, output_dir: Path,
     if cover_info and cover_info.get("source_sha256") and sha256(cover_photo) != cover_info["source_sha256"]:
         raise ValueError("M9_MEDIA_HASH_MISMATCH")
     photo_states = {"cover": _photo_state(coversrc, cover_job, "cover")}
+    photo_states["cover"]["render_crop"] = _display_crop(
+        photo_states["cover"].get("crop"), coversrc.size,
+        photo_states["cover"].get("faces", []), 0.01,
+    )
     output_files = []
     body_slides = job.get("body_slides")
     if not isinstance(body_slides, list) or not body_slides:
@@ -620,7 +839,7 @@ def render(job: dict, workdir: Path, output_dir: Path,
     )
     if len(body_slides) > 5:
         raise ValueError("M9_NEWS_SLIDE_LIMIT")
-    cover_image = render_cover(coversrc, job, face, photo_states["cover"])
+    cover_image = render_cover(coversrc, job, face, photo_states["cover"], logo_path)
     rendered = [(1, "COVER_NEWS", cover_image)]
     render_sources: list[tuple[int, Image.Image, dict, tuple[float, float], Image.Image]] = [
         (1, coversrc, photo_states["cover"],
@@ -644,13 +863,23 @@ def render(job: dict, workdir: Path, output_dir: Path,
         role = "body" if index == 2 else f"slide_{index:02d}"
         page_job = _photo_job(job, role, photo_info) if photo_info else job
         state = _photo_state(page_src, page_job, role) if photo_info else _photo_state(bodysrc, job, "body")
+        content_role = str(body_slide.get("role") or "BODY").strip().upper()
+        crop_offset, photo_centering = _composition_for_role(content_role)
+        state["render_crop"] = _display_crop(
+            state.get("crop"), page_src.size, state.get("faces", []), crop_offset,
+        )
         data = {**job, **body_slide, "slide_number": index,
+                "role": content_role,
+                "layout_template": _template_for_role(content_role),
+                "photo_centering": photo_centering,
                 "layout_variant": "ALTERNATE" if index % 2 == 1 else "STANDARD"}
         if photo_info and isinstance(photo_info.get("credit"), str):
             data["body_photo_credit"] = photo_info["credit"]
         body_image = render_body(page_src, data, body_face, logo_path, face, state)
         state["text_bounds"] = [{"slide_number": index, **row}
                                  for row in data.get("_rendered_text_bounds", [])]
+        state["content_review_flags"] = data.get("_content_review_flags", [])
+        state["rendered_content"] = data.get("_rendered_content", {})
         _record_body_text_overlap(state)
         photo_states[str(index)] = state
         render_sources.append((index, page_src, state, (0.5, 0.5), body_image))
@@ -673,13 +902,21 @@ def render(job: dict, workdir: Path, output_dir: Path,
             declared_duplicate = duplicate_of
         page_records.append({
             "slide_number": index, "kind": "BODY_NEWS", "photo_source_url": source_url,
+            "role": content_role, "layout_template": data["layout_template"],
+            "source_index": body_slide.get("source_index", body_slide.get("slide_number")),
             "source_article_url": source_article_url, "credit": credit, "photo_sha256": digest,
-            "crop_coordinates": state["crop"], "scale": state["scale"],
+            "crop_coordinates": state.get("render_crop") or state["crop"],
+            "analysis_crop_coordinates": state["crop"], "scale": state["scale"],
             "subject_detection_result": {"faces": state["faces"], "review_required": state["review_required"],
                                           "review_flags": state["review_flags"], "analysis_ms": state["analysis_ms"]},
             "image_reuse_status": reuse_status,
             "duplicate_of_slide_number": declared_duplicate if reuse_status != "UNIQUE" else None,
             "text_bounds": state["text_bounds"],
+            "face_boxes_card": state.get("face_boxes_card", []),
+            "text_overlap": state["text_overlap"],
+            "content": state["rendered_content"],
+            "content_review_flags": state["content_review_flags"],
+            "stat_emphasis": body_slide.get("stat_emphasis", ""),
         })
     for number, kind, result in rendered:
         dest = output_dir / f"slide_{number:02d}_{kind.lower()}.png"
@@ -689,10 +926,15 @@ def render(job: dict, workdir: Path, output_dir: Path,
         if kind == "COVER_NEWS":
             cover_digest = sha256(cover_photo)
             record.update({
+                "role": str(job.get("cover_source_role") or "HOOK").strip().upper(),
+                "source_index": job.get("cover_source_index"),
+                "layout_template": "COVER",
                 "photo_source_url": (cover_info or {}).get("source_url", job["cover_photo_source"]),
                 "source_article_url": (cover_info or {}).get("article_url", job.get("cover_source_article_url", job["article_url"])),
                 "credit": (cover_info or {}).get("credit", job["cover_photo_credit"]),
-                "photo_sha256": cover_digest, "crop_coordinates": photo_states["cover"]["crop"],
+                "photo_sha256": cover_digest,
+                "crop_coordinates": photo_states["cover"].get("render_crop") or photo_states["cover"]["crop"],
+                "analysis_crop_coordinates": photo_states["cover"]["crop"],
                 "scale": photo_states["cover"]["scale"],
                 "subject_detection_result": {"faces": photo_states["cover"]["faces"],
                     "review_required": photo_states["cover"]["review_required"],
@@ -700,6 +942,15 @@ def render(job: dict, workdir: Path, output_dir: Path,
                     "analysis_ms": photo_states["cover"]["analysis_ms"]},
                 "image_reuse_status": "UNIQUE",
                 "text_bounds": job.get("_rendered_cover_text_bounds", []),
+                "content": {
+                    "role": str(job.get("cover_source_role") or "HOOK").strip().upper(),
+                    "layout_template": "COVER",
+                    "source_headline": job.get("cover_source_headline") or job["cover_line_one"],
+                    "source_highlight": job.get("cover_source_highlight") or job.get("cover_line_two", ""),
+                    "visible_headline": job["cover_line_one"],
+                    "visible_highlight": job.get("cover_line_two", ""),
+                    "source_label": _source_label(job),
+                },
             })
         else:
             record.update(next(page for page in page_records if page["slide_number"] == number))
@@ -725,7 +976,8 @@ def render(job: dict, workdir: Path, output_dir: Path,
         }
         output_files.append({"slide_number": len(rendered) + 1, "kind": "CTA",
                              "file": dest.name, "width": W, "height": H,
-                             "sha256": output_sha, "byte_identical_to_input": True})
+                             "sha256": output_sha, "byte_identical_to_input": True,
+                             "role": "CTA", "layout_template": "CTA"})
     _draw_contact_sheet(output_dir, output_files)
     _draw_crop_audit(output_dir, render_sources)
     crop_policy = load_crop_policy()
@@ -737,7 +989,8 @@ def render(job: dict, workdir: Path, output_dir: Path,
     photos_report = {}
     for role, state in photo_states.items():
         photos_report[role] = {
-            "crop": state["crop"], "effective_scale": state["scale"],
+            "crop": state["crop"], "display_crop": state.get("render_crop"),
+            "effective_scale": state["scale"],
             "faces": state["faces"], "quality_measurements": state["quality"],
             "quality_thresholds": quality_thresholds,
             "review_required": state["review_required"],
@@ -745,7 +998,7 @@ def render(job: dict, workdir: Path, output_dir: Path,
             "analysis_ms": state["analysis_ms"],
             "manual_focus": state["manual_focus"],
         }
-        if role == "2":
+        if role.isdigit():
             photos_report[role].update({
                 "text_bounds": state["text_bounds"],
                 "face_boxes_card": state.get("face_boxes_card", []),
@@ -758,6 +1011,7 @@ def render(job: dict, workdir: Path, output_dir: Path,
         "approval": {"visual_subject_crop": False, "image_reuse_rights": False,
                      "auto_publishing_allowed": False},
         "article_url": job["article_url"],
+        "source_publisher": job.get("source_publisher"),
         "article_published_at": job["article_published_at"],
         "cta_integrity": cta_integrity,
         "generation_context": {
@@ -774,7 +1028,7 @@ def render(job: dict, workdir: Path, output_dir: Path,
             "configured_body_font": Path(body_font_path or face_path).name,
             "settings": TYPE,
             "text_bounds_checked": True,
-            "layout_variants": sorted({str((slide.get("layout_variant") or "STANDARD")) for slide in body_slides}),
+            "layout_variants": sorted({_template_for_role(slide.get("role")) for slide in body_slides}),
         },
         "photo_summary": {
             "candidate_count": job.get("photo_candidate_count"),
@@ -785,6 +1039,8 @@ def render(job: dict, workdir: Path, output_dir: Path,
         },
         "sources": [{
             "slide_number": entry["slide_number"], "kind": entry["kind"],
+            "role": entry.get("role"), "layout_template": entry.get("layout_template"),
+            "source_index": entry.get("source_index"),
             "photo_url": entry["photo_source_url"], "credit": entry["credit"],
             "article_url": entry["source_article_url"], "sha256": entry["photo_sha256"],
             "crop_coordinates": entry["crop_coordinates"], "scale": entry["scale"],

@@ -24,6 +24,24 @@ def brief(cover="알렉스 퍼거슨 경의 올드 트래퍼드 복귀 장면",
     }
 
 class BriefToRequest(unittest.TestCase):
+    def test_hook_role_and_content_index_define_photo_slot_order(self):
+        value = brief()
+        value["slides_json"]["slides"] = [
+            {"slide_number": 1, "index": 2, "role": "KEY_FACT",
+             "visual_direction": {"subject": "브루노 페르난데스의 경기 장면"}},
+            {"slide_number": 2, "index": 3, "role": "CONTEXT",
+             "visual_direction": {"subject": "마이클 캐릭 감독의 인터뷰"}},
+            {"slide_number": 3, "index": 1, "role": "HOOK",
+             "visual_direction": {"subject": "알렉스 퍼거슨 감독의 복귀 장면"}},
+        ]
+        result = build_request(value, ["i.guim.co.uk"])
+        self.assertEqual([(row["slot"], row["slide_number"]) for row in result["slots"]], [
+            ("COVER_NEWS", 1), ("BODY_NEWS", 2), ("BODY_NEWS", 3),
+        ])
+        self.assertEqual([row["subject_alias_groups"][0]["canonical_name"] for row in result["slots"]], [
+            "Sir Alex Ferguson", "Bruno Fernandes", "Michael Carrick",
+        ])
+
     def test_creates_one_subject_request_per_news_page_with_legacy_first_two_slots(self):
         value = brief()
         value["slides_json"]["slides"] = [

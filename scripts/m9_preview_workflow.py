@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from m9_render_news_deck import render
-from m9_content_policy import validate_exploration_slide_count
+from m9_content_policy import ordered_content_slides, validate_exploration_slide_count
 
 BUCKET = "manutd-card-assets"
 CTA_PATH = "assets/cta.png"
@@ -65,19 +65,11 @@ def split_hook(text: str) -> tuple[str, str]:
 def brief_slides(brief: dict[str, Any]) -> list[dict[str, Any]]:
     # Production creative_briefs.slides_json is {"slides":[...]}, not an array.
     raw = brief.get("slides_json")
-    if isinstance(raw, dict):
-        raw = raw.get("slides")
-    if not isinstance(raw, list):
-        raise ValueError("M9_BRIEF_SLIDES_INVALID")
-    slides = [s for s in raw if isinstance(s, dict)]
-    slides.sort(key=lambda s: int(s.get("slide_number", s.get("index", 0))))
+    slides = ordered_content_slides(raw)
     if len(slides) < 2:
         raise ValueError("M9_BRIEF_REQUIRES_TWO_SLIDES")
     if len(slides) > 6:
         raise ValueError("M9_NEWS_SLIDE_LIMIT")
-    for expected, slide in enumerate(slides, start=1):
-        if int(slide.get("slide_number", slide.get("index", expected))) != expected:
-            raise ValueError("M9_BRIEF_SLIDE_NUMBERS_INVALID")
     return slides
 
 
@@ -154,22 +146,17 @@ def prepared_render_job(brief: dict[str, Any], media: dict[str, Any]) -> dict[st
         brief.get("status"), generation_metadata.get("generation_intent"),
         brief.get("content_mode"), len(slides),
     )
-    first, second = slides[0], slides[1]
+    first = slides[0]
     hooks = brief.get("hooks_json")
-    hook = first.get("headline", "")
-    if isinstance(hooks, list) and hooks and isinstance(hooks[0], dict):
-        hook = hooks[0].get("text") or hook
-    line_one, line_two = split_hook(str(hook))
-    body = second.get("body")
-    if not isinstance(body, str) or not body.strip():
-        raise ValueError("M9_BODY_TEXT_REQUIRED")
-    paragraphs = [x.strip() for x in body.splitlines() if x.strip()]
-    if len(paragraphs) == 1:
-        # Preserve exact original prose. The renderer will wrap visually.
-        paragraphs = [body.strip()]
-    headline = second.get("headline")
-    if not isinstance(headline, str) or not headline.strip():
-        raise ValueError("M9_BODY_HEADLINE_REQUIRED")
+    hook = str(first.get("headline") or "").strip()
+    hook_highlight = str(first.get("highlight") or "").strip()
+    if hook_highlight:
+        line_one, line_two = hook, hook_highlight
+    else:
+        selected_hook = hook
+        if isinstance(hooks, list) and hooks and isinstance(hooks[0], dict):
+            selected_hook = hooks[0].get("text") or hook
+        line_one, line_two = split_hook(str(selected_hook))
     cover = media["cover"]
     body_media = media["body"]
     page_media = {
@@ -196,21 +183,60 @@ def prepared_render_job(brief: dict[str, Any], media: dict[str, Any]) -> dict[st
             raise ValueError("M9_BODY_HEADLINE_REQUIRED")
         page_photo = page_media.get(str(slide_index), body_media)
         page_photos[str(slide_index)] = page_photo
+        direction = slide.get("visual_direction") if isinstance(slide.get("visual_direction"), dict) else {}
         body_slides.append({
+            "role": str(slide.get("role") or "BODY").strip().upper(),
+            "source_index": slide.get("index", slide.get("slide_number", slide_index)),
+            "slide_number": slide_index,
             "body_headline": body_headline.strip(),
             "body_paragraphs": [line.strip() for line in body_text.splitlines() if line.strip()] or [body_text.strip()],
             "body_highlight": slide.get("highlight") or "",
+            "closing_line": slide.get("closing_line") or "",
+            "stat_emphasis": direction.get("stat_emphasis") or "",
+            "visual_direction": direction,
+            "source_headline": body_headline,
+            "source_body": body_text,
+            "source_highlight": slide.get("highlight") or "",
             "photo": page_photo,
         })
+    source_publisher = ""
+    snapshot = brief.get("evidence_snapshot") if isinstance(brief.get("evidence_snapshot"), dict) else {}
+    for collection in (snapshot.get("exploration_articles"), snapshot.get("sources")):
+        if not isinstance(collection, list):
+            continue
+        for row in collection:
+            if not isinstance(row, dict):
+                continue
+            value = row.get("publisher_name") or row.get("canonical_name") or row.get("publisher")
+            if isinstance(value, str) and value.strip():
+                source_publisher = value.strip()
+                break
+        if source_publisher:
+            break
+    if not source_publisher:
+        slide_contract = brief.get("slides_json")
+        contract_sources = slide_contract.get("sources") if isinstance(slide_contract, dict) else None
+        if isinstance(contract_sources, list):
+            row = next((item for item in contract_sources if isinstance(item, dict)), {})
+            label = row.get("label")
+            if isinstance(label, str) and label.strip():
+                source_publisher = label.split(",", 1)[0].strip()
+    if not source_publisher:
+        source_publisher = urllib.parse.urlsplit(cover["article_url"]).hostname or ""
     prepared = {
         "article_url": cover["article_url"],
         "article_published_at": published_at or brief.get("generated_at") or brief.get("created_at") or "",
+        "source_publisher": source_publisher,
         "eyebrow": media.get("eyebrow") or "■  NEWS  |  맨유 에디터",
         "cover_line_one": line_one,
         "cover_line_two": line_two,
-        "body_headline": headline,
-        "body_paragraphs": paragraphs,
-        "body_highlight": second.get("highlight") or "",
+        "cover_source_role": str(first.get("role") or "HOOK").strip().upper(),
+        "cover_source_index": first.get("index", first.get("slide_number", 1)),
+        "cover_source_headline": first.get("headline") or "",
+        "cover_source_highlight": first.get("highlight") or "",
+        "body_headline": body_slides[0]["body_headline"],
+        "body_paragraphs": body_slides[0]["body_paragraphs"],
+        "body_highlight": body_slides[0]["body_highlight"],
         "body_slides": body_slides,
         "cover_photo": cover["file"],
         "body_photo": body_media["file"],
@@ -552,13 +578,42 @@ def telegram_text_chunks(text: str, limit: int = 4096) -> list[str]:
     return chunks
 
 
-def preview_caption(brief: dict[str, Any]) -> str:
+def preview_caption(brief: dict[str, Any], media: dict[str, Any] | None = None) -> str:
     caption = brief.get("caption_draft")
     if not isinstance(caption, str) or not caption.strip():
         raise ValueError("M9_CAPTION_REQUIRED")
     cta = brief.get("cta")
     if isinstance(cta, str) and cta.strip() and cta.strip() not in caption:
         caption = caption.rstrip() + "\n\n" + cta.strip()
+    snapshot = brief.get("evidence_snapshot") if isinstance(brief.get("evidence_snapshot"), dict) else {}
+    source_urls: list[str] = []
+    photo_rows = media.get("pages") if isinstance(media, dict) else None
+    if not isinstance(photo_rows, list):
+        photo_rows = [media.get("cover"), media.get("body")] if isinstance(media, dict) else []
+    if isinstance(media, dict):
+        for row in photo_rows:
+            value = row.get("article_url") if isinstance(row, dict) else None
+            if isinstance(value, str) and value.startswith("https://") and value not in source_urls:
+                source_urls.append(value)
+    if not source_urls:
+        for collection in (snapshot.get("exploration_articles"), snapshot.get("sources")):
+            if not isinstance(collection, list):
+                continue
+            row = next((item for item in collection if isinstance(item, dict)), {})
+            value = row.get("canonical_url") or row.get("resolved_publisher_url")
+            if isinstance(value, str) and value.startswith("https://"):
+                source_urls.append(value)
+                break
+    for source_url in source_urls:
+        if source_url not in caption:
+            caption = caption.rstrip() + "\n\n원문: " + source_url
+    credits = list(dict.fromkeys(
+        row["credit"].strip() for row in photo_rows
+        if isinstance(row, dict) and isinstance(row.get("credit"), str) and row["credit"].strip()
+    ))
+    missing_credits = [credit for credit in credits if credit not in caption]
+    if missing_credits:
+        caption = caption.rstrip() + "\n\n사진 크레딧: " + " / ".join(missing_credits)
     return "📋 Instagram 캡션 (복사)\n\n" + caption.strip()
 
 
@@ -607,7 +662,7 @@ def storage_manifest(brief: dict[str, Any], media: dict[str, Any], rendered: dic
         "slide_count": len(paths),
         "slides": slide_rows,
         "image_paths": paths,
-        "caption": preview_caption(brief),
+        "caption": preview_caption(brief, media),
         "source_url": article.get("canonical_url") or source.get("canonical_url") or media.get("cover", {}).get("article_url"),
         "source_publisher": article.get("publisher_name") or source.get("canonical_name"),
         "photo_credits": credits,
@@ -683,7 +738,7 @@ def run_preview(brief: dict[str, Any], media: dict[str, Any], media_root: Path,
             if send:
                 if telegram is None or not chat_id:
                     raise ValueError("M9_TELEGRAM_CONFIG_REQUIRED")
-                caption = preview_caption(brief)
+                caption = preview_caption(brief, media)
                 try:
                     telegram.send_text(chat_id, "🔒 비공개 Storage 업로드와 PNG SHA-256 검증을 마쳤습니다. 이제 전체 카드뉴스와 캡션을 전달합니다.")
                 except Exception:
