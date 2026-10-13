@@ -300,7 +300,7 @@ def _photo_state(source: Image.Image, data: dict, role: str) -> dict:
     faces = _stored_faces(data, role)
     raw_crop = data.get(f"{role}_crop")
     manual_focus = _manual_focus(data, role)
-    if manual_focus is not None:
+    if manual_focus is not None or (raw_crop is None and faces):
         evaluation = analyze_photo(source, role, _StoredFaceDetector(faces), manual_focus=manual_focus)
         crop = evaluation.crop
         crop_data = {
@@ -315,7 +315,8 @@ def _photo_state(source: Image.Image, data: dict, role: str) -> dict:
             "review_required": evaluation.review_required,
             "review_flags": list(evaluation.flags),
             "analysis_ms": evaluation.analysis_ms,
-            "manual_focus": {"x": manual_focus[0], "y": manual_focus[1]},
+            "manual_focus": ({"x": manual_focus[0], "y": manual_focus[1]}
+                             if manual_focus is not None else None),
             "text_bounds": [], "text_overlap": False,
         }
 
@@ -574,18 +575,43 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
         for line in wrap_text(draw, highlight, highlight_font, content_width):
             draw_content(line, (TYPE["text_margin"], y), highlight_font, MUTD_RED, "highlight")
             y += highlight_line_advance
+    visible_closing_line = ""
     if template == "ANALYSIS" and closing_line:
-        y = max(y + 24, 880)
-        if y + TYPE["analysis_note"] > TYPE["safe_text_bottom"]:
+        note_top = max(y + 24, 880)
+        note_x = TYPE["text_margin"] + 22
+        selected_note: tuple[ImageFont.FreeTypeFont, list[tuple[str, int]]] | None = None
+        source_paragraphs = [part for part in closing_line.splitlines() if part.strip()]
+        for point_size in range(TYPE["analysis_note"], 21, -2):
+            candidate_font = ImageFont.truetype(face.path, point_size)
+            candidate_lines = [
+                wrapped
+                for paragraph in source_paragraphs
+                for wrapped in wrap_text(draw, paragraph, candidate_font, content_width - 22)
+            ]
+            cursor = note_top + 48
+            positions: list[tuple[str, int]] = []
+            fits = bool(candidate_lines)
+            for line in candidate_lines:
+                bounds = draw.textbbox((note_x, cursor), line, font=candidate_font)
+                if bounds[3] > TYPE["safe_text_bottom"]:
+                    fits = False
+                    break
+                positions.append((line, cursor))
+                cursor = max(cursor + candidate_font.size + 8, bounds[3] + 8)
+            if fits:
+                selected_note = (candidate_font, positions)
+                break
+        if selected_note is None:
             content_review_flags.append("ANALYSIS_NOTE_REVIEW")
         else:
-            analysis_font = ImageFont.truetype(face.path, TYPE["analysis_note"])
-            draw.rectangle((TYPE["text_margin"], y, TYPE["text_margin"] + 5, y + 52), fill=MUTD_RED)
-            draw_content("해석", (TYPE["text_margin"] + 22, y - 2), tag_font, MUTD_RED, "analysis_label")
-            y += 48
-            for line in wrap_text(draw, closing_line, analysis_font, content_width - 22):
-                draw_content(line, (TYPE["text_margin"] + 22, y), analysis_font, "#ffffff", "analysis_note")
-                y += TYPE["analysis_note"] + 12
+            analysis_font, note_lines = selected_note
+            draw.rectangle((TYPE["text_margin"], note_top, TYPE["text_margin"] + 5,
+                            note_top + 52), fill=MUTD_RED)
+            draw_content("해석", (TYPE["text_margin"] + 22, note_top - 2), tag_font,
+                         MUTD_RED, "analysis_label")
+            for line, line_y in note_lines:
+                draw_content(line, (note_x, line_y), analysis_font, "#ffffff", "analysis_note")
+            visible_closing_line = closing_line
     if any(box["bounds"][0] < 0 or box["bounds"][1] < 0 or
            box["bounds"][2] > W or box["bounds"][3] > TYPE["safe_text_bottom"]
            for box in text_bounds):
@@ -626,7 +652,7 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
         "visible_headline": headline,
         "visible_body": visible_body,
         "visible_highlight": highlight,
-        "visible_closing_line": closing_line,
+        "visible_closing_line": visible_closing_line,
         "source_label": source_label,
     }
     return im
@@ -824,6 +850,11 @@ def render(job: dict, workdir: Path, output_dir: Path,
         photo_states["cover"].get("crop"), coversrc.size,
         photo_states["cover"].get("faces", []), 0.01,
     )
+    if photo_states["cover"]["render_crop"] is None:
+        photo_states["cover"]["render_crop"] = _legacy_crop_rect(
+            coversrc.size,
+            (float(job.get("cover_focus_x", 0.5)), float(job.get("cover_focus_y", 0.36))),
+        )
     output_files = []
     body_slides = job.get("body_slides")
     if not isinstance(body_slides, list) or not body_slides:
@@ -868,6 +899,8 @@ def render(job: dict, workdir: Path, output_dir: Path,
         state["render_crop"] = _display_crop(
             state.get("crop"), page_src.size, state.get("faces", []), crop_offset,
         )
+        if state["render_crop"] is None:
+            state["render_crop"] = _legacy_crop_rect(page_src.size, photo_centering)
         data = {**job, **body_slide, "slide_number": index,
                 "role": content_role,
                 "layout_template": _template_for_role(content_role),
@@ -947,8 +980,8 @@ def render(job: dict, workdir: Path, output_dir: Path,
                     "layout_template": "COVER",
                     "source_headline": job.get("cover_source_headline") or job["cover_line_one"],
                     "source_highlight": job.get("cover_source_highlight") or job.get("cover_line_two", ""),
-                    "visible_headline": job["cover_line_one"],
-                    "visible_highlight": job.get("cover_line_two", ""),
+                    "visible_headline": _clean_source_markup(job["cover_line_one"])[0],
+                    "visible_highlight": _clean_source_markup(job.get("cover_line_two", ""))[0],
                     "source_label": _source_label(job),
                 },
             })

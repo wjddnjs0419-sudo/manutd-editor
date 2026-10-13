@@ -29,9 +29,26 @@ class TestM9RunPipeline(unittest.TestCase):
         self.assertEqual(remote.events[0],("private",))
         self.assertEqual(remote.events[1],("lookup",key))
         self.assertEqual(remote.events[2][0:3],("claim",key,brief["id"]))
-        self.assertEqual(remote.events[2][3],{"content_mode":"NEWS_UPDATE","brief_version":2,"source":"telegram_owner_preview"})
+        self.assertEqual(remote.events[2][3],{"content_mode":"NEWS_UPDATE","brief_version":2,"render_revision":"render-v2","source":"telegram_owner_preview"})
         fail_unrendered_cloud_preview(remote,key,RuntimeError("M9_STAGE_TIMEOUT: m9_collect_media.ts"))
         self.assertEqual(remote.events[-1],("transition",key,"CLAIMED","FAILED",{"error_category":"STAGE_TIMEOUT"}))
+
+    def test_new_renderer_revision_gets_a_distinct_key_after_old_revision_was_sent(self):
+        brief={"id":"72bf1111-ae15-45ca-a812-3c1e2ee37a10","version":1,"content_mode":"NEWS_UPDATE"}
+        old_key=f"m9:{brief['id']}:v1"
+
+        class Remote:
+            def __init__(self): self.claimed=[]
+            def ensure_private_bucket(self): pass
+            def get_preview(self,key):
+                return {"creative_brief_id":brief["id"],"status":"SENT","telegram_message_ids":[701]} if key == old_key else None
+            def claim(self,key,brief_id,manifest): self.claimed.append((key,brief_id,manifest))
+
+        remote=Remote()
+        key=claim_cloud_preview(remote,brief)
+        self.assertEqual(key,job_key(brief,{}))
+        self.assertNotEqual(key,old_key)
+        self.assertEqual(remote.claimed[0][2]["render_revision"],"render-v2")
 
     def test_claims_one_reserved_key_only_after_confirmed_pre_send_failure(self):
         brief={"id":"72bf1111-ae15-45ca-a812-3c1e2ee37a10","version":1,"content_mode":"NEWS_UPDATE"}

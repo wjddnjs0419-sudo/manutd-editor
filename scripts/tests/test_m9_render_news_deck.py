@@ -142,6 +142,68 @@ class M9RenderSmoke(unittest.TestCase):
         self.assertEqual((self.root / "cta.png").read_bytes(),
                          (self.root / "templates/slide_05_cta.png").read_bytes())
 
+    def test_cover_manifest_reports_only_cleaned_text_drawn_on_cover(self) -> None:
+        source_headline = "맨유 복귀 | 출처: BBC Sport https://bbc.example/story"
+        self.data.update({
+            "cover_line_one": source_headline,
+            "cover_line_two": "핵심 장면 https://bbc.example/photo.jpg",
+            "cover_source_headline": source_headline,
+        })
+        report = render(self.data, self.root, self.root / "cover-markup", self.font,
+                        None, None, body_font_path=self.body_font)
+        content = report["slides"][0]["content"]
+        self.assertEqual(content["source_headline"], source_headline)
+        self.assertEqual(content["visible_headline"], "맨유 복귀")
+        self.assertEqual(content["visible_highlight"], "핵심 장면")
+        self.assertNotIn("https://", content["visible_headline"] + content["visible_highlight"])
+
+    def test_stored_faces_without_crop_metadata_get_an_effective_face_safe_crop(self) -> None:
+        faces = [
+            {"x": 0.25, "y": 0.20, "width": 0.08, "height": 0.12, "confidence": 0.93},
+            {"x": 0.53, "y": 0.21, "width": 0.08, "height": 0.12, "confidence": 0.91},
+        ]
+        self.data.update({"body_faces": faces})
+        self.data["body_slides"] = [{
+            "role": "CONTEXT", "body_headline": "경기 장면 정리",
+            "body_paragraphs": ["두 선수의 움직임을 확인했다."],
+        }]
+        report = render(self.data, self.root, self.root / "faces-without-crop", self.font,
+                        None, None, body_font_path=self.body_font)
+        page = report["slides"][1]
+        self.assertIsNotNone(page["crop_coordinates"])
+        self.assertEqual(len(page["face_boxes_card"]), 2)
+        for box in page["face_boxes_card"]:
+            left, top, right, bottom = box["bounds"]
+            self.assertGreaterEqual(left, 0)
+            self.assertGreaterEqual(top, 0)
+            self.assertLessEqual(right, SIZE[0])
+            self.assertLessEqual(bottom, SIZE[1])
+
+    def test_analysis_closing_line_reflows_to_fit_and_reports_omission_if_impossible(self) -> None:
+        compact_closing = "중원 압박과 전환 속도를 함께 살펴야 다음 경기의 흐름을 판단할 수 있다. " * 3
+        self.data["body_slides"] = [{
+            "role": "IMPLICATION", "body_headline": "다음 경기를 볼 기준",
+            "body_paragraphs": ["확정된 결과와 경기 해석은 구분해야 한다."],
+            "closing_line": compact_closing,
+        }]
+        compact_report = render(self.data, self.root, self.root / "analysis-compact", self.font,
+                                None, None, body_font_path=self.body_font)
+        compact = compact_report["slides"][1]
+        self.assertEqual(compact["content"]["source_closing_line"], compact_closing)
+        self.assertEqual(compact["content"]["visible_closing_line"], compact_closing.strip())
+        self.assertNotIn("ANALYSIS_NOTE_REVIEW", compact["content_review_flags"])
+        self.assertTrue(all(row["bounds"][3] <= 1110 for row in compact["text_bounds"]
+                            if row["kind"] == "analysis_note"))
+
+        impossible_closing = "중원 전환 압박 흐름을 다음 경기까지 확인해야 한다 " * 24
+        self.data["body_slides"][0]["closing_line"] = impossible_closing
+        omitted_report = render(self.data, self.root, self.root / "analysis-review", self.font,
+                                None, None, body_font_path=self.body_font)
+        omitted = omitted_report["slides"][1]
+        self.assertEqual(omitted["content"]["source_closing_line"], impossible_closing)
+        self.assertEqual(omitted["content"]["visible_closing_line"], "")
+        self.assertIn("ANALYSIS_NOTE_REVIEW", omitted["content_review_flags"])
+
     def test_dense_body_is_preserved_and_marked_for_editorial_review(self) -> None:
         source_body = "첫 번째 문장이다. 두 번째 문장이다. 세 번째 문장이다."
         self.data["body_slides"] = [{

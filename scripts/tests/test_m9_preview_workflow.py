@@ -187,6 +187,14 @@ class M9IntegrationContracts(unittest.TestCase):
         ])
         self.assertEqual([slide["source_index"] for slide in prepared["body_slides"]], [1, 3, 4])
 
+    def test_fractional_content_index_is_rejected_instead_of_truncated(self):
+        self.brief["slides_json"] = {"slides": [
+            {"slide_number": 1, "index": 1.5, "role": "HOOK", "headline": "표지", "body": ""},
+            {"slide_number": 2, "index": 2, "role": "KEY_FACT", "headline": "사실", "body": "본문."},
+        ]}
+        with self.assertRaisesRegex(ValueError, "M9_BRIEF_SLIDE_INDEX_INVALID"):
+            brief_slides(self.brief)
+
     def test_explicit_roles_must_be_complete_and_have_one_hook(self):
         self.brief["slides_json"] = {"slides": [
             {"index": 1, "role": "HOOK", "headline": "표지", "body": ""},
@@ -317,6 +325,11 @@ class M9IntegrationContracts(unittest.TestCase):
         changed_revision = copy.deepcopy(self.brief)
         changed_revision["version"] += 1
         self.assertNotEqual(job_key(changed_revision, altered), job_key(self.brief, self.media))
+
+    def test_renderer_revision_has_one_stable_delivery_key(self):
+        key = job_key(self.brief, self.media)
+        self.assertEqual(key, f"m9:{BRIEF_ID}:render-v2:v1")
+        self.assertEqual(key, job_key(self.brief, self.media))
 
     def test_refuses_unreviewed_media_or_path_traversal(self):
         altered = {**self.media, "editorial_review_only": False}

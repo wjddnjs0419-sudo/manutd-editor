@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 from m9_source_request_from_brief import build_request
 from m9_preview_workflow import (
-    Http, SupabaseGateway, TelegramGateway, job_key, safe_failure_category,
+    Http, RENDER_JOB_REVISION, SupabaseGateway, TelegramGateway, job_key, safe_failure_category,
     pre_send_retry_job_keys, validate_preview_status,
 )
 
@@ -78,6 +78,7 @@ def claim_cloud_preview(remote: SupabaseGateway, brief: dict) -> str:
     manifest = {
         "content_mode": brief.get("content_mode"),
         "brief_version": brief.get("version"),
+        "render_revision": RENDER_JOB_REVISION,
         "source": "telegram_owner_preview",
     }
     if previous is not None:

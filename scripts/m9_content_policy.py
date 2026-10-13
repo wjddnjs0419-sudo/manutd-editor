@@ -33,7 +33,9 @@ def ordered_content_slides(raw: object) -> list[dict[str, Any]]:
             raise ValueError("M9_BRIEF_SLIDE_INDEX_INVALID")
         try:
             index = int(raw_index)
-        except (TypeError, ValueError):
+            if not isinstance(raw_index, str) and raw_index != index:
+                raise ValueError
+        except (OverflowError, TypeError, ValueError):
             raise ValueError("M9_BRIEF_SLIDE_INDEX_INVALID") from None
         if index < 1 or index in used_indices:
             raise ValueError("M9_BRIEF_SLIDE_INDEX_INVALID")

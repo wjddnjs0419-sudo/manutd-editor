@@ -34,6 +34,7 @@ from m9_content_policy import ordered_content_slides, validate_exploration_slide
 
 BUCKET = "manutd-card-assets"
 CTA_PATH = "assets/cta.png"
+RENDER_JOB_REVISION = "render-v2"
 MAX_BYTES = 12 * 1024 * 1024
 MAX_HTTP_RESPONSE_BYTES = 16 * 1024 * 1024
 UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -289,12 +290,13 @@ def job_key(brief: dict[str, Any], media: dict[str, Any]) -> str:
     brief_id = str(brief.get("id") or "")
     if not UUID.fullmatch(brief_id):
         raise ValueError("M9_CREATIVE_BRIEF_ID_REQUIRED")
-    # One private-preview delivery per canonical brief revision, regardless of
-    # rotating CDN signatures or newly downloaded media filenames.
+    # One private-preview delivery per renderer and brief revision. A deliberate
+    # renderer revision can be delivered once without reopening an already-sent
+    # job; rerunning this same renderer revision still hits the duplicate guard.
     revision = brief.get("version")
     if not isinstance(revision, int) or revision < 1:
         raise ValueError("M9_CREATIVE_BRIEF_VERSION_REQUIRED")
-    return "m9:" + brief_id + ":v" + str(revision)
+    return f"m9:{brief_id}:{RENDER_JOB_REVISION}:v{revision}"
 
 
 def pre_send_retry_job_key(brief: dict[str, Any]) -> str:
