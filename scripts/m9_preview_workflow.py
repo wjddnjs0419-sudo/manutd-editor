@@ -167,11 +167,17 @@ def prepared_render_job(brief: dict[str, Any], media: dict[str, Any]) -> dict[st
         for page in media.get("pages", [])
         if isinstance(page, dict) and isinstance(page.get("slide_number"), int)
     } if isinstance(media.get("pages"), list) else {}
+    slide_contract = brief.get("slides_json") if isinstance(brief.get("slides_json"), dict) else {}
     snapshot = brief.get("evidence_snapshot") if isinstance(brief.get("evidence_snapshot"), dict) else {}
+    if not snapshot and isinstance(slide_contract.get("evidence_snapshot"), dict):
+        snapshot = slide_contract["evidence_snapshot"]
     article_records = snapshot.get("exploration_articles") if isinstance(snapshot.get("exploration_articles"), list) else []
+    if not article_records:
+        article_records = slide_contract.get("exploration_articles", [])
     published_at = next((row.get("published_at") for row in article_records if isinstance(row, dict) and isinstance(row.get("published_at"), str)), None)
     if not published_at:
-        for row in snapshot.get("sources", []) if isinstance(snapshot.get("sources"), list) else []:
+        source_rows = snapshot.get("sources") if isinstance(snapshot.get("sources"), list) else slide_contract.get("sources", [])
+        for row in source_rows if isinstance(source_rows, list) else []:
             if isinstance(row, dict) and isinstance(row.get("published_at"), str):
                 published_at = row["published_at"]
                 break
@@ -192,7 +198,7 @@ def prepared_render_job(brief: dict[str, Any], media: dict[str, Any]) -> dict[st
             "source_index": slide.get("index", slide.get("slide_number", slide_index)),
             "slide_number": slide_index,
             "body_headline": body_headline.strip(),
-            "body_paragraphs": [line.strip() for line in body_text.splitlines() if line.strip()] or [body_text.strip()],
+            "body_paragraphs": _body_paragraphs(body_text),
             "body_highlight": slide.get("highlight") or "",
             "closing_line": slide.get("closing_line") or "",
             "stat_emphasis": direction.get("stat_emphasis") or "",
@@ -202,32 +208,13 @@ def prepared_render_job(brief: dict[str, Any], media: dict[str, Any]) -> dict[st
             "source_highlight": slide.get("highlight") or "",
             "photo": page_photo,
         })
-    source_publisher = ""
-    snapshot = brief.get("evidence_snapshot") if isinstance(brief.get("evidence_snapshot"), dict) else {}
-    for collection in (snapshot.get("exploration_articles"), snapshot.get("sources")):
-        if not isinstance(collection, list):
-            continue
-        for row in collection:
-            if not isinstance(row, dict):
-                continue
-            value = row.get("publisher_name") or row.get("canonical_name") or row.get("publisher")
-            if isinstance(value, str) and value.strip():
-                source_publisher = value.strip()
-                break
-        if source_publisher:
-            break
-    if not source_publisher:
-        slide_contract = brief.get("slides_json")
-        contract_sources = slide_contract.get("sources") if isinstance(slide_contract, dict) else None
-        if isinstance(contract_sources, list):
-            row = next((item for item in contract_sources if isinstance(item, dict)), {})
-            label = row.get("label")
-            if isinstance(label, str) and label.strip():
-                source_publisher = label.split(",", 1)[0].strip()
-    if not source_publisher:
-        source_publisher = urllib.parse.urlsplit(cover["article_url"]).hostname or ""
+    source_publisher, grounded_article_url = _grounded_article_source(brief, cover["article_url"])
+    caption_question = _last_question(brief.get("caption_draft"))
+    if body_slides and caption_question and not body_slides[-1]["closing_line"]:
+        # Reuse a question already saved in the DRAFT caption; do not invent copy.
+        body_slides[-1]["closing_line"] = caption_question
     prepared = {
-        "article_url": cover["article_url"],
+        "article_url": grounded_article_url or cover["article_url"],
         "article_published_at": published_at or brief.get("generated_at") or brief.get("created_at") or "",
         "source_publisher": source_publisher,
         "eyebrow": media.get("eyebrow") or "■  NEWS  |  맨유 에디터",
@@ -270,6 +257,96 @@ def prepared_render_job(brief: dict[str, Any], media: dict[str, Any]) -> dict[st
             elif field in brief:
                 prepared[field] = brief[field]
     return prepared
+
+
+def _body_paragraphs(body: str) -> list[str]:
+    """Treat single newlines as soft wraps and reflow sentences as short units."""
+    paragraphs: list[str] = []
+    normalized_body = body.replace("\r\n", "\n").replace("\r", "\n")
+    for block in re.split(r"\n\s*\n", normalized_body):
+        normalized = re.sub(r"\s+", " ", block).strip()
+        if not normalized:
+            continue
+        sentences = re.split(r"(?<=[.!?。！？])\s+", normalized)
+        paragraphs.extend(sentence.strip() for sentence in sentences if sentence.strip())
+    return paragraphs or [re.sub(r"\s+", " ", body).strip()]
+
+
+def _last_question(caption: Any) -> str:
+    if not isinstance(caption, str):
+        return ""
+    questions = re.findall(r"[^\n?？]*[?？]", caption)
+    return questions[-1].strip() if questions else ""
+
+
+def _grounded_article_source(brief: dict[str, Any], fallback_url: str) -> tuple[str, str]:
+    """Resolve the article outlet from extracted evidence backing saved claims."""
+    slide_contract = brief.get("slides_json") if isinstance(brief.get("slides_json"), dict) else {}
+    snapshot = brief.get("evidence_snapshot") if isinstance(brief.get("evidence_snapshot"), dict) else {}
+    if not snapshot and isinstance(slide_contract.get("evidence_snapshot"), dict):
+        snapshot = slide_contract["evidence_snapshot"]
+    articles = snapshot.get("exploration_articles")
+    if not isinstance(articles, list):
+        articles = slide_contract.get("exploration_articles", [])
+    sources = snapshot.get("sources")
+    if not isinstance(sources, list):
+        sources = slide_contract.get("sources", [])
+
+    evidence_order: list[str] = []
+    grounding = brief.get("grounding_json")
+    if isinstance(grounding, dict):
+        claim_rows = grounding.get("claims", [])
+        if isinstance(claim_rows, dict):
+            claim_rows = list(claim_rows.values())
+        if isinstance(claim_rows, list):
+            for claim in claim_rows:
+                if isinstance(claim, dict) and isinstance(claim.get("evidence_ids"), list):
+                    evidence_order.extend(str(value) for value in claim["evidence_ids"] if value)
+    if not evidence_order:
+        for slide in brief_slides(brief):
+            claims = slide.get("claims")
+            if not isinstance(claims, list):
+                continue
+            for claim in claims:
+                if isinstance(claim, dict) and isinstance(claim.get("evidence_ids"), list):
+                    evidence_order.extend(str(value) for value in claim["evidence_ids"] if value)
+    internal_grounding = slide_contract.get("internal_grounding")
+    if not evidence_order and isinstance(internal_grounding, dict):
+        ids = internal_grounding.get("evidence_ids")
+        if isinstance(ids, list):
+            evidence_order.extend(str(value) for value in ids if value)
+    evidence_order = list(dict.fromkeys(evidence_order))
+    evidence_ids = set(evidence_order)
+
+    for evidence_id in evidence_order:
+        for row in articles if isinstance(articles, list) else []:
+            if not isinstance(row, dict) or str(row.get("evidence_id") or "") != evidence_id:
+                continue
+            if str(row.get("extraction_status") or "").upper() != "EXTRACTED":
+                continue
+            publisher = row.get("publisher_name") or row.get("canonical_name") or row.get("publisher")
+            url = row.get("canonical_url") or row.get("url")
+            if (isinstance(publisher, str) and publisher.strip() and
+                    isinstance(url, str) and url.startswith("https://")):
+                return publisher.strip(), url
+
+    # Persisted contracts can contain only an evidence-linked source citation.
+    for row in sources if isinstance(sources, list) else []:
+        if not isinstance(row, dict):
+            continue
+        if evidence_ids and str(row.get("evidence_id") or "") not in evidence_ids:
+            continue
+        if row.get("verified") is False:
+            continue
+        label = (row.get("canonical_name") or row.get("publisher_name") or
+                 row.get("publisher") or row.get("label"))
+        url = row.get("canonical_url") or row.get("url")
+        if isinstance(label, str) and label.strip():
+            publisher = label.split(",", 1)[0].strip()
+            return publisher, url if isinstance(url, str) and url.startswith("https://") else fallback_url
+
+    from urllib.parse import urlsplit
+    return (urlsplit(str(fallback_url)).hostname or "").removeprefix("www."), fallback_url
 
 
 def validate_preview_status(brief: dict[str, Any], allow_draft_preview: bool = False) -> None:

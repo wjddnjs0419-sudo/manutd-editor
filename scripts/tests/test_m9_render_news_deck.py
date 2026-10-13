@@ -9,9 +9,10 @@ import unittest
 from pathlib import Path
 from PIL import Image
 from PIL import ImageDraw
+from PIL import ImageFont
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from m9_render_news_deck import SIZE, render, _record_body_text_overlap
+from m9_render_news_deck import SIZE, render, wrap_text, _record_body_text_overlap
 
 
 def find_font() -> Path | None:
@@ -100,7 +101,7 @@ class M9RenderSmoke(unittest.TestCase):
         shared_photo = {
             "file": "body.jpg", "source_url": self.data["body_photo_source"],
             "article_url": self.data["article_url"], "credit": self.data["body_photo_credit"],
-            "crop": self.crop(0.20),
+            "crop": self.crop(0.12),
             "faces": [{"x": 0.25, "y": 0.32, "width": 0.1, "height": 0.12, "confidence": 0.92}],
         }
         self.data.update({
@@ -142,6 +143,87 @@ class M9RenderSmoke(unittest.TestCase):
         self.assertEqual((self.root / "cta.png").read_bytes(),
                          (self.root / "templates/slide_05_cta.png").read_bytes())
 
+    def test_source_and_photo_credit_are_only_drawn_on_last_content_page(self) -> None:
+        self.data["cover_line_two"] = "BBC Sport가 짚은 캐릭의 압박"
+        self.data["body_slides"] = [
+            {"role": "CONTEXT", "body_headline": "경기 상황",
+             "body_paragraphs": ["토트넘은 동점골을 넣었다고 BBC Sport는 전했다."],
+             "photo": {"file": "body.jpg", "source_url": "https://news.example.org/a.jpg",
+                       "article_url": self.data["article_url"], "credit": "BBC / Getty Images"}},
+            {"role": "KEY_FACT", "body_headline": "기록은 분명했다",
+             "body_paragraphs": [
+                 "BBC Sport는 이 기록이 리그 시즌 첫 6경기 기준 1986-87 이후 가장 적은 승점이라고 보도했다.",
+                 "BBC Sport 기사에서 제이미 레드냅은 활동량을 평가했다.",
+             ],
+             "photo": {"file": "body.jpg", "source_url": "https://news.example.org/a.jpg",
+                       "article_url": self.data["article_url"], "credit": "BBC / Getty Images"}},
+        ]
+        report = render(self.data, self.root, self.root / "last-source", self.font,
+                        self.root / "logo.png", self.root / "cta.png",
+                        body_font_path=self.body_font)
+        cover, first, last = report["slides"][:3]
+        self.assertNotIn("source", [row["kind"] for row in cover["text_bounds"]])
+        self.assertNotIn("source", [row["kind"] for row in first["text_bounds"]])
+        self.assertNotIn("photo_credit", [row["kind"] for row in first["text_bounds"]])
+        self.assertIn("source", [row["kind"] for row in last["text_bounds"]])
+        self.assertIn("photo_credit", [row["kind"] for row in last["text_bounds"]])
+        self.assertEqual(last["content"]["source_label"], "SOURCE: BBC Sport")
+        self.assertEqual(last["content"]["photo_credit"], "BBC / Getty Images")
+        self.assertNotIn("BBC Sport", cover["content"]["visible_highlight"])
+        self.assertNotIn("BBC Sport", first["content"]["visible_body"])
+        self.assertNotIn("BBC Sport", last["content"]["visible_body"])
+        self.assertIn("이 기록은 리그 시즌 첫 6경기 기준 1986-87 이후 가장 적은 승점이다.",
+                      last["content"]["visible_body"])
+
+    def test_visuals_hide_internal_roles_and_have_no_repeated_red_rules(self) -> None:
+        self.data["body_slides"] = [
+            {"role": "CONTEXT", "body_headline": "경기 상황",
+             "body_paragraphs": ["맨유가 먼저 득점했다."]},
+            {"role": "KEY_FACT", "body_headline": "기록은 분명했다",
+             "body_paragraphs": ["개막 여섯 경기에서 승점 여섯 점을 기록했다."]},
+            {"role": "IMPLICATION", "body_headline": "앞으로 지켜볼 점",
+             "body_paragraphs": ["다음 경기의 흐름을 확인할 필요가 있다."]},
+        ]
+        report = render(self.data, self.root, self.root / "no-role-labels", self.font,
+                        None, None, body_font_path=self.body_font)
+        for slide in report["slides"][1:-1]:
+            kinds = [row["kind"] for row in slide["text_bounds"]]
+            self.assertNotIn("template_label", kinds)
+            self.assertNotIn("analysis_label", kinds)
+            self.assertLessEqual(kinds.count("accent_rule"), 1)
+            self.assertNotIn("KEY FACT", slide["content"]["visible_headline"])
+            self.assertNotIn("MATCH CONTEXT", slide["content"]["visible_headline"])
+            self.assertNotIn("IMPLICATION · ANALYSIS", slide["content"]["visible_headline"])
+
+    def test_wrap_text_never_splits_an_unspaced_token(self) -> None:
+        draw = ImageDraw.Draw(Image.new("RGB", (100, 100), "white"))
+        token = "MANCHESTERUNITED" * 8
+        lines = wrap_text(draw, token, ImageFont.truetype(self.body_font, 28), 120)
+        self.assertEqual(lines, [token])
+
+    def test_each_paragraph_is_limited_to_two_lines_or_flagged_for_review(self) -> None:
+        long_paragraph = "맨유는 경기 초반부터 상대 진영에서 압박을 시도했고 " * 16
+        self.data["body_slides"] = [{
+            "role": "CONTEXT", "body_headline": "경기 흐름을 살펴보자",
+            "body_paragraphs": [long_paragraph],
+        }]
+        report = render(self.data, self.root, self.root / "paragraph-review", self.font,
+                        None, None, body_font_path=self.body_font)
+        slide = report["slides"][1]
+        self.assertIn("PARAGRAPH_LENGTH_REVIEW", slide["content_review_flags"])
+        self.assertEqual(slide["content"]["source_body"], long_paragraph)
+
+    def test_body_text_uses_wide_pixel_measured_lines_and_collapses_soft_breaks(self) -> None:
+        self.data["body_slides"] = [{
+            "role": "CONTEXT", "body_headline": "앞섰지만, 추가시간에 멈췄다",
+            "body_paragraphs": ["맨유가 먼저 득점했다. 토트넘은 10명으로 경기를 이어갔다."],
+        }]
+        report = render(self.data, self.root, self.root / "wide-reflow", self.font,
+                        None, None, body_font_path=self.body_font)
+        paragraphs = [row for row in report["slides"][1]["text_bounds"] if row["kind"] == "paragraph"]
+        self.assertTrue(all(row["bounds"][2] - row["bounds"][0] <= 872 for row in paragraphs))
+        self.assertLessEqual(len(paragraphs), 2)
+
     def test_cover_manifest_reports_only_cleaned_text_drawn_on_cover(self) -> None:
         source_headline = "맨유 복귀 | 출처: BBC Sport https://bbc.example/story"
         self.data.update({
@@ -179,8 +261,8 @@ class M9RenderSmoke(unittest.TestCase):
             self.assertLessEqual(right, SIZE[0])
             self.assertLessEqual(bottom, SIZE[1])
 
-    def test_analysis_closing_line_reflows_to_fit_and_reports_omission_if_impossible(self) -> None:
-        compact_closing = "중원 압박과 전환 속도를 함께 살펴야 다음 경기의 흐름을 판단할 수 있다. " * 3
+    def test_closing_line_keeps_normal_size_and_marks_overflow_for_editorial_review(self) -> None:
+        compact_closing = "중원 압박과 전환 속도를 살펴야 다음 경기의 흐름을 가늠할 수 있다."
         self.data["body_slides"] = [{
             "role": "IMPLICATION", "body_headline": "다음 경기를 볼 기준",
             "body_paragraphs": ["확정된 결과와 경기 해석은 구분해야 한다."],
@@ -234,7 +316,7 @@ class M9RenderSmoke(unittest.TestCase):
         self.assertEqual(slide["content"]["source_body"], "\n".join(body))
         self.assertIn("BODY_SENTENCE_LIMIT_REVIEW", slide["content_review_flags"])
         self.assertTrue(all(box["bounds"][3] <= 1110 for box in slide["text_bounds"]
-                            if box["kind"] != "source"))
+                            if box["kind"] not in {"source", "photo_credit"}))
 
     def test_rejects_tiny_photo(self) -> None:
         Image.new("RGB", (200, 240)).save(self.root / "tiny.jpg")
@@ -299,7 +381,7 @@ class M9RenderSmoke(unittest.TestCase):
     def test_manual_focus_bounds_and_body_text_overlap(self) -> None:
         self.data.update({
             "body_crop": self.crop(1 / 6),
-            "body_faces": [{"x": 0.20, "y": 0.12, "width": 0.14, "height": 0.10, "confidence": 0.94}],
+            "body_faces": [{"x": 0.20, "y": 0.23, "width": 0.14, "height": 0.10, "confidence": 0.94}],
             "body_focus_x": 0.5, "body_focus_y": 1.01,
         })
         with self.assertRaisesRegex(ValueError, "M9_MANUAL_FOCUS_OUT_OF_BOUNDS"):
@@ -310,7 +392,7 @@ class M9RenderSmoke(unittest.TestCase):
         baseline_bounds = baseline["photos"]["body"]["text_bounds"]
         self.assertTrue(baseline["photos"]["body"]["text_overlap"])
         self.assertIn("FACE_OVERLAPS_BODY_TEXT", baseline["photos"]["body"]["review_flags"])
-        self.assertEqual(baseline_bounds[0]["origin"], [104, 204])
+        self.assertEqual(baseline_bounds[0]["origin"], [80, 300])
 
         self.data["body_focus_x"] = 0.65
         moved_crop = render(self.data, self.root, self.root / "manual-moved", self.font, None, None)

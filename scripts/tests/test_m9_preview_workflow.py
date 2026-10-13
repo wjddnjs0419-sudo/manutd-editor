@@ -169,6 +169,37 @@ class M9IntegrationContracts(unittest.TestCase):
         self.assertEqual(len(p["body_slides"]), 1)
         self.assertEqual(p["cover_photo_source"], self.media["cover"]["source_url"])
 
+    def test_source_publisher_comes_from_extracted_claim_evidence_not_discovery_order(self):
+        self.brief["grounding_json"] = {"claims": [{"evidence_ids": ["article:bbc-grounded"]}]}
+        self.brief["evidence_snapshot"] = {
+            "story": {"id": "2c2c2c2c-cccc-4ccc-8ccc-cccccccccccc"},
+            "exploration_articles": [
+                {"evidence_id": "article:yahoo-discovery", "publisher_name": "Yahoo Sports",
+                 "canonical_url": "https://news.google.com/rss/articles/yahoo",
+                 "extraction_status": "NOT_EXTRACTED"},
+                {"evidence_id": "article:bbc-grounded", "publisher_name": "BBC Sport",
+                 "canonical_url": "https://www.bbc.co.uk/sport/football/articles/grounded",
+                 "extraction_status": "EXTRACTED"},
+            ],
+            "sources": [
+                {"canonical_name": "Yahoo Sports", "verified": False},
+                {"canonical_name": "BBC Sport", "canonical_url": "https://www.bbc.co.uk/sport/football/articles/grounded",
+                 "verified": True},
+            ],
+        }
+        prepared = prepared_render_job(self.brief, self.media)
+        self.assertEqual(prepared["source_publisher"], "BBC Sport")
+        self.assertEqual(prepared["article_url"], "https://www.bbc.co.uk/sport/football/articles/grounded")
+
+    def test_single_newlines_are_reflowed_instead_of_forcing_paragraph_breaks(self):
+        self.brief["slides_json"]["slides"][1]["body"] = (
+            "맨유가 먼저 득점했고\n토트넘은 10명으로 경기를 이어갔다."
+        )
+        prepared = prepared_render_job(self.brief, self.media)
+        self.assertEqual(prepared["body_slides"][0]["body_paragraphs"], [
+            "맨유가 먼저 득점했고 토트넘은 10명으로 경기를 이어갔다."
+        ])
+
     def test_hook_role_is_first_and_remaining_slides_keep_index_order(self):
         self.brief["slides_json"] = {"slides": [
             {"slide_number": 1, "index": 3, "role": "KEY_FACT", "headline": "세 번째", "body": "세 번째 근거."},

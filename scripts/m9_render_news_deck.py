@@ -194,6 +194,28 @@ def _source_label(data: dict) -> str:
     return f"SOURCE: {publisher}" if publisher else "SOURCE: ORIGINAL ARTICLE"
 
 
+def _strip_publisher_attribution(text: object, publisher: str) -> str:
+    """Keep the saved claim while removing repeated outlet credit from visible copy."""
+    value = str(text or "")
+    publisher = str(publisher or "").strip()
+    if not publisher:
+        return value
+    name = re.escape(publisher)
+    value = re.sub(
+        rf"^\s*{name}(?:는|은)\s+이 기록이\s+(.+?)이라고\s+보도했다[.!?。！？]*$",
+        lambda match: f"이 기록은 {match.group(1)}이다.", value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(rf"^\s*{name}(?:가\s+짚은|\s+보도\s+기준|\s+기사에서)\s*", "", value,
+                   flags=re.IGNORECASE)
+    value = re.sub(rf"^\s*{name}(?:는|은)\s+", "", value, count=1, flags=re.IGNORECASE)
+    value = re.sub(rf"고\s+{name}(?:는|은)\s+전했다[.!?。！？]*$", ".", value,
+                   flags=re.IGNORECASE)
+    value = re.sub(rf"\s+{name}(?:는|은)\s+전했다[.!?。！？]*$", ".", value,
+                   flags=re.IGNORECASE)
+    return value.strip()
+
+
 def _cover_gradient_mask() -> Image.Image:
     """A smooth alpha ramp: clear at 42%, 45% at 72%, black at the bottom."""
     start = TYPE["cover_gradient_start_y"]
@@ -360,6 +382,8 @@ def render_cover(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
     label, _ = _clean_source_markup(data.get("eyebrow", "맨유 에디터 · 경기 브리핑"))
     line_one, _ = _clean_source_markup(data["cover_line_one"])
     line_two, _ = _clean_source_markup(data.get("cover_line_two", ""))
+    line_one = _strip_publisher_attribution(line_one, str(data.get("source_publisher") or ""))
+    line_two = _strip_publisher_attribution(line_two, str(data.get("source_publisher") or ""))
     title_font = ImageFont.truetype(face.path, TYPE["cover_headline"])
     support_font = ImageFont.truetype(face.path, TYPE["cover_highlight"])
     title_lines = wrap_text(draw, line_one, title_font, 1000) if line_one else []
@@ -396,20 +420,19 @@ def render_cover(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
     for line in support_lines:
         draw_cover(line, (TYPE["cover_text_margin"], title_y), support_font, MUTD_RED, "highlight")
         title_y += 72
-    source_font = ImageFont.truetype(face.path, 22)
-    source = _source_label(data)
-    draw_cover(source, (TYPE["cover_text_margin"], 1295), source_font, "#dedede", "source")
     data["_rendered_cover_text_bounds"] = text_bounds
     return im
 
 def wrap_text(draw: ImageDraw.ImageDraw, text: str, face: ImageFont.FreeTypeFont,
               max_width: int) -> list[str]:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not text:
+        return []
     if measure(draw, text, face) <= max_width:
         return [text]
     lines: list[str] = []
     current = ""
-    # Prefer Korean word boundaries, while still splitting long unspaced runs
-    # safely when a publisher sentence contains a long name or URL-like token.
+    # Keep Korean eojeol and other whitespace-delimited words intact.
     for word in re.findall(r"\S+\s*", text):
         if measure(draw, current + word, face) <= max_width:
             current += word
@@ -417,16 +440,10 @@ def wrap_text(draw: ImageDraw.ImageDraw, text: str, face: ImageFont.FreeTypeFont
         if current.strip():
             lines.append(current.rstrip())
             current = ""
-        token = word
-        while token and measure(draw, token, face) > max_width:
-            piece = ""
-            while token and measure(draw, piece + token[0], face) <= max_width:
-                piece += token[0]
-                token = token[1:]
-            if not piece:
-                raise ValueError("M9_TEXT_GLYPH_EXCEEDS_WIDTH")
-            lines.append(piece)
-        current = token
+        current = word.strip()
+        if measure(draw, current, face) > max_width:
+            lines.append(current)
+            current = ""
     if current.strip():
         lines.append(current.rstrip())
     return lines
@@ -459,9 +476,16 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
     def draw_content(text: str, origin: tuple[int, int], text_font: ImageFont.FreeTypeFont,
                      fill: str, kind: str) -> None:
         bounds = draw.textbbox(origin, text, font=text_font)
+        if bounds[3] > TYPE["safe_text_bottom"]:
+            content_review_flags.append("CONTENT_LAYOUT_REVIEW")
+            return
         contrast = _contrast_ratio(im, bounds, fill)
         if contrast < 3.0:
-            raise ValueError("M9_BODY_TEXT_CONTRAST_TOO_LOW")
+            if fill.lower() == MUTD_RED.lower():
+                fill = "#ffffff"
+                contrast = _contrast_ratio(im, bounds, fill)
+            if contrast < 3.0:
+                raise ValueError("M9_BODY_TEXT_CONTRAST_TOO_LOW")
         draw.text(origin, text, font=text_font, fill=fill)
         text_bounds.append({
             "kind": kind, "origin": [origin[0], origin[1]],
@@ -469,48 +493,51 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
         })
 
     headline, headline_cleaned = _clean_source_markup(data["body_headline"])
+    headline_after_attribution = _strip_publisher_attribution(headline, str(data.get("source_publisher") or ""))
+    headline_cleaned = headline_cleaned or headline_after_attribution != headline
+    headline = headline_after_attribution
     if not headline:
         raise ValueError("M9_BODY_HEADLINE_REQUIRED")
-    content_width = 430
+    content_width = W - (TYPE["text_margin"] * 2)
     headline_size = {"FACT": 48, "CONTEXT": 50, "ANALYSIS": 54}[template]
-    headline_lines: list[str] = []
-    heading_font = face
-    for candidate_size in range(headline_size, 37, -2):
-        candidate = ImageFont.truetype((heading_face or face).path, candidate_size)
-        candidate_lines = wrap_text(draw, headline, candidate, content_width)
-        if len(candidate_lines) <= 2:
-            heading_font, headline_lines = candidate, candidate_lines
-            break
-    if not headline_lines:
-        raise ValueError("BODY_NEWS headline too long for two readable lines")
+    heading_font = ImageFont.truetype((heading_face or face).path, headline_size)
+    headline_lines = wrap_text(draw, headline, heading_font, content_width)
     paragraphs = []
     source_markup_removed = headline_cleaned
     for value in data.get("body_paragraphs", []):
         cleaned, changed = _clean_source_markup(value)
         source_markup_removed = source_markup_removed or changed
+        visible_value = _strip_publisher_attribution(cleaned, str(data.get("source_publisher") or ""))
+        source_markup_removed = source_markup_removed or visible_value != cleaned
+        cleaned = visible_value
         if cleaned:
-            paragraphs.append(cleaned)
+            normalized = re.sub(r"\s+", " ", cleaned).strip()
+            paragraphs.extend(part.strip() for part in re.split(r"(?<=[.!?。！？])\s+", normalized)
+                              if part.strip())
     source_body = data.get("source_body")
     if not isinstance(source_body, str):
         source_body = "\n".join(str(value) for value in data.get("body_paragraphs", []))
     visible_body = "\n".join(paragraphs)
     highlight_source = data.get("source_highlight", data.get("body_highlight", ""))
     highlight, highlight_cleaned = _clean_source_markup(data.get("body_highlight", ""))
+    highlight_after_attribution = _strip_publisher_attribution(highlight, str(data.get("source_publisher") or ""))
+    highlight_cleaned = highlight_cleaned or highlight_after_attribution != highlight
+    highlight = highlight_after_attribution
     source_markup_removed = source_markup_removed or highlight_cleaned
     closing_source = str(data.get("closing_line") or "")
     closing_line, closing_cleaned = _clean_source_markup(closing_source)
+    closing_after_attribution = _strip_publisher_attribution(closing_line, str(data.get("source_publisher") or ""))
+    closing_cleaned = closing_cleaned or closing_after_attribution != closing_line
+    closing_line = closing_after_attribution
     source_markup_removed = source_markup_removed or closing_cleaned
 
     sentence_text = " ".join(paragraphs)
     sentence_count = len(re.findall(r"[.!?。](?=[\s\"'”’」』)\]]|$)", sentence_text))
     content_review_flags: list[str] = []
+    if len(headline_lines) > 2:
+        content_review_flags.append("HEADLINE_LENGTH_REVIEW")
     if sentence_count > 2:
         content_review_flags.append("BODY_SENTENCE_LIMIT_REVIEW")
-
-    tag_font = ImageFont.truetype(face.path, 24)
-    draw.rectangle((TYPE["text_margin"], 205, TYPE["text_margin"] + 7, 241), fill=MUTD_RED)
-    tag = {"FACT": "KEY FACT", "CONTEXT": "MATCH CONTEXT", "ANALYSIS": "IMPLICATION · ANALYSIS"}[template]
-    draw_content(tag, (TYPE["text_margin"] + 24, 204), tag_font, "#ffffff", "template_label")
 
     if template == "FACT":
         headline_y, content_y, body_font_size, highlight_y_gap = 300, 650, 29, 12
@@ -524,6 +551,8 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
 
     heading_y = headline_y
     for line in headline_lines:
+        if measure(draw, line, heading_font) > content_width:
+            content_review_flags.append("HEADLINE_WORD_WIDTH_REVIEW")
         draw_content(line, (TYPE["text_margin"], heading_y), heading_font, "#ffffff", "headline")
         heading_y += heading_font.size + 10
 
@@ -551,14 +580,16 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
                 stat_y = bounds[3] + 20
             content_y = max(content_y, stat_y + 12)
 
-    if template == "CONTEXT":
-        draw.rectangle((TYPE["text_margin"], heading_y + 12, TYPE["text_margin"] + 72, heading_y + 17), fill=MUTD_RED)
-
     body_font = ImageFont.truetype(face.path, body_font_size)
     wrapped_paragraphs = [wrap_text(draw, value, body_font, content_width) for value in paragraphs]
     line_count = sum(len(lines) for lines in wrapped_paragraphs)
     if line_count > 6:
         content_review_flags.append("BODY_DENSITY_REVIEW")
+    if any(len(lines) > 2 for lines in wrapped_paragraphs):
+        content_review_flags.append("PARAGRAPH_LENGTH_REVIEW")
+    if any(measure(draw, line, body_font) > content_width
+           for lines in wrapped_paragraphs for line in lines):
+        content_review_flags.append("BODY_WORD_WIDTH_REVIEW")
     y = max(content_y, heading_y + 36)
     line_advance = body_font_size + (7 if template == "FACT" else 16)
     paragraph_gap = 12 if template == "CONTEXT" else (0 if template == "FACT" else 8)
@@ -576,48 +607,29 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
             draw_content(line, (TYPE["text_margin"], y), highlight_font, MUTD_RED, "highlight")
             y += highlight_line_advance
     visible_closing_line = ""
-    if template == "ANALYSIS" and closing_line:
-        note_top = max(y + 24, 880)
-        note_x = TYPE["text_margin"] + 22
-        selected_note: tuple[ImageFont.FreeTypeFont, list[tuple[str, int]]] | None = None
-        source_paragraphs = [part for part in closing_line.splitlines() if part.strip()]
-        for point_size in range(TYPE["analysis_note"], 21, -2):
-            candidate_font = ImageFont.truetype(face.path, point_size)
-            candidate_lines = [
-                wrapped
-                for paragraph in source_paragraphs
-                for wrapped in wrap_text(draw, paragraph, candidate_font, content_width - 22)
-            ]
-            cursor = note_top + 48
-            positions: list[tuple[str, int]] = []
-            fits = bool(candidate_lines)
-            for line in candidate_lines:
-                bounds = draw.textbbox((note_x, cursor), line, font=candidate_font)
-                if bounds[3] > TYPE["safe_text_bottom"]:
-                    fits = False
-                    break
-                positions.append((line, cursor))
-                cursor = max(cursor + candidate_font.size + 8, bounds[3] + 8)
-            if fits:
-                selected_note = (candidate_font, positions)
-                break
-        if selected_note is None:
+    if closing_line:
+        note_top = max(y + 20, 875)
+        note_font = ImageFont.truetype((heading_face or face).path, TYPE["analysis_note"])
+        note_lines = wrap_text(draw, closing_line, note_font, content_width)
+        note_bounds = [draw.textbbox((TYPE["text_margin"], note_top + index * (note_font.size + 10)),
+                                     line, font=note_font)
+                       for index, line in enumerate(note_lines)]
+        if len(note_lines) > 2 or any(box[3] > TYPE["safe_text_bottom"] for box in note_bounds):
             content_review_flags.append("ANALYSIS_NOTE_REVIEW")
         else:
-            analysis_font, note_lines = selected_note
-            draw.rectangle((TYPE["text_margin"], note_top, TYPE["text_margin"] + 5,
-                            note_top + 52), fill=MUTD_RED)
-            draw_content("해석", (TYPE["text_margin"] + 22, note_top - 2), tag_font,
-                         MUTD_RED, "analysis_label")
-            for line, line_y in note_lines:
-                draw_content(line, (note_x, line_y), analysis_font, "#ffffff", "analysis_note")
-            visible_closing_line = closing_line
-    if any(box["bounds"][0] < 0 or box["bounds"][1] < 0 or
-           box["bounds"][2] > W or box["bounds"][3] > TYPE["safe_text_bottom"]
+            for index, line in enumerate(note_lines):
+                if measure(draw, line, note_font) > content_width:
+                    content_review_flags.append("ANALYSIS_NOTE_REVIEW")
+                    break
+                draw_content(line, (TYPE["text_margin"], note_top + index * (note_font.size + 10)),
+                             note_font, "#ffffff", "analysis_note")
+            else:
+                visible_closing_line = closing_line
+    if any(box["bounds"][0] < 0 or box["bounds"][1] < 0 or box["bounds"][2] > W
            for box in text_bounds):
-        raise ValueError("BODY_NEWS text bounding box outside safe region")
+        content_review_flags.append("CONTENT_LAYOUT_REVIEW")
     if y > TYPE["safe_text_bottom"]:
-        raise ValueError("BODY_NEWS content overflows safe text region")
+        content_review_flags.append("CONTENT_LAYOUT_REVIEW")
     if source_markup_removed:
         content_review_flags.append("SOURCE_MARKUP_REMOVED_FOR_VISUALS")
     if logo_path:
@@ -628,18 +640,39 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
         logo.thumbnail((104, 104), Image.Resampling.LANCZOS)
         im.alpha_composite(logo, (40, 40))
     draw = ImageDraw.Draw(im)
-    source_font = ImageFont.truetype(face.path, 22)
     source_label = _source_label(data)
-    source_origin = (TYPE["text_margin"], 1295)
-    source_bounds = draw.textbbox(source_origin, source_label, font=source_font)
-    if source_bounds[0] < 0 or source_bounds[1] < 0 or source_bounds[2] > W or source_bounds[3] > H:
-        raise ValueError("M9_BODY_SOURCE_BOUNDING_BOX_INVALID")
-    source_contrast = _contrast_ratio(im, source_bounds, "#dedede")
-    if source_contrast < 3.0:
-        raise ValueError("M9_BODY_TEXT_CONTRAST_TOO_LOW")
-    draw.text(source_origin, source_label, font=source_font, fill="#dedede")
-    text_bounds.append({"kind": "source", "origin": list(source_origin), "bounds": list(source_bounds),
-                        "contrast_ratio": round(source_contrast, 2)})
+    raw_credit = str(data.get("body_photo_credit") or "").strip()
+    photo_credit = re.sub(r"^(?:PHOTO(?:\s+CREDIT)?|사진(?:\s*크레딧)?)\s*[:：]\s*", "", raw_credit,
+                          flags=re.IGNORECASE).strip()
+    if data.get("is_last_content_page"):
+        source_font = ImageFont.truetype(face.path, 21)
+        source_origin = (TYPE["text_margin"], 1268)
+        source_bounds = draw.textbbox(source_origin, source_label, font=source_font)
+        if source_bounds[2] - source_bounds[0] > content_width:
+            content_review_flags.append("SOURCE_LABEL_REVIEW")
+        else:
+            source_contrast = _contrast_ratio(im, source_bounds, "#dedede")
+            if source_contrast < 3.0:
+                raise ValueError("M9_BODY_TEXT_CONTRAST_TOO_LOW")
+            draw.text(source_origin, source_label, font=source_font, fill="#dedede")
+            text_bounds.append({"kind": "source", "origin": list(source_origin),
+                                "bounds": list(source_bounds),
+                                "contrast_ratio": round(source_contrast, 2)})
+        if photo_credit:
+            credit_text = f"사진: {photo_credit}"
+            credit_font = ImageFont.truetype(face.path, 18)
+            credit_origin = (TYPE["text_margin"], 1310)
+            credit_bounds = draw.textbbox(credit_origin, credit_text, font=credit_font)
+            if credit_bounds[2] - credit_bounds[0] > content_width or credit_bounds[3] > H:
+                content_review_flags.append("PHOTO_CREDIT_REVIEW")
+            else:
+                credit_contrast = _contrast_ratio(im, credit_bounds, "#dedede")
+                if credit_contrast < 3.0:
+                    raise ValueError("M9_BODY_TEXT_CONTRAST_TOO_LOW")
+                draw.text(credit_origin, credit_text, font=credit_font, fill="#dedede")
+                text_bounds.append({"kind": "photo_credit", "origin": list(credit_origin),
+                                    "bounds": list(credit_bounds),
+                                    "contrast_ratio": round(credit_contrast, 2)})
     data["_rendered_text_bounds"] = text_bounds
     data["_content_review_flags"] = list(dict.fromkeys(content_review_flags))
     data["_rendered_content"] = {
@@ -654,6 +687,8 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
         "visible_highlight": highlight,
         "visible_closing_line": visible_closing_line,
         "source_label": source_label,
+        "source_visible": bool(data.get("is_last_content_page")),
+        "photo_credit": photo_credit,
     }
     return im
 
@@ -743,9 +778,9 @@ def _template_for_role(role: str) -> str:
 def _composition_for_role(role: str) -> tuple[float, tuple[float, float]]:
     normalized = str(role or "BODY").strip().upper()
     return {
-        "KEY_FACT": (-0.12, (0.58, 0.50)),
-        "CONTEXT": (-0.10, (0.44, 0.50)),
-        "IMPLICATION": (-0.075, (0.52, 0.42)),
+        "KEY_FACT": (0.07, (0.58, 0.50)),
+        "CONTEXT": (0.05, (0.44, 0.50)),
+        "IMPLICATION": (0.02, (0.52, 0.42)),
     }.get(normalized, (0.0, (0.50, 0.50)))
 
 
@@ -905,6 +940,7 @@ def render(job: dict, workdir: Path, output_dir: Path,
                 "role": content_role,
                 "layout_template": _template_for_role(content_role),
                 "photo_centering": photo_centering,
+                "is_last_content_page": index == len(body_slides) + 1,
                 "layout_variant": "ALTERNATE" if index % 2 == 1 else "STANDARD"}
         if photo_info and isinstance(photo_info.get("credit"), str):
             data["body_photo_credit"] = photo_info["credit"]
@@ -980,8 +1016,10 @@ def render(job: dict, workdir: Path, output_dir: Path,
                     "layout_template": "COVER",
                     "source_headline": job.get("cover_source_headline") or job["cover_line_one"],
                     "source_highlight": job.get("cover_source_highlight") or job.get("cover_line_two", ""),
-                    "visible_headline": _clean_source_markup(job["cover_line_one"])[0],
-                    "visible_highlight": _clean_source_markup(job.get("cover_line_two", ""))[0],
+                    "visible_headline": _strip_publisher_attribution(
+                        _clean_source_markup(job["cover_line_one"])[0], str(job.get("source_publisher") or "")),
+                    "visible_highlight": _strip_publisher_attribution(
+                        _clean_source_markup(job.get("cover_line_two", ""))[0], str(job.get("source_publisher") or "")),
                     "source_label": _source_label(job),
                 },
             })
