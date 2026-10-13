@@ -11,7 +11,8 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from m9_preview_workflow import (
-    brief_slides, checked_media, prepared_render_job, split_hook, job_key, pre_send_retry_job_key, run_preview,
+    brief_slides, checked_media, prepared_render_job, split_hook, job_key, pre_send_retry_job_key,
+    pre_send_retry_job_keys, run_preview,
     SupabaseGateway, RemoteError, TelegramGateway, telegram_text_chunks, validate_preview_status, preview_caption,
     safe_failure_category,
 )
@@ -328,7 +329,7 @@ class M9IntegrationContracts(unittest.TestCase):
 
     def test_renderer_revision_has_one_stable_delivery_key(self):
         key = job_key(self.brief, self.media)
-        self.assertEqual(key, f"m9:{BRIEF_ID}:render-v2:v1")
+        self.assertEqual(key, f"m9:{BRIEF_ID}:v0020000000010")
         self.assertEqual(key, job_key(self.brief, self.media))
 
     def test_refuses_unreviewed_media_or_path_traversal(self):
@@ -417,8 +418,8 @@ class M9IntegrationContracts(unittest.TestCase):
 
     @unittest.skipUnless(find_font(), "M9_TEST_FONT needed")
     def test_renderer_continues_reserved_pre_send_retry_claim(self):
-        first = pre_send_retry_job_key(self.brief)
-        retry_keys = [first, first.rsplit(":v", 1)[0] + ":v00", first.rsplit(":v", 1)[0] + ":v000"]
+        retry_keys = pre_send_retry_job_keys(self.brief)
+        self.assertEqual(retry_keys[0], pre_send_retry_job_key(self.brief))
         for index, key in enumerate(retry_keys):
             with self.subTest(key=key):
                 store, tel = FakeGateway(), FakeTelegram()

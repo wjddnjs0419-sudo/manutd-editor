@@ -11,7 +11,7 @@ from m9_run_pipeline import (
     claim_cloud_preview, command, content_slide_count, fail_unrendered_cloud_preview,
     reviewed_selections_match, require_exploration_owner_draft,
 )
-from m9_preview_workflow import job_key, pre_send_retry_job_key
+from m9_preview_workflow import job_key, pre_send_retry_job_key, pre_send_retry_job_keys
 
 
 class TestM9RunPipeline(unittest.TestCase):
@@ -78,7 +78,8 @@ class TestM9RunPipeline(unittest.TestCase):
             self.assertEqual(blocked.claimed,[])
 
         used=Remote({original:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},retry:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]}})
-        retry2=retry.rsplit(":v",1)[0]+":v00"
+        retry_keys=pre_send_retry_job_keys(brief)
+        retry2=retry_keys[1]
         self.assertEqual(claim_cloud_preview(used,brief),retry2)
         self.assertEqual(used.claimed[0][0],retry2)
         self.assertEqual(used.claimed[0][2]["retry_attempt"],2)
@@ -88,7 +89,7 @@ class TestM9RunPipeline(unittest.TestCase):
             retry:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},
             retry2:{"creative_brief_id":brief["id"],"status":"FAILED","telegram_message_ids":[]},
         })
-        retry3=retry.rsplit(":v",1)[0]+":v000"
+        retry3=retry_keys[2]
         self.assertEqual(claim_cloud_preview(used_again,brief),retry3)
         self.assertEqual(used_again.claimed[0][2]["retry_attempt"],3)
 

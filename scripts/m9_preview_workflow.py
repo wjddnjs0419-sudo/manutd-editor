@@ -35,6 +35,8 @@ from m9_content_policy import ordered_content_slides, validate_exploration_slide
 BUCKET = "manutd-card-assets"
 CTA_PATH = "assets/cta.png"
 RENDER_JOB_REVISION = "render-v2"
+RENDER_JOB_REVISION_CODE = 2
+RENDER_JOB_RETRY_SLOTS = 3
 MAX_BYTES = 12 * 1024 * 1024
 MAX_HTTP_RESPONSE_BYTES = 16 * 1024 * 1024
 UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -290,28 +292,30 @@ def job_key(brief: dict[str, Any], media: dict[str, Any]) -> str:
     brief_id = str(brief.get("id") or "")
     if not UUID.fullmatch(brief_id):
         raise ValueError("M9_CREATIVE_BRIEF_ID_REQUIRED")
-    # One private-preview delivery per renderer and brief revision. A deliberate
-    # renderer revision can be delivered once without reopening an already-sent
-    # job; rerunning this same renderer revision still hits the duplicate guard.
+    # The RPC contract accepts only m9:<uuid>:v<digits>. Pack renderer revision,
+    # saved brief revision, and a reserved retry digit into that numeric slot.
+    # This gives an intentional renderer update one fresh idempotency key while
+    # rerunning the same renderer/brief pair still hits the duplicate guard.
     revision = brief.get("version")
-    if not isinstance(revision, int) or revision < 1:
+    if not isinstance(revision, int) or revision < 1 or revision > 999_999_999:
         raise ValueError("M9_CREATIVE_BRIEF_VERSION_REQUIRED")
-    return f"m9:{brief_id}:{RENDER_JOB_REVISION}:v{revision}"
+    numeric_key = f"{RENDER_JOB_REVISION_CODE:03d}{revision:09d}0"
+    return f"m9:{brief_id}:v{numeric_key}"
 
 
 def pre_send_retry_job_key(brief: dict[str, Any]) -> str:
     """Reserved one-time key for a fresh dispatch after a confirmed pre-send failure."""
-    # Canonical brief revisions start at v1; the existing RPC accepts v0, so
-    # reserve it for this single recovery attempt without rewriting the failed row.
     base_key = job_key(brief, {})
-    return base_key.rsplit(":v", 1)[0] + ":v0"
+    prefix, suffix = base_key.rsplit(":v", 1)
+    return f"{prefix}:v{int(suffix) + 1}"
 
 
 def pre_send_retry_job_keys(brief: dict[str, Any]) -> list[str]:
     """Finite reserved keys for separately approved retries after proven pre-send failures."""
-    first = pre_send_retry_job_key(brief)
-    prefix = first.rsplit(":v", 1)[0]
-    return [first, prefix + ":v00", prefix + ":v000"]
+    base_key = job_key(brief, {})
+    prefix, suffix = base_key.rsplit(":v", 1)
+    first_retry = int(suffix) + 1
+    return [f"{prefix}:v{first_retry + attempt}" for attempt in range(RENDER_JOB_RETRY_SLOTS)]
 
 
 class RemoteError(RuntimeError):
