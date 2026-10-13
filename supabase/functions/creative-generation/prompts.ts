@@ -1,11 +1,18 @@
 import type { ContentMode, GenerationIntent, MatchPhase } from "./types.ts";
-import { DEFAULT_EXPLORATION_CONFIG, explorationSlideBounds } from "./exploration.ts";
+import {
+  DEFAULT_EXPLORATION_CONFIG,
+  explorationSlideBounds,
+} from "./exploration.ts";
 import { MANUTD_EDITOR_STYLE_INSTRUCTIONS } from "../_shared/editorial-style/manutd_editor.ts";
+import { selectManutdStyleExamples } from "../_shared/editorial-style/golden_examples.ts";
 
 const modePrompts: Record<ContentMode, string> = {
-  NEWS_UPDATE: "Write a concise Korean fan-media brief using only verified, claim-linked publisher evidence. Keep what the outlet reported separate from whether the reported event is true. Preserve every claim modality: rumors and predictions stay uncertain, denials stay denials, and opinion stays attributed. Never turn a report or rumor into a confirmed transfer. In at least one slide and in the Instagram caption, name the publisher and include the exact canonical publisher article URL. Every source item must include its evidence_id, publisher label, and URL.",
-  ANALYSIS_CONTEXT: "Write an explanatory Korean fan-media brief. Label FACT and INFERENCE claims distinctly; every inference must remain grounded in supplied evidence.",
-  MATCH_CONTENT: "Write an immediately consumable Korean match carousel. Respect the supplied match phase and only describe confirmed match evidence; never invent a lineup, event, score, or statistic.",
+  NEWS_UPDATE:
+    "Write a concise Korean fan-media brief using only verified, claim-linked publisher evidence. Keep what the outlet reported separate from whether the reported event is true. Preserve every claim modality: rumors and predictions stay uncertain, denials stay denials, and opinion stays attributed. Never turn a report or rumor into a confirmed transfer. In at least one slide and in the Instagram caption, name the publisher and include the exact canonical publisher article URL. Every source item must include its evidence_id, publisher label, and URL.",
+  ANALYSIS_CONTEXT:
+    "Write an explanatory Korean fan-media brief. Label FACT and INFERENCE claims distinctly; every inference must remain grounded in supplied evidence.",
+  MATCH_CONTENT:
+    "Write an immediately consumable Korean match carousel. Respect the supplied match phase and only describe confirmed match evidence; never invent a lineup, event, score, or statistic.",
 };
 
 export function classifierPrompt(text: string): string {
@@ -16,8 +23,23 @@ export function classifierPrompt(text: string): string {
   ].join("\n\n");
 }
 
-export function generationPrompt(mode: ContentMode, phase: MatchPhase | null, evidence: unknown, intent: GenerationIntent = "STANDARD"): string {
+export function generationPrompt(
+  mode: ContentMode,
+  phase: MatchPhase | null,
+  evidence: unknown,
+  intent: GenerationIntent = "STANDARD",
+): string {
   const slideBounds = explorationSlideBounds(mode);
+  const selectedExamples = selectManutdStyleExamples(evidence);
+  const styleExamples = [
+    "Selected Figma voice-reference style-only examples (never use these as source evidence):",
+    "Do not reuse example names, numbers, quotes, or factual claims unless independently present in Frozen evidence.",
+    ...selectedExamples.map((example, index) =>
+      `${
+        index + 1
+      }. Hook: “${example.hook}” | Type: ${example.hook_type} | Pattern: ${example.expression_pattern} | Why it works: ${example.why_it_works}`
+    ),
+  ].join("\n");
   const styleInstructions = intent === "EXPLORATION"
     ? MANUTD_EDITOR_STYLE_INSTRUCTIONS.replace(
       "Build three or four meaningful slides in this order: HOOK, CONTEXT, KEY_FACT, optional IMPLICATION.",
@@ -37,7 +59,12 @@ export function generationPrompt(mode: ContentMode, phase: MatchPhase | null, ev
   return [
     "You are a grounded Creative Director, not a reporter.",
     styleInstructions,
-    ...(intent === "EXPLORATION" ? ["For every slide, index and slide_number must both equal the one-based slide position: 1, 2, 3, and so on. Do not use zero-based indexes."] : []),
+    styleExamples,
+    ...(intent === "EXPLORATION"
+      ? [
+        "For every slide, index and slide_number must both equal the one-based slide position: 1, 2, 3, and so on. Do not use zero-based indexes.",
+      ]
+      : []),
     modeInstruction,
     `Content mode: ${mode}`,
     `Match phase: ${phase ?? "none"}`,
@@ -61,8 +88,12 @@ export function repairPrompt(
     "Repair the original output only for the listed deterministic validation errors.",
     "Do not add facts, sources, or evidence IDs. Preserve all valid content.",
     ...(intent === "EXPLORATION"
-      ? ["Retain the exact publisher name and canonical URL in a slide and caption, preserve report attribution and uncertainty/denial/opinion modality, and never upgrade a report into a confirmed event."]
-      : ["For NEWS_UPDATE, retain the exact publisher name and canonical URL in a slide and caption, preserve report attribution and the source claim's uncertainty/denial/opinion modality, and never upgrade a report into a confirmed event."]),
+      ? [
+        "Retain the exact publisher name and canonical URL in a slide and caption, preserve report attribution and uncertainty/denial/opinion modality, and never upgrade a report into a confirmed event.",
+      ]
+      : [
+        "For NEWS_UPDATE, retain the exact publisher name and canonical URL in a slide and caption, preserve report attribution and the source claim's uncertainty/denial/opinion modality, and never upgrade a report into a confirmed event.",
+      ]),
     `Validation errors: ${JSON.stringify(errors)}`,
     `Original output:\n${JSON.stringify(output)}`,
   ].join("\n\n");

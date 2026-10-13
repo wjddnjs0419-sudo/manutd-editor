@@ -260,15 +260,14 @@ def prepared_render_job(brief: dict[str, Any], media: dict[str, Any]) -> dict[st
 
 
 def _body_paragraphs(body: str) -> list[str]:
-    """Treat single newlines as soft wraps and reflow sentences as short units."""
+    """Treat single newlines as soft wraps; only blank lines split paragraphs."""
     paragraphs: list[str] = []
     normalized_body = body.replace("\r\n", "\n").replace("\r", "\n")
     for block in re.split(r"\n\s*\n", normalized_body):
         normalized = re.sub(r"\s+", " ", block).strip()
         if not normalized:
             continue
-        sentences = re.split(r"(?<=[.!?。！？])\s+", normalized)
-        paragraphs.extend(sentence.strip() for sentence in sentences if sentence.strip())
+        paragraphs.append(normalized)
     return paragraphs or [re.sub(r"\s+", " ", body).strip()]
 
 

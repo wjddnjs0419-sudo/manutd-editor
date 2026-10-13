@@ -4,7 +4,12 @@ import {
   validateManutdEditorDraft,
   type ManutdEditorCarouselDraft,
 } from "../../_shared/editorial-style/validator.ts";
-import { MANUTD_EDITOR_GOLDEN_EXAMPLES } from "../../_shared/editorial-style/golden_examples.ts";
+import {
+  inferManutdEditorialArticleType,
+  MANUTD_EDITOR_GOLDEN_EXAMPLES,
+  selectManutdStyleExamples,
+} from "../../_shared/editorial-style/golden_examples.ts";
+import { MANUTD_EDITORIAL_SELECTOR_FIXTURES } from "../../../../scripts/fixtures/m9-editorial/editorial_selector_fixtures.ts";
 
 function draft(overrides: Partial<ManutdEditorCarouselDraft> = {}): ManutdEditorCarouselDraft {
   return {
@@ -84,10 +89,46 @@ Deno.test("rejects filler-length carousels and overly long caption copy", () => 
   assert(result.errors.some((error) => error.code === "CAPTION_TOO_LONG"));
 });
 
-Deno.test("keeps golden examples isolated as style references", () => {
-  assertEquals(MANUTD_EDITOR_GOLDEN_EXAMPLES.length, 2);
+Deno.test("keeps all Figma hooks isolated as style references", () => {
+  assertEquals(MANUTD_EDITOR_GOLDEN_EXAMPLES.length, 20);
   assert(MANUTD_EDITOR_GOLDEN_EXAMPLES.every((example) => example.style_only));
   assert(MANUTD_EDITOR_GOLDEN_EXAMPLES.every((example) => example.generation_evidence_ids.length === 0));
   assert(MANUTD_EDITOR_GOLDEN_EXAMPLES.some((example) => example.slug === "sancho"));
   assert(MANUTD_EDITOR_GOLDEN_EXAMPLES.some((example) => example.slug === "garnacho"));
+});
+
+Deno.test("selects three matching style examples for fixed synthetic article fixtures", () => {
+  const examples = [
+    ...MANUTD_EDITORIAL_SELECTOR_FIXTURES.map((fixture) => ({
+      id: fixture.id,
+      input: fixture.input,
+      type: fixture.expected_type,
+      synthetic: fixture.synthetic,
+    })),
+    {
+      id: "synthetic-interview-conflict",
+      input: "[SYNTHETIC] interview quote and manager assessment",
+      type: "INTERVIEW_CONFLICT",
+      synthetic: true,
+    },
+    {
+      id: "synthetic-fan-backstage",
+      input: "[SYNTHETIC] fan reaction and stadium behind the scenes",
+      type: "FAN_BACKSTAGE",
+      synthetic: true,
+    },
+  ] as const;
+
+  for (const fixture of examples) {
+    assertEquals(fixture.synthetic, true, fixture.id);
+    assertEquals(inferManutdEditorialArticleType(fixture.input), fixture.type);
+    const selected = selectManutdStyleExamples(fixture.input);
+    assertEquals(selected.length, 3, fixture.id);
+    assert(selected.every((example) => example.article_types.includes(fixture.type)));
+    assertEquals(
+      selectManutdStyleExamples(fixture.input).map((example) => example.id),
+      selected.map((example) => example.id),
+      fixture.id,
+    );
+  }
 });

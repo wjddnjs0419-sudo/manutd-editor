@@ -114,3 +114,22 @@ Deno.test("Exploration prompt specifies the exact style gate index and role cont
     assertEquals(prompt.includes("[publisher_name] 보도에 따르면"), true);
   }
 });
+
+Deno.test("generation and repair prompts use style-only examples within the evidence boundary", async () => {
+  const { generationPrompt, repairPrompt } = await import("../../creative-generation/prompts.ts");
+  const evidence = {
+    exploration_articles: [{
+      publisher_name: "BBC Sport",
+      article_text: "Manchester United are considering a signing; no agreement is reported.",
+    }],
+  };
+  const prompt = generationPrompt("NEWS_UPDATE", null, evidence, "EXPLORATION");
+  assertEquals(prompt.includes("맨유도 영입 경쟁에 합류?"), true);
+  assertEquals(prompt.includes("style-only examples"), true);
+  assertEquals(prompt.includes("Do not reuse example names, numbers, quotes, or factual claims"), true);
+  assertEquals(prompt.includes("final content slide should end with a specific fan question"), true);
+  assertEquals(
+    repairPrompt("NEWS_UPDATE", null, evidence, {}, [], "EXPLORATION").includes("맨유도 영입 경쟁에 합류?"),
+    true,
+  );
+});

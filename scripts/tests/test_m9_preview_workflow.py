@@ -165,7 +165,7 @@ class M9IntegrationContracts(unittest.TestCase):
         p = prepared_render_job(self.brief, self.media)
         self.assertEqual(p["cover_line_one"], "맨유 경기 종료")
         self.assertEqual(p["cover_line_two"], "결과는 무승부")
-        self.assertEqual(p["body_paragraphs"], ["전반전이 종료됐다.", "후반전도 종료됐다."])
+        self.assertEqual(p["body_paragraphs"], ["전반전이 종료됐다. 후반전도 종료됐다."])
         self.assertEqual(len(p["body_slides"]), 1)
         self.assertEqual(p["cover_photo_source"], self.media["cover"]["source_url"])
 
@@ -198,6 +198,18 @@ class M9IntegrationContracts(unittest.TestCase):
         prepared = prepared_render_job(self.brief, self.media)
         self.assertEqual(prepared["body_slides"][0]["body_paragraphs"], [
             "맨유가 먼저 득점했고 토트넘은 10명으로 경기를 이어갔다."
+        ])
+
+    def test_body_conversion_keeps_sentences_together_and_only_blank_lines_split_paragraphs(self):
+        self.brief["slides_json"]["slides"][1]["body"] = (
+            "맨유가 먼저 득점했다. 토트넘은 동점골을 넣었다.\n"
+            "추가시간까지 이어진 경기였다.\n\n"
+            "다음 문단은 별도의 핵심 사실이다."
+        )
+        prepared = prepared_render_job(self.brief, self.media)
+        self.assertEqual(prepared["body_slides"][0]["body_paragraphs"], [
+            "맨유가 먼저 득점했다. 토트넘은 동점골을 넣었다. 추가시간까지 이어진 경기였다.",
+            "다음 문단은 별도의 핵심 사실이다.",
         ])
 
     def test_hook_role_is_first_and_remaining_slides_keep_index_order(self):

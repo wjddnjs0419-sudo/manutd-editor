@@ -96,6 +96,49 @@ class M9RenderSmoke(unittest.TestCase):
         self.assertEqual(settings["cover_gradient_end_opacity"], 1.0)
         self.assertEqual(report["slides"][0]["layout_template"], "COVER")
 
+    def test_manifest_reports_the_editorial_typography_and_layout_tokens(self) -> None:
+        report = render(self.data, self.root, self.root / "design-tokens", self.font,
+                        self.root / "logo.png", self.root / "cta.png",
+                        body_font_path=self.body_font)
+        tokens = report["typography"].get("design_tokens", {})
+        self.assertEqual(tokens.get("version"), "m9-editorial-v1")
+        self.assertEqual(tokens.get("canvas"), [1080, 1350])
+        self.assertEqual(tokens.get("typography"), {
+            "cover_title_px": 80,
+            "page_title_px": 60,
+            "body_px": 40,
+            "emphasis_px": 48,
+            "source_px": 20,
+        })
+        self.assertEqual(tokens.get("font_roles"), {
+            "cover_title": "PRETENDARD_BOLD",
+            "page_title": "PRETENDARD_BOLD",
+            "emphasis": "PRETENDARD_BOLD",
+            "body": "PRETENDARD_SEMIBOLD",
+            "source": "PRETENDARD_SEMIBOLD",
+        })
+        self.assertEqual(tokens.get("layout"), {
+            "content_margin_px": 80,
+            "content_width_px": 920,
+            "logo": {"x": 40, "y": 40, "width": 86, "height": 86},
+            "max_title_lines": 2,
+            "max_paragraph_lines": 2,
+        })
+        self.assertEqual(tokens.get("colors"), {
+            "text": "#FFFFFF",
+            "overlay": "#000000",
+            "accent": "#F04452",
+            "source": "#DEDEDE",
+            "eyebrow": "#F1EEEE",
+        })
+        self.assertEqual(report["typography"]["settings"]["cover_headline"], 80)
+        self.assertEqual(report["typography"]["settings"]["body_headline"], 60)
+        self.assertEqual(report["typography"]["settings"]["body_text"], 40)
+        self.assertEqual(report["typography"]["settings"]["body_highlight"], 48)
+        self.assertEqual(report["typography"]["settings"]["source_label"], 20)
+        self.assertEqual(report["slides"][0]["width"], 1080)
+        self.assertEqual(report["slides"][0]["height"], 1350)
+
     def test_role_templates_remove_visible_source_urls_but_keep_original_copy(self) -> None:
         original_body = "리그 개막 6경기에서 승점 6점을 기록했다. 출처: BBC Sport | https://news.example.org/match"
         shared_photo = {
@@ -175,6 +218,19 @@ class M9RenderSmoke(unittest.TestCase):
         self.assertIn("이 기록은 리그 시즌 첫 6경기 기준 1986-87 이후 가장 적은 승점이다.",
                       last["content"]["visible_body"])
 
+    def test_unverified_photo_credit_placeholder_is_not_rendered_as_a_credit(self) -> None:
+        self.data["body_photo_credit"] = "Photo credit: see original article"
+        self.data["body_slides"] = [{
+            "role": "CONTEXT", "body_headline": "경기 상황",
+            "body_paragraphs": ["맨유가 먼저 득점했다."],
+        }]
+        report = render(self.data, self.root, self.root / "unverified-photo-credit", self.font,
+                        None, None, body_font_path=self.body_font)
+        last = report["slides"][1]
+        self.assertNotIn("photo_credit", [row["kind"] for row in last["text_bounds"]])
+        self.assertIn("PHOTO_CREDIT_REVIEW", last["content_review_flags"])
+        self.assertEqual(last["content"]["photo_credit"], "")
+
     def test_visuals_hide_internal_roles_and_have_no_repeated_red_rules(self) -> None:
         self.data["body_slides"] = [
             {"role": "CONTEXT", "body_headline": "경기 상황",
@@ -223,6 +279,32 @@ class M9RenderSmoke(unittest.TestCase):
         paragraphs = [row for row in report["slides"][1]["text_bounds"] if row["kind"] == "paragraph"]
         self.assertTrue(all(row["bounds"][2] - row["bounds"][0] <= 872 for row in paragraphs))
         self.assertLessEqual(len(paragraphs), 2)
+
+    def test_preserves_authored_sentences_as_one_paragraph(self) -> None:
+        source_paragraph = "맨유가 먼저 득점했다. 토트넘은 추가시간 동점골을 넣었다."
+        self.data["body_slides"] = [{
+            "role": "CONTEXT", "body_headline": "추가시간에 나온 동점골",
+            "body_paragraphs": [source_paragraph],
+        }]
+        report = render(self.data, self.root, self.root / "preserve-paragraph", self.font,
+                        None, None, body_font_path=self.body_font)
+        self.assertEqual(report["slides"][1]["content"]["visible_body"], source_paragraph)
+
+    def test_long_fact_stat_is_preserved_and_flagged_for_editorial_review(self) -> None:
+        stat = "이 숫자의 의미를 확인해야 한다 " * 8
+        self.data["body_slides"] = [{
+            "role": "KEY_FACT", "body_headline": "기록의 의미",
+            "body_paragraphs": ["원문은 이 기록을 별도로 설명한다."],
+            "stat_emphasis": stat,
+        }]
+        try:
+            report = render(self.data, self.root, self.root / "long-stat-review", self.font,
+                            None, None, body_font_path=self.body_font)
+        except ValueError as exc:
+            self.fail(f"Long stat emphasis should be flagged for review, not rejected: {exc}")
+        slide = report["slides"][1]
+        self.assertIn("STAT_EMPHASIS_REVIEW", slide["content_review_flags"])
+        self.assertEqual(slide["stat_emphasis"], stat)
 
     def test_cover_manifest_reports_only_cleaned_text_drawn_on_cover(self) -> None:
         source_headline = "맨유 복귀 | 출처: BBC Sport https://bbc.example/story"

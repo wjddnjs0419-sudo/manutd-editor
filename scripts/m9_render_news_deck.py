@@ -16,37 +16,14 @@ import re
 import shutil
 from pathlib import Path
 from PIL import Image, ImageColor, ImageDraw, ImageFont, ImageOps
+from m9_design_tokens import COLORS, DESIGN_TOKENS, OVERLAYS, SIZE, TYPE
 from m9_photo_analysis import (
     CropPlan, NormalizedFace, analyze_photo, apply_crop, load_crop_policy,
 )
 from m9_content_policy import validate_exploration_slide_count
 
-SIZE = (1080, 1350)
-YELLOW = "#FAC600"
-MUTD_RED = "#F04452"
 W, H = SIZE
-TYPE = {
-    "cover_label": 26,
-    "cover_headline": 94,
-    "cover_highlight": 52,
-    "body_headline": 70,
-    "body_text": 43,
-    "body_highlight": 45,
-    "fact_stat": 96,
-    "analysis_note": 38,
-    "body_line_advance": 60,
-    "paragraph_spacing": 16,
-    "highlight_line_advance": 64,
-    "text_margin": 80,
-    "cover_text_margin": 40,
-    "safe_text_bottom": 1110,
-    "body_overlay_opacity": 179,
-    "cover_gradient_start_y": round(H * 0.42),
-    "cover_gradient_mid_y": round(H * 0.72),
-    "cover_gradient_start_opacity": 0.0,
-    "cover_gradient_mid_opacity": 0.45,
-    "cover_gradient_end_opacity": 1.0,
-}
+MUTD_RED = COLORS["accent"]
 
 def font(path: str, point_size: int) -> ImageFont.FreeTypeFont:
     if not Path(path).is_file():
@@ -408,14 +385,16 @@ def render_cover(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
             raise FileNotFoundError(logo_path)
         with Image.open(logo_path) as opened:
             logo = opened.convert("RGBA")
-        logo.thumbnail((104, 104), Image.Resampling.LANCZOS)
-        im.alpha_composite(logo, (40, 40))
+        logo.thumbnail((TYPE["logo_width"], TYPE["logo_height"]), Image.Resampling.LANCZOS)
+        im.alpha_composite(logo, (TYPE["logo_x"], TYPE["logo_y"]))
     if label:
         label_font = ImageFont.truetype(face.path, TYPE["cover_label"])
-        draw_cover(label[:48], (TYPE["cover_text_margin"], 950), label_font, "#f1eeee", "eyebrow")
+        draw_cover(label, (TYPE["cover_text_margin"], 950), label_font,
+                   COLORS["eyebrow"], "eyebrow")
     title_y = 1010 if len(title_lines) + len(support_lines) > 1 else 1050
     for line in title_lines:
-        draw_cover(line, (TYPE["cover_text_margin"], title_y), title_font, "#ffffff", "headline")
+        draw_cover(line, (TYPE["cover_text_margin"], title_y), title_font,
+                   COLORS["text"], "headline")
         title_y += 104
     for line in support_lines:
         draw_cover(line, (TYPE["cover_text_margin"], title_y), support_font, MUTD_RED, "highlight")
@@ -457,11 +436,7 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
     im = full_bleed(source, crop=selected_crop, centering=centering)
     role = str(data.get("role") or "BODY").strip().upper()
     template = {"KEY_FACT": "FACT", "CONTEXT": "CONTEXT", "IMPLICATION": "ANALYSIS"}.get(role, "CONTEXT")
-    overlay_top, overlay_bottom = {
-        "FACT": (0.42, 0.68),
-        "CONTEXT": (0.52, 0.74),
-        "ANALYSIS": (0.48, 0.78),
-    }[template]
+    overlay_top, overlay_bottom = OVERLAYS["body_template_alpha"][template]
     overlay = Image.new("RGBA", SIZE, (0, 0, 0, 0))
     alpha = Image.new("L", SIZE, 0)
     alpha_draw = ImageDraw.Draw(alpha)
@@ -482,7 +457,7 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
         contrast = _contrast_ratio(im, bounds, fill)
         if contrast < 3.0:
             if fill.lower() == MUTD_RED.lower():
-                fill = "#ffffff"
+                fill = COLORS["text"]
                 contrast = _contrast_ratio(im, bounds, fill)
             if contrast < 3.0:
                 raise ValueError("M9_BODY_TEXT_CONTRAST_TOO_LOW")
@@ -498,8 +473,8 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
     headline = headline_after_attribution
     if not headline:
         raise ValueError("M9_BODY_HEADLINE_REQUIRED")
-    content_width = W - (TYPE["text_margin"] * 2)
-    headline_size = {"FACT": 48, "CONTEXT": 50, "ANALYSIS": 54}[template]
+    content_width = TYPE["content_width"]
+    headline_size = TYPE["body_headline"]
     heading_font = ImageFont.truetype((heading_face or face).path, headline_size)
     headline_lines = wrap_text(draw, headline, heading_font, content_width)
     paragraphs = []
@@ -512,8 +487,7 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
         cleaned = visible_value
         if cleaned:
             normalized = re.sub(r"\s+", " ", cleaned).strip()
-            paragraphs.extend(part.strip() for part in re.split(r"(?<=[.!?。！？])\s+", normalized)
-                              if part.strip())
+            paragraphs.append(normalized)
     source_body = data.get("source_body")
     if not isinstance(source_body, str):
         source_body = "\n".join(str(value) for value in data.get("body_paragraphs", []))
@@ -534,58 +508,51 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
     sentence_text = " ".join(paragraphs)
     sentence_count = len(re.findall(r"[.!?。](?=[\s\"'”’」』)\]]|$)", sentence_text))
     content_review_flags: list[str] = []
-    if len(headline_lines) > 2:
+    if len(headline_lines) > TYPE["max_title_lines"]:
         content_review_flags.append("HEADLINE_LENGTH_REVIEW")
     if sentence_count > 2:
         content_review_flags.append("BODY_SENTENCE_LIMIT_REVIEW")
 
     if template == "FACT":
-        headline_y, content_y, body_font_size, highlight_y_gap = 300, 650, 29, 12
-        highlight_font_size, highlight_line_advance = 34, 40
-    elif template == "ANALYSIS":
-        headline_y, content_y, body_font_size, highlight_y_gap = 300, 500, 34, 24
-        highlight_font_size, highlight_line_advance = TYPE["body_highlight"], TYPE["highlight_line_advance"]
+        headline_y, content_y, body_font_size, highlight_y_gap = 300, 650, TYPE["body_text"], 12
     else:
-        headline_y, content_y, body_font_size, highlight_y_gap = 300, 500, 36, 24
-        highlight_font_size, highlight_line_advance = TYPE["body_highlight"], TYPE["highlight_line_advance"]
+        headline_y, content_y, body_font_size, highlight_y_gap = 300, 500, TYPE["body_text"], 24
+    highlight_font_size = TYPE["body_highlight"]
+    highlight_line_advance = TYPE["highlight_line_advance"]
 
     heading_y = headline_y
     for line in headline_lines:
         if measure(draw, line, heading_font) > content_width:
             content_review_flags.append("HEADLINE_WORD_WIDTH_REVIEW")
-        draw_content(line, (TYPE["text_margin"], heading_y), heading_font, "#ffffff", "headline")
+        draw_content(line, (TYPE["text_margin"], heading_y), heading_font,
+                     COLORS["text"], "headline")
         heading_y += heading_font.size + 10
 
     if template == "FACT":
         stat, stat_cleaned = _clean_source_markup(data.get("stat_emphasis", ""))
         source_markup_removed = source_markup_removed or stat_cleaned
         if stat:
-            stat_font = ImageFont.truetype((heading_face or face).path, 74)
+            stat_font = ImageFont.truetype((heading_face or face).path, TYPE["fact_stat"])
             stat_lines = wrap_text(draw, stat, stat_font, content_width)
-            if len(stat_lines) > 1:
-                stat_font = ImageFont.truetype((heading_face or face).path, 62)
-                stat_lines = wrap_text(draw, stat, stat_font, content_width)
-            if len(stat_lines) > 2:
-                stat_font = ImageFont.truetype((heading_face or face).path, 52)
-                stat_lines = wrap_text(draw, stat, stat_font, content_width)
-            if len(stat_lines) > 2:
-                raise ValueError("M9_FACT_STAT_TOO_LONG")
-            stat_y = max(450, heading_y + 18)
-            for line in stat_lines:
-                origin = (TYPE["text_margin"] + 16, stat_y)
-                bounds = draw.textbbox(origin, line, font=stat_font)
-                panel = (bounds[0] - 12, bounds[1] - 8, bounds[2] + 12, bounds[3] + 8)
-                draw.rounded_rectangle(panel, radius=16, fill=MUTD_RED)
-                draw_content(line, origin, stat_font, "#ffffff", "stat")
-                stat_y = bounds[3] + 20
-            content_y = max(content_y, stat_y + 12)
+            if len(stat_lines) > TYPE["max_title_lines"]:
+                content_review_flags.append("STAT_EMPHASIS_REVIEW")
+            else:
+                stat_y = max(450, heading_y + 18)
+                for line in stat_lines:
+                    origin = (TYPE["text_margin"] + 16, stat_y)
+                    bounds = draw.textbbox(origin, line, font=stat_font)
+                    panel = (bounds[0] - 12, bounds[1] - 8, bounds[2] + 12, bounds[3] + 8)
+                    draw.rounded_rectangle(panel, radius=16, fill=MUTD_RED)
+                    draw_content(line, origin, stat_font, COLORS["text"], "stat")
+                    stat_y = bounds[3] + 20
+                content_y = max(content_y, stat_y + 12)
 
     body_font = ImageFont.truetype(face.path, body_font_size)
     wrapped_paragraphs = [wrap_text(draw, value, body_font, content_width) for value in paragraphs]
     line_count = sum(len(lines) for lines in wrapped_paragraphs)
     if line_count > 6:
         content_review_flags.append("BODY_DENSITY_REVIEW")
-    if any(len(lines) > 2 for lines in wrapped_paragraphs):
+    if any(len(lines) > TYPE["max_paragraph_lines"] for lines in wrapped_paragraphs):
         content_review_flags.append("PARAGRAPH_LENGTH_REVIEW")
     if any(measure(draw, line, body_font) > content_width
            for lines in wrapped_paragraphs for line in lines):
@@ -595,7 +562,8 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
     paragraph_gap = 12 if template == "CONTEXT" else (0 if template == "FACT" else 8)
     for paragraph_index, lines in enumerate(wrapped_paragraphs):
         for line in lines:
-            draw_content(line, (TYPE["text_margin"], y), body_font, "#ffffff", "paragraph")
+            draw_content(line, (TYPE["text_margin"], y), body_font,
+                         COLORS["text"], "paragraph")
             y += line_advance
         if paragraph_index < len(wrapped_paragraphs) - 1:
             y += paragraph_gap
@@ -622,7 +590,7 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
                     content_review_flags.append("ANALYSIS_NOTE_REVIEW")
                     break
                 draw_content(line, (TYPE["text_margin"], note_top + index * (note_font.size + 10)),
-                             note_font, "#ffffff", "analysis_note")
+                             note_font, COLORS["text"], "analysis_note")
             else:
                 visible_closing_line = closing_line
     if any(box["bounds"][0] < 0 or box["bounds"][1] < 0 or box["bounds"][2] > W
@@ -637,39 +605,43 @@ def render_body(source: Image.Image, data: dict, face: ImageFont.FreeTypeFont,
             raise FileNotFoundError(logo_path)
         with Image.open(logo_path) as opened:
             logo = opened.convert("RGBA")
-        logo.thumbnail((104, 104), Image.Resampling.LANCZOS)
-        im.alpha_composite(logo, (40, 40))
+        logo.thumbnail((TYPE["logo_width"], TYPE["logo_height"]), Image.Resampling.LANCZOS)
+        im.alpha_composite(logo, (TYPE["logo_x"], TYPE["logo_y"]))
     draw = ImageDraw.Draw(im)
     source_label = _source_label(data)
     raw_credit = str(data.get("body_photo_credit") or "").strip()
     photo_credit = re.sub(r"^(?:PHOTO(?:\s+CREDIT)?|사진(?:\s*크레딧)?)\s*[:：]\s*", "", raw_credit,
                           flags=re.IGNORECASE).strip()
+    if re.fullmatch(r"(?:see\s+)?original\s+article", photo_credit, re.IGNORECASE):
+        photo_credit = ""
     if data.get("is_last_content_page"):
-        source_font = ImageFont.truetype(face.path, 21)
-        source_origin = (TYPE["text_margin"], 1268)
+        source_font = ImageFont.truetype(face.path, TYPE["source_label"])
+        source_origin = (TYPE["text_margin"], TYPE["source_y"])
         source_bounds = draw.textbbox(source_origin, source_label, font=source_font)
         if source_bounds[2] - source_bounds[0] > content_width:
             content_review_flags.append("SOURCE_LABEL_REVIEW")
         else:
-            source_contrast = _contrast_ratio(im, source_bounds, "#dedede")
+            source_contrast = _contrast_ratio(im, source_bounds, COLORS["muted"])
             if source_contrast < 3.0:
                 raise ValueError("M9_BODY_TEXT_CONTRAST_TOO_LOW")
-            draw.text(source_origin, source_label, font=source_font, fill="#dedede")
+            draw.text(source_origin, source_label, font=source_font, fill=COLORS["muted"])
             text_bounds.append({"kind": "source", "origin": list(source_origin),
                                 "bounds": list(source_bounds),
                                 "contrast_ratio": round(source_contrast, 2)})
-        if photo_credit:
+        if not photo_credit:
+            content_review_flags.append("PHOTO_CREDIT_REVIEW")
+        else:
             credit_text = f"사진: {photo_credit}"
-            credit_font = ImageFont.truetype(face.path, 18)
-            credit_origin = (TYPE["text_margin"], 1310)
+            credit_font = ImageFont.truetype(face.path, TYPE["photo_credit"])
+            credit_origin = (TYPE["text_margin"], TYPE["photo_credit_y"])
             credit_bounds = draw.textbbox(credit_origin, credit_text, font=credit_font)
             if credit_bounds[2] - credit_bounds[0] > content_width or credit_bounds[3] > H:
                 content_review_flags.append("PHOTO_CREDIT_REVIEW")
             else:
-                credit_contrast = _contrast_ratio(im, credit_bounds, "#dedede")
+                credit_contrast = _contrast_ratio(im, credit_bounds, COLORS["muted"])
                 if credit_contrast < 3.0:
                     raise ValueError("M9_BODY_TEXT_CONTRAST_TOO_LOW")
-                draw.text(credit_origin, credit_text, font=credit_font, fill="#dedede")
+                draw.text(credit_origin, credit_text, font=credit_font, fill=COLORS["muted"])
                 text_bounds.append({"kind": "photo_credit", "origin": list(credit_origin),
                                     "bounds": list(credit_bounds),
                                     "contrast_ratio": round(credit_contrast, 2)})
@@ -1095,6 +1067,7 @@ def render(job: dict, workdir: Path, output_dir: Path,
             "cover_font_role": "BOLD_FACE_FONT",
             "body_headline_font_role": "BOLD_HEADING_FONT",
             "body_font_role": "SEMIBOLD_BODY_FONT",
+            "design_tokens": DESIGN_TOKENS,
             "configured_cover_font": Path(face_path).name,
             "configured_body_font": Path(body_font_path or face_path).name,
             "settings": TYPE,
