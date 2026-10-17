@@ -111,8 +111,17 @@ function publisherUrl(value: unknown): string | null {
   }
 }
 
-function validateResult(value: unknown): JsonObject | null {
-  if (!object(value) || typeof value.id !== "string" || !UUID.test(value.id)) return null;
+type ResultValidation =
+  | { readonly result: JsonObject; readonly reason: null }
+  | { readonly result: null; readonly reason: string };
+
+function invalidResult(reason: string): ResultValidation {
+  return { result: null, reason };
+}
+
+function validateResult(value: unknown): ResultValidation {
+  if (!object(value)) return invalidResult("INVALID_RESULT_OBJECT");
+  if (typeof value.id !== "string" || !UUID.test(value.id)) return invalidResult("INVALID_RESULT_ID");
   if (
     typeof value.url_resolution_status !== "string" ||
     !URL_STATUS.has(value.url_resolution_status) ||
@@ -120,34 +129,47 @@ function validateResult(value: unknown): JsonObject | null {
     !FETCH_STATUS.has(value.article_fetch_status) ||
     typeof value.article_extraction_status !== "string" ||
     !EXTRACTION_STATUS.has(value.article_extraction_status)
-  ) return null;
+  ) return invalidResult("INVALID_RESULT_STATUS");
   if (value.safe_error_category !== null &&
-    (typeof value.safe_error_category !== "string" || !SAFE_ERRORS.has(value.safe_error_category))) return null;
+    (typeof value.safe_error_category !== "string" || !SAFE_ERRORS.has(value.safe_error_category))) {
+    return invalidResult("INVALID_RESULT_ERROR_CATEGORY");
+  }
   const resolution = value.url_resolution_status;
   const resolved = resolution === "RESOLVED" ? publisherUrl(value.resolved_publisher_url) : null;
-  if (resolution === "RESOLVED" && !resolved) return null;
-  if (resolution !== "RESOLVED" && value.resolved_publisher_url !== null) return null;
+  if (resolution === "RESOLVED" && !resolved) return invalidResult("UNSAFE_RESOLVED_PUBLISHER_URL");
+  if (resolution !== "RESOLVED" && value.resolved_publisher_url !== null) {
+    return invalidResult("PUBLISHER_URL_WITHOUT_RESOLUTION");
+  }
   const finalUrl = value.article_final_url === null ? null : publisherUrl(value.article_final_url);
-  if (value.article_final_url !== null && !finalUrl) return null;
+  if (value.article_final_url !== null && !finalUrl) return invalidResult("UNSAFE_ARTICLE_FINAL_URL");
   const excerpt = value.article_content_excerpt;
-  if (excerpt !== null && (typeof excerpt !== "string" || excerpt.length > ARTICLE_EXCERPT_LIMIT)) return null;
+  if (excerpt !== null && (typeof excerpt !== "string" || excerpt.length > ARTICLE_EXCERPT_LIMIT)) {
+    return invalidResult("INVALID_ARTICLE_EXCERPT");
+  }
   if (value.article_extraction_status === "EXTRACTED" &&
-    (typeof excerpt !== "string" || excerpt.trim() === "")) return null;
-  if (value.article_extraction_status !== "EXTRACTED" && excerpt !== null) return null;
+    (typeof excerpt !== "string" || excerpt.trim() === "")) {
+    return invalidResult("EMPTY_EXTRACTED_ARTICLE_BODY");
+  }
+  if (value.article_extraction_status !== "EXTRACTED" && excerpt !== null) {
+    return invalidResult("EXCERPT_WITHOUT_EXTRACTION");
+  }
   if (resolution !== "RESOLVED" && (
     value.article_fetch_status !== "NOT_ATTEMPTED" ||
     value.article_extraction_status !== "NOT_ATTEMPTED" ||
     value.article_final_url !== null || excerpt !== null
-  )) return null;
+  )) return invalidResult("ARTICLE_FETCH_WITHOUT_RESOLUTION");
   return {
-    id: value.id,
-    url_resolution_status: resolution,
-    resolved_publisher_url: resolved,
-    article_fetch_status: value.article_fetch_status,
-    article_extraction_status: value.article_extraction_status,
-    article_final_url: finalUrl,
-    article_content_excerpt: excerpt,
-    safe_error_category: value.safe_error_category,
+    reason: null,
+    result: {
+      id: value.id,
+      url_resolution_status: resolution,
+      resolved_publisher_url: resolved,
+      article_fetch_status: value.article_fetch_status,
+      article_extraction_status: value.article_extraction_status,
+      article_final_url: finalUrl,
+      article_content_excerpt: excerpt,
+      safe_error_category: value.safe_error_category,
+    },
   };
 }
 
@@ -253,14 +275,25 @@ export function createGnewsResolverApiHandler(options: GnewsResolverApiOptions):
       };
     } else if (payload.action === "complete") {
       if (typeof payload.lease_id !== "string" || !UUID.test(payload.lease_id)) return json({ error: "INVALID_LEASE_ID" }, 400);
-      if (!Array.isArray(payload.results) || payload.results.length > MAX_BATCH_SIZE) return json({ error: "INVALID_RESULTS" }, 400);
+      if (!Array.isArray(payload.results)) return json({ error: "INVALID_RESULTS" }, 400);
+      if (payload.results.length > MAX_BATCH_SIZE) {
+        return json({ error: "INVALID_RESULTS", invalid_results: [{ index: null, reason: "RESULT_BATCH_TOO_LARGE" }] }, 400);
+      }
       if (!Array.isArray(payload.unprocessed_ids) || payload.unprocessed_ids.length > MAX_BATCH_SIZE ||
         payload.unprocessed_ids.some((id) => typeof id !== "string" || !UUID.test(id)) ||
         new Set(payload.unprocessed_ids).size !== payload.unprocessed_ids.length) return json({ error: "INVALID_UNPROCESSED_IDS" }, 400);
       const unprocessedIds = payload.unprocessed_ids as string[];
-      const results = payload.results.map(validateResult);
-      if (results.some((result) => result === null) ||
-        new Set(results.map((result) => result!.id)).size !== results.length) return json({ error: "INVALID_RESULTS" }, 400);
+      const validatedResults = payload.results.map(validateResult);
+      const invalidResults = validatedResults.flatMap((validation, index) =>
+        validation.result === null ? [{ index, reason: validation.reason }] : []
+      );
+      const results = validatedResults.flatMap((validation) =>
+        validation.result === null ? [] : [validation.result]
+      );
+      if (invalidResults.length > 0) return json({ error: "INVALID_RESULTS", invalid_results: invalidResults.slice(0, 5) }, 400);
+      if (new Set(results.map((result) => result.id)).size !== results.length) {
+        return json({ error: "INVALID_RESULTS", invalid_results: [{ index: null, reason: "DUPLICATE_RESULT_ID" }] }, 400);
+      }
       if (results.some((result) => result !== null && unprocessedIds.includes(String(result.id)))) return json({ error: "DUPLICATE_RESULT_ID" }, 400);
       const cooldown = payload.global_cooldown_seconds;
       if (!Number.isInteger(cooldown) || (cooldown as number) < 0 || (cooldown as number) > MAX_COOLDOWN_SECONDS) return json({ error: "INVALID_COOLDOWN" }, 400);

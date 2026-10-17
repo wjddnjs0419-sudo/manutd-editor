@@ -306,6 +306,8 @@ class GNewsResolverWorkerTests(unittest.TestCase):
     def test_api_rejections_report_only_allowlisted_error_codes(self):
         payloads = [
             b'{"error":"INVALID_RESULTS","message":"worker-token must not leak"}',
+            b'{"error":"INVALID_RESULTS","invalid_results":[{"index":0,"reason":"EMPTY_EXTRACTED_ARTICLE_BODY","excerpt":"private article text"}]}',
+            b'{"error":"INVALID_RESULTS","invalid_results":[{"index":0,"reason":"untrusted server detail","excerpt":"private article text"}]}',
             b'{"error":"untrusted server detail"}',
             b"not-json",
         ]
@@ -313,6 +315,8 @@ class GNewsResolverWorkerTests(unittest.TestCase):
         for payload, expected in zip(
             payloads,
             (
+                "RESOLVER_API_REJECTED:INVALID_RESULTS",
+                "RESOLVER_API_REJECTED:INVALID_RESULTS:RESULT_0:EMPTY_EXTRACTED_ARTICLE_BODY",
                 "RESOLVER_API_REJECTED:INVALID_RESULTS",
                 "RESOLVER_API_REJECTED",
                 "RESOLVER_API_REJECTED",
@@ -334,6 +338,7 @@ class GNewsResolverWorkerTests(unittest.TestCase):
                     api.claim("workflow-run:attempt-1:claim", 30)
                 self.assertEqual(str(raised.exception), expected)
                 self.assertNotIn("worker-token", str(raised.exception))
+                self.assertNotIn("private article text", str(raised.exception))
 
     def test_claim_defaults_to_recent_and_backfill_is_explicit_and_bounded(self):
         payloads = []
