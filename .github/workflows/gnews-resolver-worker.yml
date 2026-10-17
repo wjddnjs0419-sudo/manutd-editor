@@ -1,6 +1,11 @@
 name: Google News publisher resolver
 
 on:
+  schedule:
+    # Resolve newly observed Google News links during each hourly cycle.
+    - cron: "12 * * * *"
+    # Spend a separate bounded batch on older pending observations.
+    - cron: "42 * * * *"
   workflow_dispatch:
     inputs:
       run_resolver:
@@ -41,7 +46,7 @@ jobs:
         run: python -m unittest scripts.test_gnews_decoder_poc scripts.test_gnews_resolver_worker scripts.tests.test_m9_source_request_from_brief -v
 
   resolve-one-batch:
-    if: inputs.run_resolver
+    if: ${{ github.event_name == 'schedule' || inputs.run_resolver }}
     needs: offline-checks
     runs-on: ubuntu-latest
     environment: gnews-resolver
@@ -50,7 +55,7 @@ jobs:
       GNEWS_RESOLVER_ENABLED: "true"
       GNEWS_RESOLVER_API_URL: ${{ secrets.GNEWS_RESOLVER_API_URL }}
       GNEWS_RESOLVER_WORKER_TOKEN: ${{ secrets.GNEWS_RESOLVER_WORKER_TOKEN }}
-      RESOLVER_MODE: ${{ inputs.resolver_mode }}
+      RESOLVER_MODE: ${{ inputs.resolver_mode || (github.event.schedule == '42 * * * *' && 'backfill') || 'recent' }}
       GITHUB_RUN_IDENTIFIER: github-${{ github.run_id }}:${{ github.run_attempt }}
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
