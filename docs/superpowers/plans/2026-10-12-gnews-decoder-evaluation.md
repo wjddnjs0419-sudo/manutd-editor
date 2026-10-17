@@ -17,7 +17,7 @@
 - Use `decode_many()` with concurrency 2; stop without retries on HTTP 429.
 - Fetch no more than 10 publisher pages, with HTTPS-only bounded response reads and at most 3 manually checked redirects.
 - Keep the Google URL when conversion fails; never pass it off as a publisher URL or extracted article text.
-- Do not alter Google News/GDELT settings, schedules, deployment, or M8/M9 pipelines.
+- Do not alter Google News settings, schedules, deployment, or M8/M9 pipelines.
 - Do not expose credentials or database passwords.
 
 ## Review Focus

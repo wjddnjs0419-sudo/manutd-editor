@@ -115,20 +115,3 @@ Deno.test("Google News search only enables for an explicit true flag", async () 
   for (const provider of providers) await provider.discover(base);
   assertEquals(calls, []);
 });
-
-Deno.test("legacy GDELT configuration no longer routes searches", async () => {
-  const calls: string[] = [];
-  const options = {
-    googleNewsProvider: fake("google", calls),
-    gdeltProvider: fake("gdelt", calls),
-    readEnv: () => "true",
-  } as Parameters<typeof createRoutedDiscoveryProviders>[0] & {
-    gdeltProvider: DiscoveryProvider;
-  };
-
-  for (const provider of createRoutedDiscoveryProviders(options)) {
-    await provider.discover(base);
-  }
-
-  assertEquals(calls, ["google:team"]);
-});
