@@ -1,6 +1,7 @@
 import type { TelegramClient, TelegramInlineKeyboardMarkup } from "./telegram_client.ts";
 import { displayStoryTitle } from "../m8/story_display.ts";
 import { renderEditorialStoryAlert } from "../../telegram-alerts/editorial_alerts.ts";
+import { renderEditorialDigest } from "../../telegram-alerts/editorial_digest.ts";
 
 export interface CandidateAlertState {
   first_mover_flag: boolean;
@@ -33,6 +34,8 @@ export interface PendingAlert {
   event_type: string;
   payload: Record<string, unknown>;
   thread_id?: string | null;
+  attempt_count?: number;
+  max_attempt_count?: number;
 }
 
 export interface IntelligenceSummaryStory {
@@ -113,6 +116,7 @@ export interface AlertDispatchDependencies {
 }
 
 function defaultAlert(alert: PendingAlert): RenderedAlert {
+  if (alert.event_type === "EDITORIAL_DIGEST") return renderEditorialDigest(alert.payload);
   if (alert.event_type === "INTELLIGENCE_COMPLETE") {
     const payload = alert.payload;
     const stories = Array.isArray(payload.stories) ? payload.stories.filter((value): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)).flatMap((value) => {
