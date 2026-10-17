@@ -14,6 +14,7 @@ Deno.test("does not count standalone fact sources against intelligence readiness
   assertEquals(countReadinessCandidates([
     { candidate_type: "SOCIAL" },
     { candidate_type: "FACT_SOURCE" },
+    { candidate_type: "SOCIAL", readiness_counted: false },
   ]), 1);
 });
 

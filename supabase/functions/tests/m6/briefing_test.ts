@@ -82,6 +82,9 @@ Deno.test("freezes standalone fact source metadata for Telegram rendering", () =
       first_mover_flag: false,
       must_cover_flag: false,
       creative_status: "NOT_REQUESTED",
+      story_cluster_id: "cluster-a",
+      editorial_rank: 4,
+      editorial_score: 82.75,
       representative: null,
       title: "Manchester United announce an official update",
       source_name: "Manchester United",
@@ -93,4 +96,19 @@ Deno.test("freezes standalone fact source metadata for Telegram rendering", () =
   assertEquals(saved.items[0]?.title, "Manchester United announce an official update");
   assertEquals(saved.items[0]?.source_name, "Manchester United");
   assertEquals(saved.items[0]?.source_url, "https://www.manutd.com/en/news/example");
+  assertEquals(saved.items[0]?.editorial_rank, 4);
+  assertEquals(saved.items[0]?.editorial_score, 82.75);
+});
+
+Deno.test("selectBriefingCandidates deduplicates stories and canonical URLs, then spreads publisher links", () => {
+  const selected = selectBriefingCandidates([
+    { candidate_id: "bbc-a", story_cluster_id: "cluster-a", editorial_rank: 1, grounding_status: "VERIFIED", news_eligible: true, source_name: "BBC Sport", source_url: "https://www.bbc.co.uk/sport/story?a=1&utm_source=google#1" },
+    { candidate_id: "bbc-a-duplicate", story_cluster_id: "cluster-a", editorial_rank: 2, grounding_status: "VERIFIED", news_eligible: true, source_name: "BBC Sport", source_url: "https://www.bbc.co.uk/sport/story?a=1&utm_medium=rss#0" },
+    { candidate_id: "bbc-b", story_cluster_id: "cluster-b", editorial_rank: 3, grounding_status: "VERIFIED", news_eligible: true, source_name: "BBC Sport", source_url: "https://www.bbc.co.uk/sport/another-story" },
+    { candidate_id: "unlinked", story_cluster_id: "cluster-unlinked", editorial_rank: 3, grounding_status: "VERIFIED", news_eligible: true },
+    { candidate_id: "yahoo-a", story_cluster_id: "cluster-c", editorial_rank: 4, grounding_status: "VERIFIED", news_eligible: true, source_name: "Yahoo Sports", source_url: "https://sports.yahoo.com/article/one" },
+    { candidate_id: "sky-a", story_cluster_id: "cluster-d", editorial_rank: 5, grounding_status: "VERIFIED", news_eligible: true, source_name: "Sky Sports", source_url: "https://www.skysports.com/article/two" },
+  ]);
+
+  assertEquals(selected.map((candidate) => candidate.candidate_id), ["bbc-a", "yahoo-a", "sky-a", "bbc-b", "unlinked"]);
 });

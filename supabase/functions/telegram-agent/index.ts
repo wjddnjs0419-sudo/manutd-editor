@@ -576,7 +576,7 @@ async function commandReply(command: ParsedCommand, thread: ThreadRow): Promise<
     const visibleRows = selectBriefingCandidates(rows);
     const snapshot = snapshotCurrentCandidates(briefingDate, visibleRows);
     await saveCurrentSnapshot(thread, snapshot);
-    return formatCurrentReply({ briefingDate, readiness, candidateCount: visibleRows.length, items: snapshot.items.map((item) => ({ position: item.position, candidateId: item.candidate_id, priorityScore: item.priority_score, username: item.reference_username, title: item.title, sourceName: item.source_name })) });
+    return formatCurrentReply({ briefingDate, readiness, candidateCount: visibleRows.length, items: snapshot.items.map((item) => ({ position: item.position, candidateId: item.candidate_id, priorityScore: item.priority_score, editorialRank: item.editorial_rank, editorialScore: item.editorial_score, username: item.reference_username, title: item.title, sourceName: item.source_name, sourceUrl: item.source_url })) });
   }
   if (command.type === "STATUS") return thread.active_candidate_id ? `현재 후보 ${thread.active_candidate_id}의 최신 상태를 확인하세요.` : thread.active_source_observation_id ? `현재 사실 소스 ${thread.active_source_observation_id}를 확인하세요.` : "활성 후보가 없습니다. /today 또는 /open으로 시작하세요.";
   if (command.type === "BACK") return "이전 작업 맥락으로 돌아갔습니다.";

@@ -7,7 +7,7 @@ Deno.test("current command reports live candidate state and positions", () => {
     readiness: "READY_WITH_CANDIDATES",
     candidateCount: 17,
     items: [
-      { position: 1, candidateId: "candidate-1", priorityScore: 20, username: "utdreport" },
+      { position: 1, candidateId: "candidate-1", priorityScore: 20, editorialRank: 1, editorialScore: 91.25, username: "utdreport", sourceUrl: "https://www.bbc.com/sport/story" },
       { position: 2, candidateId: "candidate-2", priorityScore: 18, username: "utddistrict" },
     ],
   });
@@ -16,6 +16,8 @@ Deno.test("current command reports live candidate state and positions", () => {
   assert(result.includes("현재 후보 17건"));
   assert(result.includes("/open 1"));
   assert(result.includes("@utdreport"));
+  assert(result.includes("Editorial 91.3/100 · Rank 1"));
+  assert(result.includes("https://www.bbc.com/sport/story"));
 });
 
 Deno.test("current command reports readiness blockers without pretending candidates exist", () => {
@@ -28,8 +30,10 @@ Deno.test("current command includes standalone fact source title and source name
     briefingDate: "2026-09-21",
     readiness: "READY_WITH_CANDIDATES",
     candidateCount: 1,
-    items: [{ position: 1, candidateId: "source:observation-1", priorityScore: null, username: null, title: "Manchester United announce an official update", sourceName: "Manchester United" }],
+    items: [{ position: 1, candidateId: "source:observation-1", priorityScore: null, editorialRank: 1, editorialScore: 82, username: null, title: "Manchester United announce an official update", sourceName: "Manchester United", sourceUrl: "https://www.manutd.com/en/news/example" }],
   });
   assert(result.includes("Manchester United announce an official update"));
   assert(result.includes("· Manchester United"));
+  assert(result.includes("Editorial 82.0/100 · Rank 1"));
+  assert(result.includes("https://www.manutd.com/en/news/example"));
 });
