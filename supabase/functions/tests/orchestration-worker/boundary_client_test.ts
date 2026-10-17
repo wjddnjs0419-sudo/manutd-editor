@@ -106,6 +106,41 @@ Deno.test("boundary client maps all job types to existing endpoints and secrets"
   assert.equal(JSON.stringify(calls).includes("service-role"), false);
 });
 
+Deno.test("hourly editorial digest uses the existing Telegram alerts endpoint and fixed KST window", async () => {
+  const calls: Array<{ url: string; authorization: string; body: unknown }> = [];
+  const invoker = createBoundaryInvoker({
+    functionsUrl: "https://supabase.test/functions/v1",
+    collectorSecret: "collector-secret",
+    telegramSecret: "telegram-secret",
+    request: async (input, init) => {
+      const headers = new Headers(init?.headers);
+      calls.push({
+        url: String(input),
+        authorization: headers.get("authorization") ?? "",
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return response({ status: "completed" });
+    },
+  });
+  const jobType: EditorialJobType = "EDITORIAL_DIGEST";
+  const window = {
+    window_start: "2026-10-17T00:00:00.000Z",
+    window_end: "2026-10-17T01:00:00.000Z",
+  };
+
+  await invoker.invoke(jobType, window);
+
+  assert.deepEqual(calls, [{
+    url: "https://supabase.test/functions/v1/telegram-alerts",
+    authorization: "Bearer telegram-secret",
+    body: { mode: "HOURLY_DIGEST", ...window, timezone: "Asia/Seoul" },
+  }]);
+  await assert.rejects(
+    () => invoker.invoke(jobType, { ...window, window_end: window.window_start }),
+    /EDITORIAL_DIGEST_WINDOW_INVALID/,
+  );
+});
+
 Deno.test("boundary client returns status-only failures without retaining upstream bodies", async () => {
   const invoker = createBoundaryInvoker({
     functionsUrl: "https://supabase.test/functions/v1",
