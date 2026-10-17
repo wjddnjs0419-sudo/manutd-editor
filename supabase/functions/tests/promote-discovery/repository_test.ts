@@ -1,4 +1,4 @@
-import { assert, assertEquals } from "jsr:@std/assert@1.0.8";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1.0.8";
 import { createDiscoveryPromotionRepository } from "../../promote-discovery/repository.ts";
 import type { PromotionObservation } from "../../promote-discovery/types.ts";
 
@@ -75,8 +75,50 @@ Deno.test("promotion retry re-reads observations already assigned by the same jo
   const patch = requests.find((item) => item.method === "PATCH");
   assertEquals(patch?.body, { story_cluster_id: "story-1", source_observation_id: "source-observation-1", promotion_job_id: promotionJobId });
   const patchQuery = new URL(patch!.url).searchParams;
-  assertEquals(patchQuery.get("source_observation_id"), "is.null");
   assertEquals(decodeURIComponent(patchQuery.get("or") ?? ""), "(story_cluster_id.is.null,story_cluster_id.eq.story-1)");
+  assertEquals(decodeURIComponent(patchQuery.get("and") ?? "").includes("or(source_observation_id.is.null,source_observation_id.eq.source-observation-1)"), true);
+  assertEquals(decodeURIComponent(patchQuery.get("and") ?? "").includes(`or(promotion_job_id.is.null,promotion_job_id.eq.${promotionJobId})`), true);
+});
+
+
+Deno.test("assignment claims a new observation with a null promotion job and requires a returned row", async () => {
+  const promotionJobId = "99999999-9999-4999-8999-999999999999";
+  const patches: { url: string; init: RequestInit }[] = [];
+  const repository = createDiscoveryPromotionRepository({
+    supabaseUrl: "https://example.supabase.co", serviceRoleKey: "service-role-key",
+    request: async (input, init = {}) => {
+      if (init.method === "PATCH") {
+        patches.push({ url: String(input), init });
+        return Response.json([{ id: "observation-1" }]);
+      }
+      return Response.json([]);
+    },
+  });
+
+  await repository.assignObservation("observation-1", "story-1", "source-observation-1", promotionJobId);
+
+  assertEquals(patches.length, 1);
+  const patch = patches[0]!;
+  const query = new URL(patch.url).searchParams;
+  const assignmentFilters = decodeURIComponent(query.get("and") ?? "");
+  assertEquals(assignmentFilters.includes("or(promotion_job_id.is.null,promotion_job_id.eq." + promotionJobId + ")"), true);
+  assertEquals(assignmentFilters.includes("or(source_observation_id.is.null,source_observation_id.eq.source-observation-1)"), true);
+  assertEquals(query.get("promotion_job_id"), null);
+  assertEquals(query.get("select"), "id");
+  assertEquals(new Headers(patch.init.headers).get("prefer"), "return=representation");
+});
+
+Deno.test("assignment reports a conflict when the conditional update matches no row", async () => {
+  const repository = createDiscoveryPromotionRepository({
+    supabaseUrl: "https://example.supabase.co", serviceRoleKey: "service-role-key",
+    request: async () => Response.json([]),
+  });
+
+  await assertRejects(
+    () => repository.assignObservation("observation-1", "story-1", "source-observation-1", "99999999-9999-4999-8999-999999999999"),
+    Error,
+    "DISCOVERY_OBSERVATION_ASSIGNMENT_CONFLICT",
+  );
 });
 
 Deno.test("exact BBC source linking reads only the tagged observation using legacy columns", async () => {

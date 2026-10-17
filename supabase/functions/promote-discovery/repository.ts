@@ -214,12 +214,19 @@ export function createDiscoveryPromotionRepository(options: RepositoryOptions): 
     },
     async assignObservation(observationId, storyClusterId, sourceObservationId, promotionJobId) {
       const query = new URLSearchParams({
+        select: "id",
         id: `eq.${observationId}`,
-        source_observation_id: "is.null",
         or: `(story_cluster_id.is.null,story_cluster_id.eq.${storyClusterId})`,
       });
-      if (promotionJobId) query.set("promotion_job_id", `eq.${promotionJobId}`);
-      await request(`/rest/v1/discovery_observations?${query}`, { method: "PATCH", headers: { prefer: "return=minimal" }, body: JSON.stringify({ story_cluster_id: storyClusterId, source_observation_id: sourceObservationId, ...(promotionJobId ? { promotion_job_id: promotionJobId } : {}) }) }, "app_private");
+      const andFilters = [`or(source_observation_id.is.null,source_observation_id.eq.${sourceObservationId})`];
+      if (promotionJobId) andFilters.push(`or(promotion_job_id.is.null,promotion_job_id.eq.${promotionJobId})`);
+      query.set("and", `(${andFilters.join(",")})`);
+      const assigned = await request(`/rest/v1/discovery_observations?${query}`, {
+        method: "PATCH",
+        headers: { prefer: "return=representation" },
+        body: JSON.stringify({ story_cluster_id: storyClusterId, source_observation_id: sourceObservationId, ...(promotionJobId ? { promotion_job_id: promotionJobId } : {}) }),
+      }, "app_private");
+      if (!Array.isArray(assigned) || assigned.length !== 1) throw new Error("DISCOVERY_OBSERVATION_ASSIGNMENT_CONFLICT");
     },
     async ensureSourceObservation(item) {
       const isGoogleNews = item.providerId === "google-news";
