@@ -45,7 +45,7 @@ Deno.test("M6 repository consumes same-date editorial ranking and preserves safe
   assertEquals(rows[0]?.grounding_status, "VERIFIED");
   assertEquals(rows[0]?.news_eligible, true);
   assertEquals(requests.some((url) => url.includes("ranking_date=eq.2026-09-20")), true);
-  assertEquals(requests.some((url) => url.includes("calculated_at=gte.2026-09-20T00%3A00%3A00.000Z")), true);
+  assertEquals(requests.some((url) => url.includes("score_inputs->>run_at=eq.2026-09-20T00%3A00%3A00.000Z")), true);
 });
 
 Deno.test("M6 repository exposes same-day fact observations as standalone briefing candidates", async () => {
