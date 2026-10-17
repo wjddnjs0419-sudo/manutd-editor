@@ -48,7 +48,9 @@ test("M8.6 promotion is an idempotent canonical bridge without discovery verific
   assert.match(orchestrator, /ensureDiscoveryClaim/u);
   assert.match(orchestrator, /DISCOVERY_ONLY/u);
   assert.doesNotMatch(orchestrator, /groundingStatus.*VERIFIED/u);
-  assert.match(repository, /ensureEditorialCandidate/u);
+  assert.match(repository, /discovery_promotion_key/u);
+  assert.match(repository, /\/rest\/v1\/story_clusters\?select=id/u);
+  assert.match(repository, /method: "PATCH"[\s\S]*?method: "POST"/u);
   assert.match(worker, /DISCOVER_TRENDS: "PROMOTE_DISCOVERY"/u);
 });
 
@@ -94,5 +96,5 @@ test("M8.6 local smoke is deterministic and external-provider free", async () =>
   assert.match(smoke, /deno test/u);
   assert.match(smoke, /validate-m8-6-editorial-assistant-architecture/u);
   assert.match(smoke, /diff --check/u);
-  assert.doesNotMatch(smoke, /telegram\.org|api\.notion\.com|api\.openai\.com|googleapis|gdeltproject|SUPABASE_SECRET_KEY='[A-Za-z0-9]/iu);
+  assert.doesNotMatch(smoke, /telegram\.org|api\.notion\.com|api\.openai\.com|googleapis|SUPABASE_SECRET_KEY='[A-Za-z0-9]/iu);
 });

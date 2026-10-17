@@ -2,7 +2,7 @@
 
 ## Why Telegram shows "출처 확인 중" or blocks carousel generation
 
-- Google News and GDELT providers intentionally have the `DISCOVERY_COMMUNITY` role. Discovery is not fact verification.
+- Google News intentionally has the `DISCOVERY_COMMUNITY` role. Discovery is not fact verification.
 - `source-discovery` returns a safe `NOOP` if `SOURCE_DISCOVERY_FEEDS_JSON` is unset. This is not the same as "checking in progress".
 - Only official (`FACT_PRIMARY`) or independent (`FACT_INDEPENDENT`) observations can ground a claim.
 - Editorial approval still requires `VERIFIED`, at least one verified claim, zero contradictory claims and `fact_grounding_score >= 70`.

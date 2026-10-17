@@ -6,7 +6,6 @@ import { createArticleEnricher } from "./article_enrichment.ts";
 import { createTrendDiscoveryRepository } from "./repository.ts";
 import { createFeedDiscoveryProvider } from "./providers.ts";
 import { createGoogleNewsDiscoveryProvider } from "./google_news_provider.ts";
-import { createGdeltDiscoveryProvider } from "./gdelt_provider.ts";
 import { createRoutedDiscoveryProviders } from "./provider_router.ts";
 import { createSupabaseEntityContextDataSource, EntityContextResolver } from "./entity_context.ts";
 import type { DiscoveryProvider } from "./types.ts";
@@ -34,10 +33,8 @@ const handler = createTrendDiscoveryHandler({
   run: (input) => {
     const searchProfile = input.searchProfile ?? "MANUAL";
     const providers = createRoutedDiscoveryProviders({
-      searchProfile,
       trustedProviders,
       googleNewsProvider: createGoogleNewsDiscoveryProvider(),
-      gdeltProvider: createGdeltDiscoveryProvider(),
       readEnv,
     });
     return runTrendDiscovery({ ...input, searchProfile, providers, repository, enrichObservation, resolveEntityContext: (asOf) => entityContextResolver.resolve(asOf) });
