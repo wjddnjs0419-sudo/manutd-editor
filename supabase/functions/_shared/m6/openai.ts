@@ -124,9 +124,12 @@ function flags(item: FrozenBriefingItem): string {
 
 function canonicalCandidateText(item: FrozenBriefingItem, note: string): string {
   const score = item.priority_score === null ? "Priority —" : `Priority ${item.priority_score}`;
+  const editorialRating = typeof item.editorial_score === "number"
+    ? `📰 Editorial ${item.editorial_score.toFixed(1)}/100${typeof item.editorial_rank === "number" ? ` · Rank ${item.editorial_rank}` : ""}`
+    : null;
   const flagText = flags(item);
   const title = item.title?.trim() || "콘텐츠 후보";
-  const lines = [`${item.position}️⃣ ${title}`, [score, flagText].filter(Boolean).join(" · "), `Creative Brief: ${item.creative_status}`, "", note];
+  const lines = [`${item.position}️⃣ ${title}`, [score, flagText].filter(Boolean).join(" · "), editorialRating, `Creative Brief: ${item.creative_status}`, "", note].filter((line): line is string => line !== null);
   if (item.source_name) lines.push(`Source: ${item.source_name}`);
   if (item.reference_username) lines.push(`Reference: @${item.reference_username}`);
   const sourceUrl = item.source_url ?? item.reference_permalink;

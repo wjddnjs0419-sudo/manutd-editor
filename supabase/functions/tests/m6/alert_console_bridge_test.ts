@@ -9,7 +9,7 @@ import type { ManutdEditorCarouselDraft } from "../../_shared/editorial-style/ty
 const date = "2026-09-27";
 const storyId = "11111111-1111-4111-8111-111111111111";
 const candidateId = "21111111-1111-4111-8111-111111111111";
-const sourceUrl = "https://example.test/man-utd-report";
+const sourceUrl = "https://www.bbc.com/sport/man-utd-report";
 const postUrl = "https://example.test/post";
 
 function response(rows: unknown): Response {

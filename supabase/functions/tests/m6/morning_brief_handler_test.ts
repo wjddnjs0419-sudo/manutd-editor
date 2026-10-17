@@ -19,6 +19,8 @@ const snapshot: MorningBriefingSnapshot = {
     priority_score: 88,
     first_mover_flag: true,
     must_cover_flag: false,
+    editorial_rank: 2,
+    editorial_score: 86.375,
     creative_status: "READY",
     reference_post_id: "post-1",
     reference_media_asset_id: "asset-1",
@@ -64,6 +66,7 @@ Deno.test("renderer owns canonical score, flags, status, source link, and open p
   });
   assertEquals(plans.length, 3);
   assert(plans[1].text.includes("Priority 88"));
+  assert(plans[1].text.includes("Editorial 86.4/100 · Rank 2"));
   assert(plans[1].text.includes("FIRST_MOVER"));
   assert(plans[1].text.includes("Creative Brief: READY"));
   assert(plans[1].text.includes("https://www.instagram.com/p/abc/"));

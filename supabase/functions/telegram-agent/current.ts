@@ -8,7 +8,7 @@ export interface CurrentReplyInput {
   briefingDate: string;
   readiness: BriefingReadiness;
   candidateCount: number;
-  items: readonly { position: number; candidateId: string; priorityScore: number | null; username: string | null; title?: string | null; sourceName?: string | null }[];
+  items: readonly { position: number; candidateId: string; priorityScore: number | null; editorialRank?: number | null; editorialScore?: number | null; username: string | null; title?: string | null; sourceName?: string | null; sourceUrl?: string | null }[];
 }
 
 export function formatCurrentReply(input: CurrentReplyInput): string {
@@ -17,9 +17,13 @@ export function formatCurrentReply(input: CurrentReplyInput): string {
   if (input.candidateCount === 0) return `${input.briefingDate} 현재 후보가 없습니다.`;
   const items = input.items.map((item) => {
     const score = item.priorityScore === null ? "Priority —" : `Priority ${item.priorityScore}`;
+    const editorialScore = typeof item.editorialScore === "number"
+      ? ` · Editorial ${item.editorialScore.toFixed(1)}/100${typeof item.editorialRank === "number" ? ` · Rank ${item.editorialRank}` : ""}`
+      : "";
     const source = item.username ? ` · @${item.username}` : item.sourceName ? ` · ${item.sourceName}` : "";
     const title = item.title ? `${item.title}\n` : "";
-    return `${item.position}️⃣ ${title}${score}${source}\n/open ${item.position}`;
+    const link = item.sourceUrl ? `\n🔗 원문: ${item.sourceUrl}` : "";
+    return `${item.position}️⃣ ${title}${score}${editorialScore}${source}${link}\n/open ${item.position}`;
   }).join("\n\n");
   return `${input.briefingDate} 현재 후보 ${input.candidateCount}건입니다.\n\n${items}`;
 }
@@ -37,7 +41,9 @@ export function snapshotCurrentCandidates(briefingDate: string, rows: readonly B
       first_mover_flag: row.first_mover_flag,
       must_cover_flag: row.must_cover_flag,
       creative_status: row.creative_status,
+      story_cluster_id: row.story_cluster_id,
       editorial_rank: row.editorial_rank,
+      editorial_score: row.editorial_score,
       grounding_status: row.grounding_status,
       news_eligible: row.news_eligible,
       title: row.title,
