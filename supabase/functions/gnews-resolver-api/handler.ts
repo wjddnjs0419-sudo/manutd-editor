@@ -119,6 +119,16 @@ function invalidResult(reason: string): ResultValidation {
   return { result: null, reason };
 }
 
+function exceedsCharacterLimit(value: string, limit: number): boolean {
+  // Iteration counts Unicode code points, matching Python len() and PostgreSQL length().
+  let count = 0;
+  for (const _character of value) {
+    count += 1;
+    if (count > limit) return true;
+  }
+  return false;
+}
+
 function validateResult(value: unknown): ResultValidation {
   if (!object(value)) return invalidResult("INVALID_RESULT_OBJECT");
   if (typeof value.id !== "string" || !UUID.test(value.id)) return invalidResult("INVALID_RESULT_ID");
@@ -143,7 +153,7 @@ function validateResult(value: unknown): ResultValidation {
   const finalUrl = value.article_final_url === null ? null : publisherUrl(value.article_final_url);
   if (value.article_final_url !== null && !finalUrl) return invalidResult("UNSAFE_ARTICLE_FINAL_URL");
   const excerpt = value.article_content_excerpt;
-  if (excerpt !== null && (typeof excerpt !== "string" || excerpt.length > ARTICLE_EXCERPT_LIMIT)) {
+  if (excerpt !== null && (typeof excerpt !== "string" || exceedsCharacterLimit(excerpt, ARTICLE_EXCERPT_LIMIT))) {
     return invalidResult("INVALID_ARTICLE_EXCERPT");
   }
   if (value.article_extraction_status === "EXTRACTED" &&

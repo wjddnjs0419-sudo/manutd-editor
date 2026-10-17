@@ -184,6 +184,49 @@ Deno.test("completion rejects an unverified or non-HTTPS publisher URL", async (
   assertEquals(calls, 0);
 });
 
+Deno.test("completion accepts a 2000-character excerpt containing supplementary Unicode", async () => {
+  let rpcPath = "";
+  let rpcBody: Record<string, unknown> = {};
+  const excerpt = "🦁".repeat(2_000);
+  const handler = createGnewsResolverApiHandler({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "service-role-key",
+    workerToken: "worker-secret",
+    enabled: true,
+    fetch: (input, init) => {
+      rpcPath = new URL(String(input)).pathname;
+      rpcBody = JSON.parse(String(init?.body ?? "{}"));
+      return Promise.resolve(Response.json({ status: "COMPLETED" }));
+    },
+  });
+  const response = await handler(new Request("https://edge.test", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      action: "complete",
+      request_id: "run-unicode-excerpt",
+      lease_id: "00000000-0000-4000-8000-000000000001",
+      results: [{
+        id: "00000000-0000-4000-8000-000000000002",
+        url_resolution_status: "RESOLVED",
+        resolved_publisher_url: "https://publisher.example/article",
+        article_fetch_status: "FETCHED",
+        article_extraction_status: "EXTRACTED",
+        article_final_url: "https://publisher.example/article",
+        article_content_excerpt: excerpt,
+        safe_error_category: null,
+      }],
+      unprocessed_ids: [],
+      global_cooldown_seconds: 0,
+    }),
+  }));
+
+  assertEquals(response.status, 200);
+  assertEquals(rpcPath, "/rest/v1/rpc/gnews_resolver_complete_batch");
+  const results = rpcBody.p_results as Array<Record<string, unknown>>;
+  assertEquals(results[0]?.article_content_excerpt, excerpt);
+});
+
 Deno.test("completion reports a safe reason for an invalid result without echoing article data", async () => {
   let calls = 0;
   const handler = createGnewsResolverApiHandler({
