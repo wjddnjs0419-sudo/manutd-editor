@@ -1,6 +1,6 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-net
 /**
- * M9: approved article URLs + subject aliases -> ranked REAL photo candidate JSON.
+ * M9: approved article URLs + grouped subject aliases -> ranked REAL photo candidate JSON.
  * This is a CLI boundary for a Python-capable renderer worker. Never publishes.
  *
  * Usage:
@@ -9,20 +9,43 @@
  *
  * request.json requires:
  * { publisher_article_urls: [...], official_article_urls: [...],
- *   slots: [{ slot:"COVER_NEWS", subject_aliases:["Michael Carrick"] },
- *           { slot:"BODY_NEWS", subject_aliases:["Dominic Solanke"] }],
+ *   slots: [{ slot:"COVER_NEWS", slide_number:1, subject_aliases:["Michael Carrick"] },
+ *           { slot:"BODY_NEWS", slide_number:2, subject_aliases:["Dominic Solanke"] },
+ *           { slot:"BODY_NEWS", slide_number:3, subject_aliases:["Michael Carrick"] }],
  *   allowed_image_hosts:["i.guim.co.uk"] }
  *
+ * Legacy subject_aliases remain valid for one person; multi-person requests use
+ * subject_alias_groups to keep each person's aliases distinct.
  * CDN hosts are explicit trusted configuration, not derived from fetched HTML.
  */
 import { harvestArticlePhotos, type M9PhotoHarvestJob } from "../supabase/functions/_shared/m9/photo_harvest.ts";
+import type { M9PhotoSubjectGroup } from "../supabase/functions/_shared/m9/photo_quality.ts";
+import { isGoogleNewsArticleUrl, safePublisherUrl } from "../supabase/functions/trend-discovery/google_news_resolution.ts";
 
 function object(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
+function validSubjectGroups(value: unknown): value is M9PhotoSubjectGroup[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 6) return false;
+  const canonicalNames = new Set<string>();
+  return value.every((group: unknown) => {
+    if (!object(group) || typeof group.canonical_name !== "string" ||
+        group.canonical_name.trim().length < 4 || !Array.isArray(group.aliases) ||
+        group.aliases.length < 1 || group.aliases.length > 6 ||
+        !group.aliases.every((name: unknown) => typeof name === "string" && name.trim().length >= 4)) {
+      return false;
+    }
+    const canonical = group.canonical_name.trim().toLocaleLowerCase("en-US");
+    if (canonicalNames.has(canonical) || !group.aliases.some((name: string) =>
+      name.trim().toLocaleLowerCase("en-US") === canonical)) return false;
+    canonicalNames.add(canonical);
+    return true;
+  });
+}
 export function validateM9SourceRequest(value: unknown): {
   job: M9PhotoHarvestJob;
   allowed_image_hosts: string[];
+  google_news_original_urls: string[];
 } {
   if (!object(value) || !Array.isArray(value.publisher_article_urls) ||
       !Array.isArray(value.slots) || !Array.isArray(value.allowed_image_hosts)) {
@@ -32,16 +55,28 @@ export function validateM9SourceRequest(value: unknown): {
   const officialUrls = value.official_article_urls ?? [];
   if (!Array.isArray(officialUrls) || sourceUrls.length < 1 ||
       sourceUrls.length > 5 || officialUrls.length > 5 ||
-      ![...sourceUrls, ...officialUrls].every(v => typeof v === "string" && v.startsWith("https://"))) {
+      ![...sourceUrls, ...officialUrls].every(v => typeof v === "string" && safePublisherUrl(v) !== null &&
+        !isVideoHost(new URL(v).hostname) && !isGoogleHost(new URL(v).hostname))) {
     throw new Error("M9_SOURCE_URLS_INVALID");
   }
-  const validSlots = ["COVER_NEWS", "BODY_NEWS"] as const;
-  if (value.slots.length !== 2 ||
-      value.slots[0]?.slot !== validSlots[0] ||
-      value.slots[1]?.slot !== validSlots[1] ||
-      !value.slots.every(s => object(s) && Array.isArray(s.subject_aliases) &&
-        s.subject_aliases.length >= 1 && s.subject_aliases.length <= 6 &&
-        s.subject_aliases.every((name: unknown) => typeof name === "string" && name.trim().length >= 4))) {
+  const googleOriginals = value.google_news_original_urls ?? [];
+  if (!Array.isArray(googleOriginals) || googleOriginals.length > 20 ||
+    !googleOriginals.every((url) => typeof url === "string" && isGoogleNewsArticleUrl(url))) {
+    throw new Error("M9_SOURCE_PROVENANCE_INVALID");
+  }
+  const slotsValid = value.slots.length >= 2 && value.slots.length <= 6 &&
+      value.slots[0]?.slot === "COVER_NEWS" &&
+      value.slots.slice(1).every(s => object(s) && s.slot === "BODY_NEWS") &&
+      value.slots.every((s, index) => {
+        if (!object(s) || (s.slide_number !== undefined && s.slide_number !== index + 1)) return false;
+        const aliases = s.subject_aliases;
+        if (!Array.isArray(aliases) || aliases.length < 1 || aliases.length > 24 ||
+            !aliases.every((name: unknown) => typeof name === "string" && name.trim().length >= 4)) return false;
+        const groups = s.subject_alias_groups;
+        if (groups === undefined) return aliases.length <= 6;
+        return validSubjectGroups(groups);
+      });
+  if (!slotsValid) {
     throw new Error("M9_SUBJECT_ALIASES_INVALID");
   }
   const hosts = value.allowed_image_hosts;
@@ -54,10 +89,32 @@ export function validateM9SourceRequest(value: unknown): {
     job: {
       publisher_article_urls: sourceUrls as string[],
       official_article_urls: officialUrls as string[],
-      slots: value.slots as unknown as M9PhotoHarvestJob["slots"],
+      slots: value.slots.map((slot) => {
+        const row = slot as Record<string, unknown>;
+        return {
+          ...row,
+          subject_aliases: row.subject_aliases as string[],
+          ...(Array.isArray(row.subject_alias_groups)
+            ? {subject_alias_groups: row.subject_alias_groups as M9PhotoSubjectGroup[]}
+            : {}),
+        };
+      }) as unknown as M9PhotoHarvestJob["slots"],
     },
     allowed_image_hosts: hosts as string[],
+    google_news_original_urls: googleOriginals as string[],
   };
+}
+
+function isVideoHost(host: string): boolean {
+  const normalized = host.toLowerCase().replace(/\.$/u, "");
+  return normalized === "youtu.be" || normalized === "youtube.com" || normalized.endsWith(".youtube.com") ||
+    normalized === "youtube-nocookie.com" || normalized.endsWith(".youtube-nocookie.com");
+}
+
+function isGoogleHost(host: string): boolean {
+  const normalized = host.toLowerCase().replace(/\.$/u, "");
+  return normalized === "google.com" || normalized.endsWith(".google.com") || normalized.startsWith("google.") ||
+    normalized === "googleusercontent.com" || normalized.endsWith(".googleusercontent.com");
 }
 
 export async function collectM9ForWorker(
@@ -79,6 +136,11 @@ export async function collectM9ForWorker(
     rights_status: "UNVERIFIED" as const,
     candidate_count: result.candidate_count,
     selections: result.selections,
+    source_provenance: {
+      publisher_article_urls: request.job.publisher_article_urls,
+      google_news_original_urls: request.google_news_original_urls,
+      source_type: "creative_briefs.evidence_snapshot.sources",
+    },
   };
 }
 

@@ -20,6 +20,22 @@ Deno.test("requires invoke secret and accepts one generation trigger", async () 
   assertEquals(response.status, 200);
   assertEquals((await response.json()).status, "READY");
   assertEquals(calls.length, 1);
+  assertEquals(calls[0], { candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" });
+});
+
+Deno.test("accepts only the explicit Exploration intent and keeps the trigger contract", async () => {
+  const calls: unknown[] = [];
+  const handler = createCreativeGenerationHandler({ collectorSecret: "secret", run: async (trigger) => { calls.push(trigger); return { status: "DRAFT", candidate_id: trigger.candidate_id }; } });
+  const response = await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" }));
+  assertEquals(response.status, 200);
+  assertEquals(calls[0], { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION" });
+  assertEquals((await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "BYPASS" }))).status, 400);
+
+  const override = await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION", content_mode_override: "ANALYSIS_CONTEXT" }));
+  assertEquals(override.status, 200);
+  assertEquals(calls[1], { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION", content_mode_override: "ANALYSIS_CONTEXT" });
+  assertEquals((await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY", generation_intent: "EXPLORATION", content_mode_override: "ANALYSIS_CONTEXT" }))).status, 400);
+  assertEquals((await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "MANUAL", generation_intent: "EXPLORATION", content_mode_override: "NEWS_UPDATE" }))).status, 400);
 });
 
 Deno.test("rejects invalid bodies and unauthorized callers", async () => {
@@ -27,4 +43,23 @@ Deno.test("rejects invalid bodies and unauthorized callers", async () => {
   assertEquals((await handler(request("POST", {}))).status, 400);
   assertEquals((await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "AUTO_PRIORITY" }, "wrong"))).status, 401);
   assertEquals((await handler(request("GET", undefined))).status, 405);
+});
+
+Deno.test("returns and logs only sanitized provider failure diagnostics", async () => {
+  const logs: Record<string, unknown>[] = [];
+  const handler = createCreativeGenerationHandler({
+    collectorSecret: "secret",
+    run: async () => ({
+      status: "FAILED_PROVIDER",
+      candidate_id: "candidate-1",
+      provider_failure: { category: "FAILED_PROVIDER", code: "HTTP_QUOTA", http_status: 429 },
+    }),
+    requestId: () => "request-2",
+    log: (entry) => logs.push(entry),
+  });
+
+  const response = await handler(request("POST", { candidate_id: "candidate-1", trigger_type: "MANUAL" }));
+  const body = await response.json();
+  assertEquals(body.provider_failure, { category: "FAILED_PROVIDER", code: "HTTP_QUOTA", http_status: 429 });
+  assertEquals(logs, [{ requestId: "request-2", event: "creative_generation_completed", status: "FAILED_PROVIDER", providerFailureCategory: "FAILED_PROVIDER", providerFailureCode: "HTTP_QUOTA", providerHttpStatus: 429 }]);
 });

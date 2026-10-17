@@ -12,6 +12,8 @@ const claim: GroundingClaim = {
   object: "Flixton FC facilities",
   claimText: "Jadon Sancho is training at Flixton FC facilities",
   origin: "image",
+  claimScope: "EVENT",
+  claimModality: "CONFIRMED",
   extractionConfidence: 0.94,
 };
 
@@ -71,6 +73,8 @@ Deno.test("does not verify a Manchester City claim against a Manchester United a
     object: "6 titles and the first four consecutive titles",
     claimText: "펩은 PL 6회 우승과 최초의 4연패를 달성했다.",
     origin: "caption",
+    claimScope: "EVENT",
+    claimModality: "CONFIRMED",
     extractionConfidence: 0.9,
   };
   const unrelatedUnitedArticle: GroundingObservation = {
@@ -98,6 +102,8 @@ Deno.test("does not verify a striker story using a different Manchester United t
     object: "Man Utd in talks with €30m striker as priority signing confirmed - LiveScore",
     claimText: "Man Utd in talks with €30m striker as priority signing confirmed - LiveScore",
     origin: "discovery_observation",
+    claimScope: "EVENT",
+    claimModality: "RUMOR",
     extractionConfidence: 0.9,
   };
   const unrelatedCostaArticle: GroundingObservation = {
@@ -182,4 +188,101 @@ Deno.test("prepared matcher is equivalent across fact, discovery, contradiction,
     const actual = prepared.classifyPreparedClaimEvidence!(claim, prepared.prepareGroundingObservations!(observations));
     assert.deepEqual(actual, expected, expected.status);
   }
+});
+
+Deno.test("publisher report grounds rumor attribution without grounding the transfer", () => {
+  const reportClaim = {
+    ...claim,
+    rawPostId: null,
+    subject: "Manchester United",
+    predicate: "reported",
+    object: "a move for Player A",
+    claimText: "BBC Sport reports that Manchester United are considering a move for Player A.",
+    origin: "publisher_article",
+    claimScope: "PUBLISHER_REPORT",
+    claimModality: "RUMOR",
+    publisherSourceObservationId: "bbc-report-1",
+  } as unknown as GroundingClaim & { claimScope: string; claimModality: string };
+  const article: GroundingObservation = {
+    id: "bbc-report-1", editorialRole: "FACT_INDEPENDENT", canonicalName: "BBC Sport",
+    title: "Manchester United transfer report", excerpt: "Manchester United are considering a move for Player A, according to BBC Sport.", relation: "SUPPORTS", publisherReportOnly: true,
+  };
+
+  const result = classifyClaimEvidence(reportClaim, [article]);
+
+  assert.equal(result.status, "VERIFIED");
+  assert.equal((result as unknown as { claimScope?: string }).claimScope, "PUBLISHER_REPORT");
+  assert.equal((result as unknown as { claimModality?: string }).claimModality, "RUMOR");
+  assert.equal(result.evidence[0]?.evidenceText, "Manchester United are considering a move for Player A, according to BBC Sport.");
+});
+
+Deno.test("rumor evidence cannot verify a confirmed event claim", () => {
+  const eventClaim = {
+    ...claim,
+    rawPostId: null,
+    subject: "Manchester United",
+    predicate: "signed",
+    object: "Bruno Fernandes",
+    claimText: "Manchester United have completed a signing for Bruno Fernandes.",
+    publisherSourceObservationId: "bbc-rumor-1",
+    claimScope: "EVENT",
+    claimModality: "CONFIRMED",
+  } as unknown as GroundingClaim & { claimScope: string; claimModality: string };
+  const rumorArticle: GroundingObservation = {
+    id: "bbc-rumor-1", editorialRole: "FACT_INDEPENDENT", canonicalName: "BBC Sport",
+    title: "Manchester United transfer report", excerpt: "Manchester United are considering a move for Bruno Fernandes, but no deal has been completed.", relation: "SUPPORTS", publisherReportOnly: true,
+  };
+
+  const result = classifyClaimEvidence(eventClaim, [rumorArticle]);
+
+  assert.notEqual(result.status, "VERIFIED");
+  assert.equal(result.evidence.every((item) => !item.isGrounding), true);
+});
+
+Deno.test("publisher denial remains a denial", () => {
+  const denialClaim = {
+    ...claim,
+    rawPostId: null,
+    subject: "Manchester United",
+    predicate: "denied",
+    object: "a deal for Player A",
+    claimText: "BBC Sport reports that Manchester United have not agreed a deal for Player A.",
+    origin: "publisher_article",
+    claimScope: "PUBLISHER_REPORT",
+    claimModality: "DENIAL",
+    publisherSourceObservationId: "bbc-denial-1",
+  } as unknown as GroundingClaim & { claimScope: string; claimModality: string };
+  const article: GroundingObservation = {
+    id: "bbc-denial-1", editorialRole: "FACT_INDEPENDENT", canonicalName: "BBC Sport",
+    title: "Manchester United update", excerpt: "Manchester United have not agreed a deal for Player A.", relation: "SUPPORTS", publisherReportOnly: true,
+  };
+
+  const result = classifyClaimEvidence(denialClaim, [article]);
+
+  assert.equal(result.status, "VERIFIED");
+  assert.equal((result as unknown as { claimModality?: string }).claimModality, "DENIAL");
+  assert.equal(result.evidence[0]?.evidenceText, "Manchester United have not agreed a deal for Player A.");
+});
+
+Deno.test("unrelated body sentence is insufficient even when title names the claim", () => {
+  const reportClaim = {
+    ...claim,
+    rawPostId: null,
+    subject: "Manchester United",
+    predicate: "reported",
+    object: "a move for Player A",
+    claimText: "BBC Sport reports that Manchester United are considering a move for Player A.",
+    origin: "publisher_article",
+    claimScope: "PUBLISHER_REPORT",
+    claimModality: "RUMOR",
+  } as unknown as GroundingClaim & { claimScope: string; claimModality: string };
+  const article: GroundingObservation = {
+    id: "bbc-unrelated-body", editorialRole: "FACT_INDEPENDENT", canonicalName: "BBC Sport",
+    title: "Manchester United may sign Player A", excerpt: "Arsenal confirmed the training schedule for the weekend.", relation: "SUPPORTS",
+  };
+
+  const result = classifyClaimEvidence(reportClaim, [article]);
+
+  assert.equal(result.status, "INSUFFICIENT");
+  assert.equal(result.evidence.length, 0);
 });

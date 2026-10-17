@@ -8,7 +8,7 @@ const evidence: EvidenceSnapshot = {
   candidate: {} as EvidenceSnapshot["candidate"],
   story: {} as EvidenceSnapshot["story"],
   posts: [],
-  sources: [{ evidence_id: "source:1", source_id: "source-1", canonical_name: "United", entity_type: "CLUB", reliability_score: 10, evidence_text: "Confirmed", first_cited_post_id: "post-1", citation_count: 1 }],
+  sources: [{ evidence_id: "source:1", source_id: "source-1", canonical_name: "BBC Sport", entity_type: "MEDIA_OUTLET", reliability_score: 8, evidence_text: "BBC Sport reports that Sancho could join a new club.", first_cited_post_id: null, citation_count: 1, claim_id: "claim-source-1", editorial_role: "FACT_INDEPENDENT", relation: "SUPPORTS", is_grounding: true, claim_scope: "PUBLISHER_REPORT", claim_modality: "RUMOR", canonical_url: "https://bbc.test/article/1", google_news_original_url: "https://news.google.com/rss/articles/abc", published_at: "2026-10-11T12:00:00Z", verified: true }],
   score_evidence: {},
   evidence_ids: ["post:1", "source:1"],
 };
@@ -28,12 +28,12 @@ function valid(overrides: Partial<CreativeBriefOutput> = {}): CreativeBriefOutpu
       slide_number: index + 1,
       purpose: index === 0 ? "HOOK" : "DETAIL",
       headline: `Headline ${index + 1}`,
-      body: `Body ${index + 1}`,
-      claims: [{ claim_id: `claim_${index + 1}`, type: "FACT" as const, text: "Confirmed claim", evidence_ids: ["source:1"] }],
+      body: index === 0 ? "BBC Sport 보도: 산초의 이적 가능성은 아직 확정되지 않았습니다. https://bbc.test/article/1" : `Body ${index + 1}`,
+      claims: [{ claim_id: `claim_${index + 1}`, type: "FACT" as const, text: "BBC Sport가 산초의 이적 가능성을 보도했으며 아직 확정되지 않았다.", evidence_ids: ["source:1"] }],
       visual_direction: { subject: "United", image_type: "photo", layout_intent: "clear", stat_emphasis: null, text_hierarchy: ["headline", "body"] },
     })),
-    caption: { body: "Caption", cta: "Tell us" },
-    sources: [{ evidence_id: "source:1", label: "Manchester United" }],
+    caption: { body: "BBC Sport 보도에 따르면 산초의 이적 가능성은 아직 확정되지 않았습니다. https://bbc.test/article/1", cta: "Tell us" },
+    sources: [{ evidence_id: "source:1", label: "BBC Sport", url: "https://bbc.test/article/1" }],
     ...overrides,
   };
 }
@@ -70,6 +70,31 @@ Deno.test("blocks NEWS_UPDATE without reliable source evidence", () => {
   const sparse = { ...evidence, sources: [], evidence_ids: ["post:1"] };
   const result = validateCreativeBrief(valid({ sources: [] }), sparse, config);
   assert(result.errors.some((error) => error.code === "NEWS_EVIDENCE_BLOCKED"));
+});
+
+Deno.test("legacy reliable source mention cannot satisfy NEWS_UPDATE", () => {
+  const legacy = { ...evidence, sources: [{ ...evidence.sources[0]!, claim_id: undefined, canonical_url: undefined, verified: undefined }], evidence_ids: ["source:1"] };
+  const result = validateCreativeBrief(valid(), legacy, config);
+  assert(result.errors.some((entry) => entry.code === "NEWS_EVIDENCE_BLOCKED"));
+});
+
+Deno.test("NEWS_UPDATE blocks missing publisher URL or unsupported evidence id", () => {
+  const missingUrl = validateCreativeBrief(valid({ sources: [{ evidence_id: "source:1", label: "BBC Sport" }] }), evidence, config);
+  assert(missingUrl.errors.some((entry) => entry.code === "NEWS_SOURCE_URL_MISSING"));
+  const unsupported = validateCreativeBrief(valid({ slides: valid().slides.map((slide) => ({ ...slide, claims: [{ ...slide.claims[0]!, evidence_ids: ["post:1"] }] })) }), evidence, config);
+  assert(unsupported.errors.some((entry) => entry.code === "NEWS_CLAIM_UNGROUNDED"));
+});
+
+Deno.test("NEWS_UPDATE requires publisher attribution and URL in slide and caption", () => {
+  assertEquals(validateCreativeBrief(valid(), evidence, config).valid, true);
+  const missingCaption = validateCreativeBrief(valid({ caption: { body: "산초의 이적 가능성을 살펴봅니다.", cta: "Tell us" } }), evidence, config);
+  assert(missingCaption.errors.some((entry) => entry.code === "NEWS_CAPTION_CITATION_MISSING"));
+});
+
+Deno.test("NEWS_UPDATE rejects rumor rewritten as confirmed", () => {
+  const output = valid({ slides: valid().slides.map((slide) => ({ ...slide, claims: [{ ...slide.claims[0]!, text: "산초의 이적이 확정됐다." }] })) });
+  const result = validateCreativeBrief(output, evidence, config);
+  assert(result.errors.some((entry) => entry.code === "CLAIM_MODALITY_OVERRIDDEN"));
 });
 
 Deno.test("repairs once and validates the repaired output", async () => {
@@ -112,6 +137,7 @@ const styleConfig: QualityGateConfig = {
 function styleValid(overrides: Partial<CreativeBriefOutput> = {}): CreativeBriefOutput {
   return {
     ...valid(),
+    content_mode: "ANALYSIS_CONTEXT",
     style_profile: "manutd_editor",
     style_version: "manutd-editor-v1",
     editor_warning: null,

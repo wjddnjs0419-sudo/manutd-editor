@@ -59,6 +59,7 @@ class GNewsDecoderPocTests(unittest.TestCase):
             "https://localhost/story",
             "https://user:pass@publisher.example/story",
             "https://publisher.example:8443/story",
+            "https://bad_domain.example/story",
         ):
             with self.subTest(url=unsafe):
                 self.assertIsNone(validate_publisher_url(unsafe))
@@ -366,6 +367,70 @@ class GNewsDecoderPocTests(unittest.TestCase):
             self.assertEqual(session.request_metrics[0]["article_origin_url"], article)
             self.assertEqual(session.request_metrics[1]["article_origin_url"], article)
             session.close()
+
+    def test_runtime_article_fetch_is_bounded_to_800kb(self):
+        html = b"<article><p>Manchester United reported a meaningful team update " + b"x" * 810_000
+        calls = []
+
+        def public_dns(host, port, type):
+            return [(None, None, None, None, ("8.8.8.8", port or 443))]
+
+        def fetcher(url, ip_address, timeout_s, max_bytes):
+            calls.append(max_bytes)
+            return 200, {
+                "content-type": "text/html; charset=utf-8",
+                "content-length": str(len(html)),
+            }, b""
+
+        page = fetch_article_page(
+            "https://www.bbc.com/sport/football/test-story",
+            max_bytes=800_000,
+            dns_resolver=public_dns,
+            request_impl=fetcher,
+        )
+
+        self.assertEqual(calls, [800_000])
+        self.assertEqual(page["status"], "BODY_TOO_LARGE")
+        self.assertFalse(page["body_extraction_success"])
+
+    def test_article_fetch_preserves_forbidden_status_without_bypass(self):
+        def public_dns(host, port, type):
+            return [(None, None, None, None, ("8.8.8.8", port or 443))]
+
+        page = fetch_article_page(
+            "https://www.nytimes.com/2026/10/12/sports/soccer/united.html",
+            dns_resolver=public_dns,
+            request_impl=lambda *_: (403, {"content-type": "text/html"}, b""),
+        )
+
+        self.assertEqual(page["http_status"], 403)
+        self.assertEqual(page["status"], "ACCESS_RESTRICTED_OR_PAYWALL")
+        self.assertFalse(page["http_access_success"])
+        self.assertFalse(page["body_extraction_success"])
+
+    def test_article_fetch_rejects_title_mismatch(self):
+        html = (
+            "<html><body><article><p>Join the community and read these guidelines "
+            "before posting on the sports website. This message contains no story "
+            "about the transfer reported in the headline.</p></article></body></html>"
+        ).encode()
+
+        page = fetch_article_page(
+            "https://publisher.example/article",
+            expected_title="Manchester United sign the striker after medical",
+            dns_resolver=lambda *_args, **_kwargs: [
+                (None, None, None, None, ("8.8.8.8", 443))
+            ],
+            request_impl=lambda *_args: (
+                200,
+                {"content-type": "text/html; charset=utf-8"},
+                html,
+            ),
+        )
+
+        self.assertEqual(page["status"], "TITLE_NOT_RELEVANT")
+        self.assertTrue(page["http_access_success"])
+        self.assertFalse(page["body_extraction_success"])
 
 
 if __name__ == "__main__":

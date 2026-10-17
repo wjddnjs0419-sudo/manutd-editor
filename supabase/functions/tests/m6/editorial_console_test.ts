@@ -150,12 +150,13 @@ Deno.test("carousel renderer keeps editor warning outside public slides", () => 
     editor_warning: "현재 근거로는 3장까지 구성하는 것이 적절합니다.",
     internal_grounding: { evidence_ids: ["claim:1"], source_caveats: ["단일 출처"], unsupported_claims: [] },
   };
-  const view = renderCarouselDraft(draft);
+  const view = renderCarouselDraft({ ...draft, brief_status: "DRAFT" });
   assert(view.text.includes("[1장]"));
   assert(view.text.includes("편집자 메모"));
   assert(view.text.includes("3장까지"));
   assert(!view.text.includes("단일 출처"));
   assert(view.inline_keyboard.flat().some((button) => button.callback_data.startsWith("draft:approve:")));
+  assert(view.inline_keyboard.flat().some((button) => button.callback_data.startsWith("draft:preview:")));
 });
 
 Deno.test("repository recovers trend scores from pre-promotion snapshots by content fingerprint", async () => {

@@ -4,6 +4,7 @@
  * Only small byte ranges are fetched; no publisher image is cached/stored here.
  */
 import type { PhotoCandidate } from "./article_photo_candidates.ts";
+import cropPolicy from "./crop_policy.json" with { type: "json" };
 
 export type M9PhotoSlot = "COVER_NEWS" | "BODY_NEWS" | "PLAYER_PROFILE";
 export type M9PhotoMime = "image/jpeg" | "image/png" | "image/webp";
@@ -22,18 +23,34 @@ export interface M9PhotoAssessment {
   readonly candidate: PhotoCandidate;
   readonly probe: M9ImageProbe;
   readonly identity_evidence: M9IdentityEvidence;
+  readonly subject_match: M9PhotoSubjectMatch;
   readonly is_recent_photo: boolean | null;
   readonly requires_review: true;
   readonly can_auto_publish: false;
   readonly score: number;
+  readonly projected_crop_scale: number | null;
   readonly flags: readonly string[];
 }
 export interface M9PhotoSelection {
   readonly status: "CANDIDATES_FOR_REVIEW" | "NO_SUITABLE_IMAGE";
   readonly subject_aliases: readonly string[];
+  readonly subject_alias_groups: readonly M9PhotoSubjectGroup[];
   readonly slot: M9PhotoSlot;
   readonly selected: M9PhotoAssessment | null;
   readonly shortlist: readonly M9PhotoAssessment[];
+  readonly slide_number?: number;
+}
+export interface M9PhotoSubjectGroup {
+  readonly canonical_name: string;
+  readonly aliases: readonly string[];
+}
+export interface M9PhotoSubjectMatch {
+  /** Names supported by caption/credit metadata; filename-only hints are separate. */
+  readonly requested_subjects: readonly string[];
+  readonly metadata_matched_subjects: readonly string[];
+  readonly filename_matched_subjects: readonly string[];
+  readonly requested_subject_count: number;
+  readonly coverage: "FULL" | "PARTIAL" | "NONE";
 }
 export interface M9ProbeOptions {
   readonly fetch?: typeof fetch;
@@ -185,18 +202,80 @@ export function matchPhotoSubject(candidate: PhotoCandidate, aliases: readonly s
   return "UNCONFIRMED";
 }
 
-function isCoverOrBodyUsable(w:number,h:number): boolean {return w>=960 && h>=640;}
+/**
+ * Match each named person independently. A flat alias list is a synonym set for
+ * one person; keeping groups prevents a candidate mentioning one of several
+ * requested people from being misreported as covering the whole group.
+ */
+export function matchPhotoSubjectGroups(
+  candidate: PhotoCandidate,
+  groups: readonly M9PhotoSubjectGroup[],
+): M9PhotoSubjectMatch {
+  if (!groups.length) throw new Error("M9_SUBJECT_NAME_REQUIRED");
+  const metadataMatched: string[] = [];
+  const filenameMatched: string[] = [];
+  for (const group of groups) {
+    const evidence = matchPhotoSubject(candidate, group.aliases);
+    if (evidence === "ALT_OR_CAPTION_MATCH") metadataMatched.push(group.canonical_name);
+    else if (evidence === "FILENAME_HINT") filenameMatched.push(group.canonical_name);
+  }
+  const coverage = metadataMatched.length === groups.length ? "FULL"
+    : metadataMatched.length ? "PARTIAL" : "NONE";
+  return {
+    requested_subjects: groups.map(group => group.canonical_name),
+    metadata_matched_subjects: metadataMatched,
+    filename_matched_subjects: filenameMatched,
+    requested_subject_count: groups.length,
+    coverage,
+  };
+}
+
+/** Obvious non-editorial assets must never enter photo review or acquisition. */
+export function isObviousNonPhotoAsset(candidate: PhotoCandidate): boolean {
+  const path = (() => {
+    try { return new URL(candidate.image_url).pathname; } catch { return candidate.image_url; }
+  })();
+  const description = `${path} ${candidate.caption ?? ""}`.toLocaleLowerCase("en-US").normalize("NFKC");
+  return /(?:^|[^a-z0-9])(?:logos?|icons?|sponsors?|sponsorship|adverts?|advertisements?|banners?|infographics?|illustrations?|badges?)(?:$|[^a-z0-9])/u.test(description);
+}
+
+// Resolution and exact 4:5 crop scale are enforced after the full image reaches
+// Python. Keep low-resolution candidates (including >2x cases) in the bounded
+// shortlist so the crop gate can report the precise rejection reason.
+function isCoverOrBodyUsable(w:number,h:number): boolean {return w>0 && h>0;}
 function isProfileUsable(w:number,h:number): boolean {return w>=650 && h>=950;}
+
+/** Effective target enlargement after taking the required 4:5 source crop. */
+export function projectedCropScale(width: number, height: number): number {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    throw new RangeError("M9_IMAGE_DIMENSIONS_INVALID");
+  }
+  const targetWidth = cropPolicy.target_width;
+  const targetHeight = cropPolicy.target_height;
+  const targetAspect = targetWidth / targetHeight;
+  const sourceAspect = width / height;
+  const cropWidth = sourceAspect > targetAspect ? height * targetAspect : width;
+  const cropHeight = sourceAspect > targetAspect ? height : width / targetAspect;
+  return Math.max(targetWidth / cropWidth, targetHeight / cropHeight);
+}
 
 export function assessPublisherPhoto(
   candidate:PhotoCandidate,probe:M9ImageProbe,subjectAliases:readonly string[],
-  slot:M9PhotoSlot,now:Date,
+  slot:M9PhotoSlot,now:Date,subjectAliasGroups?:readonly M9PhotoSubjectGroup[],
 ):M9PhotoAssessment {
   const flags:string[]=[];
-  const nameEvidence=matchPhotoSubject(candidate,subjectAliases);
+  const groups = subjectAliasGroups?.length ? subjectAliasGroups : [{
+    canonical_name: subjectAliases[0] ?? "",
+    aliases: subjectAliases,
+  }];
+  const subjectMatch = matchPhotoSubjectGroups(candidate,groups);
+  const nameEvidence = subjectMatch.metadata_matched_subjects.length
+    ? "ALT_OR_CAPTION_MATCH"
+    : subjectMatch.filename_matched_subjects.length ? "FILENAME_HINT" : "UNCONFIRMED";
   if(nameEvidence==="UNCONFIRMED")flags.push("SUBJECT_NOT_CONFIRMED");
   else if(nameEvidence==="FILENAME_HINT")flags.push("SUBJECT_FILENAME_ONLY");
   else flags.push("SUBJECT_METADATA_MATCH_NOT_VISUAL_PROOF");
+  if(subjectMatch.coverage==="PARTIAL")flags.push("SUBJECT_METADATA_PARTIAL");
   const good=probe.status==="VALID" && probe.width!==null && probe.height!==null &&
     (slot==="PLAYER_PROFILE"?isProfileUsable(probe.width,probe.height):isCoverOrBodyUsable(probe.width,probe.height));
   if(!good)flags.push(probe.status==="VALID"?"INSUFFICIENT_DIMENSIONS":"IMAGE_"+probe.status);
@@ -215,32 +294,49 @@ export function assessPublisherPhoto(
   // Source relevancy is a tie-breaker after actual dimensions and subject evidence.
   const identityScore=nameEvidence==="ALT_OR_CAPTION_MATCH"?38:nameEvidence==="FILENAME_HINT"?15:0;
   const aspect=probe.width&&probe.height?probe.width/probe.height:null;
-  const compositionScore=aspect===null?0:
-    slot==="PLAYER_PROFILE"?(aspect<=1?12:0):
-    aspect>=1.15?12:4;
+  const projectedScale=probe.width&&probe.height?projectedCropScale(probe.width,probe.height):null;
+  const compositionScore=slot==="PLAYER_PROFILE"?
+    (aspect===null?0:aspect<=1?12:0):
+    projectedScale===null?0:Math.min(12,Math.max(0,12*(2-projectedScale)));
   const freshness=isRecent===true?12:isRecent===false?-10:0;
-  const score=(good?50:-100)+identityScore+compositionScore+freshness+
+  const coverageBonus = subjectMatch.coverage === "FULL" ? 20
+    : subjectMatch.coverage === "PARTIAL"
+      ? 10 * subjectMatch.metadata_matched_subjects.length / groups.length : 0;
+  const score=(good?50:-100)+identityScore+coverageBonus+compositionScore+freshness+
     Math.min(15,Math.max(0,candidate.score/8))+
     (candidate.origin==="ARTICLE"?7:0);
-  return {candidate,probe,identity_evidence:nameEvidence,is_recent_photo:isRecent,
-    requires_review:true,can_auto_publish:false,score,flags};
+  return {candidate,probe,identity_evidence:nameEvidence,subject_match:subjectMatch,is_recent_photo:isRecent,
+    requires_review:true,can_auto_publish:false,score,projected_crop_scale:projectedScale,flags};
 }
 
 export function selectPublisherPhoto(
   candidates:readonly PhotoCandidate[],probes:readonly M9ImageProbe[],
   aliases:readonly string[],slot:M9PhotoSlot,now:Date=new Date(),
+  subjectAliasGroups?:readonly M9PhotoSubjectGroup[],
 ):M9PhotoSelection {
   if(candidates.length!==probes.length)throw new Error("M9_PHOTO_PROBE_LENGTH_MISMATCH");
   if(!aliases.length||aliases.every(a=>a.trim().length<4))throw new Error("M9_SUBJECT_NAME_REQUIRED");
-  const assessed=candidates.map((candidate,i)=>assessPublisherPhoto(candidate,probes[i]!,aliases,slot,now));
+  const groups = subjectAliasGroups?.length ? subjectAliasGroups : [{
+    canonical_name: aliases[0] ?? "",
+    aliases,
+  }];
+  const assessed=candidates.map((candidate,i)=>assessPublisherPhoto(candidate,probes[i]!,aliases,slot,now,groups));
   const usable=assessed.filter(x=>!x.flags.includes("INSUFFICIENT_DIMENSIONS") &&
-    x.probe.status==="VALID" && x.identity_evidence!=="UNCONFIRMED" &&
+    x.probe.status==="VALID" && !isObviousNonPhotoAsset(x.candidate) &&
+    (x.identity_evidence!=="UNCONFIRMED" ||
+      (x.candidate.origin==="ARTICLE" && slot!=="PLAYER_PROFILE")) &&
     !x.flags.includes("FUTURE_PHOTO_DATE") &&
     (slot!=="PLAYER_PROFILE"||x.identity_evidence==="ALT_OR_CAPTION_MATCH"));
-  usable.sort((a,b)=>b.score-a.score||a.candidate.image_url.localeCompare(b.candidate.image_url));
+  const subjectCoverage=(assessment:M9PhotoAssessment)=>
+    assessment.subject_match.metadata_matched_subjects.length /
+      assessment.subject_match.requested_subject_count;
+  usable.sort((a,b)=>subjectCoverage(b)-subjectCoverage(a)||
+    b.score-a.score||a.candidate.image_url.localeCompare(b.candidate.image_url));
   return {
     status:usable.length?"CANDIDATES_FOR_REVIEW":"NO_SUITABLE_IMAGE",
-    subject_aliases:[...aliases],slot,selected:usable[0]??null,shortlist:usable.slice(0,3),
+    subject_aliases:[...aliases],subject_alias_groups:groups.map(group=>({
+      canonical_name:group.canonical_name,aliases:[...group.aliases],
+    })),slot,selected:usable[0]??null,shortlist:usable.slice(0,3),
   };
 }
 

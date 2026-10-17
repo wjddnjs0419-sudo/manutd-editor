@@ -7,6 +7,7 @@ import {
   renderTrendingList,
   renderStoryDetail,
   renderTextReel,
+  shortCallbackToken,
   type CanonicalStory,
   type ConsoleView,
   type StoryPage,
@@ -26,6 +27,7 @@ export type ConsoleAction =
   | { type: "GENERATE_CAROUSEL"; token: string | null }
   | { type: "OPEN_REEL"; token: string }
   | { type: "SELECT_DRAFT"; token: string }
+  | { type: "PREVIEW_DRAFT"; token: string }
   | { type: "SHOW_ALTERNATE_HOOKS"; token: string }
   | { type: "EDIT_DRAFT"; token: string }
   | { type: "BACK" };
@@ -61,6 +63,8 @@ export interface ConsoleActionDependencies {
   getStoryByToken: (token: string) => Promise<CanonicalStory | null>;
   skipStory: (story: CanonicalStory) => Promise<void>;
   generateCarousel: (story: CanonicalStory) => Promise<ManutdEditorCarouselDraft>;
+  explorationEnabled?: boolean;
+  previewDraft?: (briefId: string, freshlyGenerated?: boolean) => Promise<{ workflow_url: string }>;
   selectDraft: (briefId: string) => Promise<void>;
 }
 
@@ -82,6 +86,7 @@ export function canHandleStaleConsoleCallback(action: ConsoleAction): boolean {
     case "BACK":
       return true;
     case "SELECT_DRAFT":
+    case "PREVIEW_DRAFT":
     case "SHOW_ALTERNATE_HOOKS":
     case "EDIT_DRAFT":
       return false;
@@ -122,6 +127,8 @@ export function parseConsoleCallback(value: string): ParsedCallback | null {
     const map = { rehook: "SHOW_ALTERNATE_HOOKS", approve: "SELECT_DRAFT", edit: "EDIT_DRAFT", evidence: "OPEN_EVIDENCE" } as const;
     return { type: map[draft[1] as keyof typeof map], token: draft[2]! } as ParsedCallback;
   }
+  const preview = /^draft:preview:([A-Za-z0-9_-]{1,32})$/u.exec(value);
+  if (preview) return { type: "PREVIEW_DRAFT", token: preview[1]! };
   return null;
 }
 
@@ -211,29 +218,80 @@ export async function dispatchEditorialConsoleAction(action: ConsoleAction, stat
     let story = await dependencies.getStoryByToken(token);
     if (!story && state.story_id && state.story_id !== token) story = await dependencies.getStoryByToken(state.story_id);
     if (!story || !story.candidate_id) return safeError("최신 canonical 소재를 찾지 못했습니다.", state, "CREATIVE_GENERATION_FAILED");
-    if (!story.news_eligible) {
+    const useExploration = !story.news_eligible && dependencies.explorationEnabled === true;
+    if (!story.news_eligible && !useExploration) {
       const hasLinkedUrl = story.evidence.some((item) => Boolean(item.canonical_url));
       const message = hasLinkedUrl
         ? "출처 링크는 연결돼 있지만, 아직 카드뉴스용 팩트 검증 기준을 통과하지 못했습니다. URL이 있다는 것만으로는 사실 근거로 사용할 수 없습니다."
         : "아직 카드뉴스용으로 검증된 팩트 근거가 없습니다. 소재에 출처 이름이 보여도 원문 연결과 팩트 검증이 끝나지 않았을 수 있습니다.";
       return safeError(`${message}\n🔎 근거 보기에서 연결 상태를 확인해 주세요.`, state, "CREATIVE_GENERATION_BLOCKED");
     }
-    if (story.evidence.length === 0) {
+    if (!useExploration && story.evidence.length === 0) {
       return safeError("카드뉴스에 연결할 검증 근거를 찾지 못했습니다.\n🔎 근거 보기에서 출처 연결을 확인해 주세요.", state, "CREATIVE_GENERATION_BLOCKED");
     }
-    if (story.information_gap_score <= 0 && story.hook_strength <= 0) {
+    if (!useExploration && story.information_gap_score <= 0 && story.hook_strength <= 0) {
       return safeError("이 소재는 카드뉴스로 구성할 편집 포인트가 부족합니다.\n다른 소재를 선택해 주세요.", state, "CREATIVE_GENERATION_BLOCKED");
     }
     try {
       const draft = await dependencies.generateCarousel(story);
-      return { view: renderCarouselDraft(draft, story.title), next_state: { ...state, view: "DRAFT", story_id: story.id, story_fingerprint: story.story_fingerprint, brief_id: draft.creative_brief_id, state_version: state.state_version + 1 }, event: { action: "CREATIVE_GENERATION_COMPLETED", status: "COMPLETED", metadata: { story_id: story.id, candidate_id: story.candidate_id, brief_id: draft.creative_brief_id } } };
-    } catch {
+      let view = renderCarouselDraft(draft, story.title);
+      let previewWorkflow: string | null = null;
+      let previewDispatchFailed = false;
+      if ((draft.brief_status === "DRAFT" || draft.brief_status === "SELECTED") &&
+          draft.creative_brief_id && dependencies.previewDraft) {
+        try {
+          previewWorkflow = (await dependencies.previewDraft(draft.creative_brief_id, true)).workflow_url;
+          view = {
+            ...view,
+            text: `${view.text}\n\n📨 DRAFT 원고 생성이 끝나 사진 처리·렌더링·비공개 저장 작업을 접수했습니다. 완료되면 이 Telegram으로 카드뉴스 전체와 캡션을 보내드립니다.\n${previewWorkflow}`,
+          };
+        } catch {
+          previewDispatchFailed = true;
+          view = {
+            ...view,
+            text: `${view.text}\n\n⚠️ DRAFT 원고는 저장됐지만 사진·렌더링 작업을 접수하지 못했습니다. 연결 설정을 확인한 뒤 비공개 미리보기를 눌러 다시 요청할 수 있습니다.`,
+          };
+        }
+      }
+      return { view, next_state: { ...state, view: "DRAFT", story_id: story.id, story_fingerprint: story.story_fingerprint, brief_id: draft.creative_brief_id, state_version: state.state_version + 1 }, event: { action: "CREATIVE_GENERATION_COMPLETED", status: "COMPLETED", metadata: { story_id: story.id, candidate_id: story.candidate_id, brief_id: draft.creative_brief_id, preview_workflow_dispatched: previewWorkflow !== null, preview_dispatch_failed: previewDispatchFailed } } };
+    } catch (generationError) {
+      const message = generationError instanceof Error ? generationError.message : "";
+      if (message.startsWith("CREATIVE_GENERATION_BLOCKED:")) {
+        const reason = message.slice("CREATIVE_GENERATION_BLOCKED:".length);
+        const copy: Record<string, string> = {
+          ARTICLE_NOT_EXTRACTED: "기사 본문을 가져오지 못해 초안을 만들지 않았습니다. 원문 본문이 확보된 뒤 다시 시도해 주세요.",
+          ARTICLE_BODY_TOO_SHORT: "기사 원문 근거가 충분하지 않아 초안을 만들지 않았습니다.",
+          PUBLISHER_NAME_MISSING: "출처 매체를 확인할 수 없어 초안을 만들지 않았습니다.",
+          PUBLISHER_URL_INVALID: "원문 언론사 URL을 확인할 수 없어 초안을 만들지 않았습니다.",
+          ARTICLE_TOO_OLD: "72시간이 지난 기사라 자동 초안 대상에서 제외했습니다.",
+          ARCHIVED_STORY: "보관 처리된 소재는 자동으로 다시 열지 않았습니다.",
+        };
+        return safeError(copy[reason] ?? "원문 또는 맨유 관련성을 확인하지 못해 초안을 만들지 않았습니다.", state, "CREATIVE_GENERATION_BLOCKED");
+      }
+      if (message === "CREATIVE_GENERATION_DAILY_LIMIT") return safeError("오늘 Exploration 검토 초안 상한(10개)에 도달했습니다.", state, "CREATIVE_GENERATION_LIMIT_REACHED");
       return safeError("canonical 카드뉴스 생성을 완료하지 못했습니다.", state, "CREATIVE_GENERATION_FAILED");
     }
   }
   if (action.type === "SELECT_DRAFT") {
     await dependencies.selectDraft(action.token);
     return { view: { text: "✅ 초안을 선택했습니다. 게시 전 검토 상태로 저장했습니다.", inline_keyboard: [[{ text: "◀ 소재로 돌아가기", callback_data: "draft:back:list" }]] }, next_state: { ...state, state_version: state.state_version + 1 }, event: { action: "DRAFT_SELECTED", status: "COMPLETED", metadata: { brief_token: action.token } } };
+  }
+  if (action.type === "PREVIEW_DRAFT") {
+    const briefId = state.brief_id;
+    if (!briefId || (action.token !== briefId && action.token !== shortCallbackToken(briefId))) return safeError("최신 초안 화면에서 비공개 미리보기를 요청해 주세요.", state, "STALE_CALLBACK");
+    if (!dependencies.previewDraft) return safeError("DRAFT 미리보기 연결이 설정되지 않았습니다.", state, "DRAFT_PREVIEW_NOT_CONFIGURED");
+    try {
+      const result = await dependencies.previewDraft(briefId);
+      return { view: { text: `🖼️ 비공개 DRAFT 작업을 접수했습니다. 사진 처리·렌더링·비공개 저장이 끝나면 이 Telegram으로 이미지 전체와 캡션을 보내드립니다.\n${result.workflow_url}`, inline_keyboard: [[{ text: "◀ 소재로 돌아가기", callback_data: "draft:back:list" }]] }, next_state: { ...state, state_version: state.state_version + 1 }, event: { action: "DRAFT_PREVIEW_DISPATCHED", status: "COMPLETED", metadata: { brief_id: briefId } } };
+    } catch (previewError) {
+      const reason = previewError instanceof Error ? previewError.message : "";
+      const message = reason === "M9_PREVIEW_DISPATCH_NOT_CONFIGURED"
+        ? "GitHub Actions 미리보기 연결이 설정되지 않았습니다."
+        : reason === "M9_DRAFT_PREVIEW_REQUIRES_EXPLORATION"
+        ? "Exploration DRAFT가 아닌 brief는 이 버튼으로 미리보기할 수 없습니다."
+        : "비공개 미리보기를 요청하지 못했습니다. Actions 연결 설정과 brief 상태를 확인해 주세요.";
+      return safeError(message, state, "DRAFT_PREVIEW_FAILED");
+    }
   }
   if (action.type === "SHOW_ALTERNATE_HOOKS") return safeError("다른 훅 생성은 canonical revision 경로에서 준비 중입니다. 자연어로 원하는 방향을 입력해 주세요.", state, "ALTERNATE_HOOK_REQUESTED");
   if (action.type === "EDIT_DRAFT") return safeError("수정할 내용을 짧게 입력해 주세요. 예: 3장 좀 짧게", state, "DRAFT_EDIT_REQUESTED");

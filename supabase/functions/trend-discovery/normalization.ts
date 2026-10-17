@@ -1,4 +1,5 @@
 import type { DiscoveryObservation, DiscoveryProvider, DiscoveryQuery, EngagementMetrics } from "./types.ts";
+import { MAX_DISCOVERY_EXCERPT_CHARS } from "./limits.ts";
 
 export interface DiscoveryNormalizationContext {
   readonly provider: Pick<DiscoveryProvider, "providerId" | "sourceRole" | "platform">;
@@ -67,7 +68,7 @@ export async function normalizeDiscoveryObservation(value: unknown, context: Dis
     externalId: externalId.slice(0, 320),
     canonicalUrl,
     title: title.slice(0, 500),
-    excerpt: excerptValue ? excerptValue.slice(0, 2_000) : null,
+    excerpt: excerptValue ? excerptValue.slice(0, MAX_DISCOVERY_EXCERPT_CHARS) : null,
     publishedAt,
     observedAt: context.observedAt,
     platform: context.provider.platform,

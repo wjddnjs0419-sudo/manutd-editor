@@ -1,5 +1,5 @@
 import { clusterObservations } from "../trend-discovery/clustering.ts";
-import { businessDate } from "../_shared/m6/business_date.ts";
+import { isTrendRelevant } from "../trend-discovery/relevance.ts";
 import type { PromotionObservation, PromotionStory, DiscoveryPromotionRepository, PromotionSummary } from "./types.ts";
 
 interface PromoteDiscoveryOptions {
@@ -8,6 +8,7 @@ interface PromoteDiscoveryOptions {
   readonly limit?: number;
   readonly rankingDate?: string;
   readonly promotionJobId?: string;
+  readonly promotionObservationId?: string;
   readonly refreshExistingGrounding?: boolean;
 }
 
@@ -109,12 +110,17 @@ export async function promoteDiscovery(options: PromoteDiscoveryOptions): Promis
   const asOf = asOfDate(options.asOf);
   const limit = options.limit ?? 100;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("INVALID_PROMOTION_LIMIT");
-  const observations = [...await options.repository.listFreshUnassigned(asOf, limit, options.promotionJobId)];
-  if (observations.length > limit) throw new Error("PROMOTION_LIMIT_EXCEEDED");
+  if (options.promotionObservationId && !options.promotionJobId) throw new Error("PROMOTION_OBSERVATION_REQUIRES_JOB_ID");
+  const listedObservations = [...await options.repository.listFreshUnassigned(asOf, limit, options.promotionJobId, options.promotionObservationId)];
+  if (listedObservations.length > limit) throw new Error("PROMOTION_LIMIT_EXCEEDED");
+  const observations = listedObservations.filter((item) => item.providerId !== "google-news" || isTrendRelevant({
+    title: item.title,
+    excerpt: item.excerpt,
+    entities: strings(record(item.metadata).entities),
+  }));
   if (observations.length === 0 && !options.refreshExistingGrounding) return { status: "COMPLETED", observationsProcessed: 0, storiesCreated: 0, storiesUpdated: 0, claimsCreated: 0, editorialCandidatesEnsured: 0, affectedStoryIds: [] };
   const stories = [...await options.repository.listStories(asOf)];
   const clusters = clusterObservations(observations);
-  const rankingDate = options.rankingDate ?? businessDate(asOf, "Asia/Seoul");
   let storiesCreated = 0;
   let storiesUpdated = 0;
   let claimsCreated = 0;
@@ -128,25 +134,38 @@ export async function promoteDiscovery(options: PromoteDiscoveryOptions): Promis
     const times = items.map(eventTime).filter(Number.isFinite);
     const firstSeenAt = iso(Math.min(...times));
     const lastSeenAt = iso(Math.max(...times));
-    const story = await options.repository.upsertStory({
-      canonicalTitle: cluster.representativeTitle,
-      summary: items[0]!.excerpt,
-      topic,
-      firstSeenAt: existing ? new Date(Math.min(Date.parse(existing.firstSeenAt), Date.parse(firstSeenAt))).toISOString() : firstSeenAt,
-      lastSeenAt: existing ? new Date(Math.max(Date.parse(existing.lastSeenAt), Date.parse(lastSeenAt))).toISOString() : lastSeenAt,
-      promotionKey: existing?.promotionKey ?? key,
-      signature: signatureFor(existing, topic, items),
-    });
+    const assignedStoryIds = new Set(items.map((item) => item.storyClusterId).filter((id): id is string => Boolean(id)));
+    let story: { id: string; created: boolean };
+    if (options.promotionJobId && assignedStoryIds.size > 0) {
+      const assignedStoryId = assignedStoryIds.values().next().value as string;
+      const assignedStory = stories.find((candidate) => candidate.id === assignedStoryId);
+      if (assignedStoryIds.size !== 1 || !assignedStory || !safeStoryMatch(assignedStory, key, items)) {
+        throw new Error("PROMOTION_JOB_STORY_MISMATCH");
+      }
+      // A one-row repair job may attach source evidence to its existing story,
+      // but must not refresh status, title, timestamps or signatures.
+      story = { id: assignedStory.id, created: false };
+    } else {
+      story = await options.repository.upsertStory({
+        canonicalTitle: cluster.representativeTitle,
+        summary: items[0]!.excerpt,
+        topic,
+        firstSeenAt: existing ? new Date(Math.min(Date.parse(existing.firstSeenAt), Date.parse(firstSeenAt))).toISOString() : firstSeenAt,
+        lastSeenAt: existing ? new Date(Math.max(Date.parse(existing.lastSeenAt), Date.parse(lastSeenAt))).toISOString() : lastSeenAt,
+        promotionKey: existing?.promotionKey ?? key,
+        signature: signatureFor(existing, topic, items),
+      });
+    }
     if (story.created) storiesCreated += 1;
     else storiesUpdated += 1;
     affectedStoryIds.add(story.id);
     for (const item of items) {
-      await options.repository.assignObservation(item.id, story.id, options.promotionJobId);
       const sourceObservationId = await options.repository.ensureSourceObservation(item);
+      const publisherSourceObservationId = await options.repository.ensureReviewedPublisherObservation(item);
+      if (publisherSourceObservationId) await options.repository.ensurePublisherReportClaims({ observation: item, storyClusterId: story.id, publisherSourceObservationId });
+      await options.repository.assignObservation(item.id, story.id, sourceObservationId, options.promotionJobId);
       await options.repository.ensureDiscoveryClaim({ observationId: item.id, storyClusterId: story.id, sourceObservationId, status: "DISCOVERY_ONLY" });
-      await options.repository.ensureEditorialCandidate({ storyClusterId: story.id, rankingDate, observation: item });
       claimsCreated += 1;
-      editorialCandidatesEnsured += 1;
     }
   }
   if (options.refreshExistingGrounding && affectedStoryIds.size < 100) {

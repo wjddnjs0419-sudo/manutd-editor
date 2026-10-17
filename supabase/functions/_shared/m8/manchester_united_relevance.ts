@@ -13,6 +13,19 @@ export interface ManchesterUnitedRelevanceInput {
   readonly summary?: unknown;
   readonly signature?: unknown;
   readonly sourceUsernames?: readonly string[];
+  readonly title?: unknown;
+  /** Short publisher-page lead, when a feed title omits the article's subject. */
+  readonly primaryText?: unknown;
+  readonly body?: unknown;
+  readonly entities?: unknown;
+  readonly topic?: unknown;
+}
+
+export type ManchesterUnitedRelevanceClass = "UNITED_PRIMARY" | "OPPONENT_MATCH_CONTEXT" | "INCIDENTAL_MENTION" | "OTHER_SPORT" | "TRANSFER_ROUNDUP" | "UNRELATED";
+export interface ManchesterUnitedRelevanceResult {
+  readonly classification: ManchesterUnitedRelevanceClass;
+  readonly autoEligible: boolean;
+  readonly reasonCodes: readonly string[];
 }
 
 const FOCUSED_SOURCE_USERNAMES = new Set([
@@ -95,15 +108,37 @@ const OTHER_CLUB_TERMS = [
   "fulham",
   "풀럼",
   "brighton",
+  "everton",
+  "newcastle",
+  "west ham",
+  "wolves",
+  "brentford",
+  "bournemouth",
+  "nottingham forest",
+  "leicester",
+  "southampton",
+  "crystal palace",
+  "aston villa",
   "브라이튼",
   "barcelona",
   "바르셀로나",
   "psg",
   "paris saint germain",
+  "man city",
+  "spurs",
+  "atletico",
+  "atletico madrid",
+  "real madrid",
+  "bayern",
+  "inter milan",
+  "ac milan",
+  "napoli",
   "유벤투스",
   "juventus",
   ...MANCHESTER_CITY_ONLY_TERMS,
 ];
+
+const OTHER_SPORT_TERMS = ["nfl", "nba", "wnba", "nhl", "mlb", "ncaaf", "ncaab", "super bowl", "jaguars", "jacksonville jaguars", "chiefs", "lakers", "celtics", "yankees", "padres", "테니스", "야구", "농구", "미식축구", "하키"];
 
 function normalize(value: string): string {
   return value
@@ -175,23 +210,70 @@ export function isManchesterUnitedFocusedSource(username: string): boolean {
   return FOCUSED_SOURCE_USERNAMES.has(normalize(username));
 }
 
+function text(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function entityText(value: unknown): string {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string").join(" ");
+  return signatureText(value);
+}
+
+function hasDirectFixtureSignal(value: string): boolean {
+  return /\b(vs?\.?|against|clash|fixture|match|meet|face|opposition|preview)\b|상대|맞대결|경기|프리뷰|대결/u.test(value);
+}
+
+function otherSport(title: string, topic: string): boolean {
+  const titleTopic = `${title} ${topic}`;
+  return termsPresent(titleTopic, OTHER_SPORT_TERMS) || (/\b(nfl|nba|wnba|nhl|mlb|ncaaf|ncaab)\b/u.test(titleTopic));
+}
+
+function isRoundup(title: string, body: string, topic: string, allSignals: string): boolean {
+  const roundupLanguage = /\b(round ?up|all clubs|multiple clubs|transfer news(?:\s+live)?|transfer rumou?rs?|transfer links?|paper talk|rumou?rs?|linked with|destinations?)\b|루머 모음|이적설 모음|여러 구단|이적 후보/u.test(`${title} ${topic}`);
+  const clubCount = new Set(OTHER_CLUB_TERMS.filter((term) => termsPresent(allSignals, [term])).map(normalize)).size;
+  return roundupLanguage && clubCount >= 2 && termsPresent(allSignals, [...EXPLICIT_MANCHESTER_UNITED_TERMS, ...MANCHESTER_UNITED_RELATED_TERMS]);
+}
+
+export function classifyManchesterUnitedRelevance(input: ManchesterUnitedRelevanceInput): ManchesterUnitedRelevanceResult {
+  const title = normalize(text(input.title ?? input.canonicalTitle));
+  const primaryText = normalize(text(input.primaryText));
+  const titleContext = `${title} ${primaryText}`.trim();
+  const body = normalize(text(input.body ?? input.summary));
+  const entities = normalize(entityText(input.entities ?? input.signature));
+  const topic = normalize(text(input.topic));
+  const allSignals = `${title} ${body} ${entities} ${topic}`;
+  const directTitle = termsPresent(title, [...EXPLICIT_MANCHESTER_UNITED_TERMS, ...MANCHESTER_UNITED_RELATED_TERMS]);
+  const directBody = termsPresent(body, [...EXPLICIT_MANCHESTER_UNITED_TERMS, ...MANCHESTER_UNITED_RELATED_TERMS]);
+  const unitedEntity = termsPresent(entities, [...EXPLICIT_MANCHESTER_UNITED_TERMS, ...MANCHESTER_UNITED_RELATED_TERMS]);
+  const unitedAny = directTitle || directBody || unitedEntity;
+  const focusedSource = (input.sourceUsernames ?? []).some((username) => FOCUSED_SOURCE_USERNAMES.has(normalize(username.replace(/^@/u, ""))));
+  if (otherSport(title, topic)) return { classification: "OTHER_SPORT", autoEligible: false, reasonCodes: ["OTHER_SPORT_CONTEXT"] };
+  const unitedLeadPosition = firstTermPosition(primaryText, [...EXPLICIT_MANCHESTER_UNITED_TERMS, ...MANCHESTER_UNITED_RELATED_TERMS]);
+  const cityLeadPosition = firstTermPosition(primaryText, MANCHESTER_CITY_ONLY_TERMS);
+  const unitedLeadsCityComparison = unitedLeadPosition >= 0 && (cityLeadPosition < 0 || unitedLeadPosition < cityLeadPosition);
+  if (termsPresent(allSignals, MANCHESTER_CITY_ONLY_TERMS) && !termsPresent(title, EXPLICIT_MANCHESTER_UNITED_TERMS) && !unitedLeadsCityComparison) return { classification: unitedAny ? "INCIDENTAL_MENTION" : "UNRELATED", autoEligible: false, reasonCodes: ["MANCHESTER_CITY_ONLY_OR_COMPARISON"] };
+  if (isRoundup(title, body, topic, allSignals)) return { classification: "TRANSFER_ROUNDUP", autoEligible: false, reasonCodes: ["MULTI_CLUB_TRANSFER_ROUNDUP"] };
+
+  const unitedTitlePosition = firstTermPosition(titleContext, EXPLICIT_MANCHESTER_UNITED_TERMS);
+  const opponentTitlePosition = firstTermPosition(titleContext, OTHER_CLUB_TERMS);
+  const opponentContext = (directBody || unitedEntity) && opponentTitlePosition >= 0 && (unitedTitlePosition < 0 || opponentTitlePosition < unitedTitlePosition) && hasDirectFixtureSignal(`${titleContext} ${body} ${topic}`) && /(match|fixture|preview|opponent|matchday|경기|프리뷰|상대|맞대결)/u.test(topic + " " + titleContext + " " + body);
+  if (opponentContext) return { classification: "OPPONENT_MATCH_CONTEXT", autoEligible: true, reasonCodes: ["UNITED_FIXTURE_CONTEXT"] };
+
+  const titleTopicContradiction = termsPresent(title, OTHER_CLUB_TERMS) && !directTitle && !/(match|fixture|preview|opponent|matchday|경기|프리뷰|상대|맞대결)/u.test(topic + " " + title);
+  if (titleTopicContradiction) return { classification: unitedAny ? "INCIDENTAL_MENTION" : "UNRELATED", autoEligible: false, reasonCodes: ["UNITED_NOT_PRIMARY_TOPIC"] };
+  if (directTitle && (directBody || unitedEntity || focusedSource) && !hasSecondaryUnitedMention(`${title} ${body}`)) return { classification: "UNITED_PRIMARY", autoEligible: true, reasonCodes: [focusedSource ? "FOCUSED_SOURCE_AND_TITLE" : "TITLE_BODY_ENTITY_ALIGNMENT"] };
+  if (focusedSource && !unitedAny) return { classification: "UNITED_PRIMARY", autoEligible: true, reasonCodes: ["ALLOWLISTED_FOCUSED_SOURCE"] };
+  if (unitedAny) return { classification: "INCIDENTAL_MENTION", autoEligible: false, reasonCodes: ["UNITED_SIGNAL_NOT_CENTRAL"] };
+  return { classification: "UNRELATED", autoEligible: false, reasonCodes: ["NO_UNITED_SIGNAL"] };
+}
+
 export function isManchesterUnitedRelevant(input: ManchesterUnitedRelevanceInput): boolean {
-  const sourceUsernames = (input.sourceUsernames ?? []).map(normalize);
-  if (sourceUsernames.some((username) => FOCUSED_SOURCE_USERNAMES.has(username))) return true;
-
-  const haystack = normalize([
-    typeof input.canonicalTitle === "string" ? input.canonicalTitle : "",
-    typeof input.summary === "string" ? input.summary : "",
-    signatureText(input.signature),
-  ].join(" "));
-  const explicitUnitedSignal = termsPresent(haystack, EXPLICIT_MANCHESTER_UNITED_TERMS);
-  if (explicitUnitedSignal || termsPresent(haystack, MANCHESTER_UNITED_RELATED_TERMS)) {
-    if (hasSecondaryUnitedMention(haystack)) return false;
-    return true;
-  }
-
-  // Do not let a generic story about Manchester City pass merely because a
-  // comparison or league context mentions United elsewhere.
-  if (termsPresent(haystack, MANCHESTER_CITY_ONLY_TERMS)) return false;
-  return termsPresent(haystack, MANCHESTER_UNITED_RELATED_TERMS);
+  const result = classifyManchesterUnitedRelevance(input);
+  if (result.autoEligible) return true;
+  // Preserve historical callers until they pass structured source evidence;
+  // the ranking repository uses the conservative classifier directly.
+  const haystack = normalize(`${text(input.canonicalTitle)} ${text(input.summary)} ${signatureText(input.signature)}`);
+  return !otherSport(normalize(text(input.canonicalTitle)), "") &&
+    !termsPresent(haystack, MANCHESTER_CITY_ONLY_TERMS) && !hasSecondaryUnitedMention(haystack) &&
+    (termsPresent(haystack, [...EXPLICIT_MANCHESTER_UNITED_TERMS, ...MANCHESTER_UNITED_RELATED_TERMS]) || (input.sourceUsernames ?? []).some((username) => isManchesterUnitedFocusedSource(username.replace(/^@/u, ""))));
 }

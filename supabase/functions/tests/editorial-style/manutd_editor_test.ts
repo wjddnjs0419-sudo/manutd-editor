@@ -4,7 +4,12 @@ import {
   validateManutdEditorDraft,
   type ManutdEditorCarouselDraft,
 } from "../../_shared/editorial-style/validator.ts";
-import { MANUTD_EDITOR_GOLDEN_EXAMPLES } from "../../_shared/editorial-style/golden_examples.ts";
+import {
+  inferManutdEditorialArticleType,
+  MANUTD_EDITOR_GOLDEN_EXAMPLES,
+  selectManutdStyleExamples,
+} from "../../_shared/editorial-style/golden_examples.ts";
+import { MANUTD_EDITORIAL_SELECTOR_FIXTURES } from "../../../../scripts/fixtures/m9-editorial/editorial_selector_fixtures.ts";
 
 function draft(overrides: Partial<ManutdEditorCarouselDraft> = {}): ManutdEditorCarouselDraft {
   return {
@@ -44,6 +49,18 @@ Deno.test("accepts an optional grounded implication slide", () => {
   assertEquals(validateManutdEditorDraft(value, new Set(["source:bbc"])).valid, true);
 });
 
+Deno.test("accepts mode-specific Exploration bounds without changing the default 3–4 policy", () => {
+  const base = draft();
+  const six = draft({ slides: [
+    ...base.slides,
+    { index: 4, role: "IMPLICATION", headline: "근거 하나 더", highlight: null, body: "추가 근거를 요약한다.", closing_line: null, evidence_ids: ["source:bbc"] },
+    { index: 5, role: "KEY_FACT", headline: "수치 확인", highlight: null, body: "기사에 나온 수치를 확인한다.", closing_line: null, evidence_ids: ["source:bbc"] },
+    { index: 6, role: "IMPLICATION", headline: "남은 쟁점", highlight: null, body: "보도에서 확정하지 않은 내용을 구분한다.", closing_line: null, evidence_ids: ["source:bbc"] },
+  ] });
+  assertEquals(validateManutdEditorDraft(six, new Set(["source:bbc"]), { min: 4, max: 6 }).valid, true);
+  assert(validateManutdEditorDraft(six, new Set(["source:bbc"])).errors.some((error) => error.code === "SLIDE_COUNT"));
+});
+
 Deno.test("rejects internal research language from public copy", () => {
   const value = draft({ slides: [{ ...draft().slides[0]!, headline: "현재 확보된 자료에는 전술 문제가 없습니다." }, ...draft().slides.slice(1)] });
   const result = validateManutdEditorDraft(value, new Set(["source:bbc"]));
@@ -72,10 +89,46 @@ Deno.test("rejects filler-length carousels and overly long caption copy", () => 
   assert(result.errors.some((error) => error.code === "CAPTION_TOO_LONG"));
 });
 
-Deno.test("keeps golden examples isolated as style references", () => {
-  assertEquals(MANUTD_EDITOR_GOLDEN_EXAMPLES.length, 2);
+Deno.test("keeps all Figma hooks isolated as style references", () => {
+  assertEquals(MANUTD_EDITOR_GOLDEN_EXAMPLES.length, 20);
   assert(MANUTD_EDITOR_GOLDEN_EXAMPLES.every((example) => example.style_only));
   assert(MANUTD_EDITOR_GOLDEN_EXAMPLES.every((example) => example.generation_evidence_ids.length === 0));
   assert(MANUTD_EDITOR_GOLDEN_EXAMPLES.some((example) => example.slug === "sancho"));
   assert(MANUTD_EDITOR_GOLDEN_EXAMPLES.some((example) => example.slug === "garnacho"));
+});
+
+Deno.test("selects three matching style examples for fixed synthetic article fixtures", () => {
+  const examples = [
+    ...MANUTD_EDITORIAL_SELECTOR_FIXTURES.map((fixture) => ({
+      id: fixture.id,
+      input: fixture.input,
+      type: fixture.expected_type,
+      synthetic: fixture.synthetic,
+    })),
+    {
+      id: "synthetic-interview-conflict",
+      input: "[SYNTHETIC] interview quote and manager assessment",
+      type: "INTERVIEW_CONFLICT",
+      synthetic: true,
+    },
+    {
+      id: "synthetic-fan-backstage",
+      input: "[SYNTHETIC] fan reaction and stadium behind the scenes",
+      type: "FAN_BACKSTAGE",
+      synthetic: true,
+    },
+  ] as const;
+
+  for (const fixture of examples) {
+    assertEquals(fixture.synthetic, true, fixture.id);
+    assertEquals(inferManutdEditorialArticleType(fixture.input), fixture.type);
+    const selected = selectManutdStyleExamples(fixture.input);
+    assertEquals(selected.length, 3, fixture.id);
+    assert(selected.every((example) => example.article_types.includes(fixture.type)));
+    assertEquals(
+      selectManutdStyleExamples(fixture.input).map((example) => example.id),
+      selected.map((example) => example.id),
+      fixture.id,
+    );
+  }
 });

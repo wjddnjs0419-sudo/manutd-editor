@@ -11,7 +11,7 @@ interface RevisionDependencies {
 
 function outputFromBrief(brief: StoredCreativeBrief): CreativeBriefOutput {
   const snapshot = brief.evidence_snapshot as EvidenceSnapshot;
-  return { schema_version: "1.0", content_mode: brief.content_mode as CreativeBriefOutput["content_mode"], match_phase: brief.match_phase as CreativeBriefOutput["match_phase"], generation_quality: brief.generation_quality as CreativeBriefOutput["generation_quality"], angle: brief.angle, key_takeaway: String(brief.slides_json.key_takeaway ?? ""), hooks: brief.hooks_json as CreativeBriefOutput["hooks"], slides: brief.slides_json.slides as CreativeBriefSlide[], caption: { body: brief.caption_draft, cta: brief.cta }, sources: snapshot.sources.map((source) => ({ evidence_id: source.evidence_id, label: source.canonical_name })) };
+  return { schema_version: "1.0", content_mode: brief.content_mode as CreativeBriefOutput["content_mode"], match_phase: brief.match_phase as CreativeBriefOutput["match_phase"], generation_quality: brief.generation_quality as CreativeBriefOutput["generation_quality"], angle: brief.angle, key_takeaway: String(brief.slides_json.key_takeaway ?? ""), hooks: brief.hooks_json as CreativeBriefOutput["hooks"], slides: brief.slides_json.slides as CreativeBriefSlide[], caption: { body: brief.caption_draft, cta: brief.cta }, sources: snapshot.sources.map((source) => ({ evidence_id: source.evidence_id, label: source.canonical_name, url: source.canonical_url ?? undefined })) };
 }
 
 function materialize(base: StoredCreativeBrief, output: CreativeBriefOutput, dependencies: RevisionDependencies, headlineOverride?: string): StoredCreativeBrief {

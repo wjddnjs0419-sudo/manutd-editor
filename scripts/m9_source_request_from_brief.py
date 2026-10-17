@@ -4,7 +4,7 @@
 No new football claims, no LLM subject guessing. If the brief is missing
 credited publisher URLs or contains multiple competing named subjects, fail
 closed and request manual editorial selection. Google News wrappers remain
-intact for the existing Deno Google News -> publisher URL resolver.
+provenance only; photo discovery requires an already resolved publisher URL.
 
 Trusted photo CDN hosts come ONLY from operator configuration, never from
 untrusted article metadata.
@@ -18,6 +18,7 @@ import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+from m9_content_policy import ordered_content_slides
 
 # Conservative fallback for known named football figures when
 # app_private.tracked_entities has not yet been configured.
@@ -43,9 +44,8 @@ CURATED_PERSON_ALIASES: dict[str, tuple[str, ...]] = {
 ROLES = {"FACT_PRIMARY": 0, "FACT_INDEPENDENT": 1, "OFFICIAL": 2,
          "DISCOVERY_COMMUNITY": 5, "DISCOVERY_OFFICIAL": 3}
 SOCIAL_HOSTS = {"instagram.com", "www.instagram.com", "x.com", "twitter.com",
-                "www.youtube.com", "youtube.com", "t.me", "www.tiktok.com"}
-M9_SLOT_LABELS = ("COVER_NEWS", "BODY_NEWS")
-
+                "www.youtube.com", "youtube.com", "youtu.be", "m.youtube.com",
+                "t.me", "www.tiktok.com"}
 def is_publishable_source_url(value: object) -> bool:
     if not isinstance(value, str) or len(value) > 2000:
         return False
@@ -58,9 +58,7 @@ def is_publishable_source_url(value: object) -> bool:
             host.endswith(".localhost") or ":" in host or \
             re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host):
             return False
-        if host in ("google.com", "www.google.com"):
-            return False
-        if host == "news.google.com" and not re.match(r"^/(?:rss/)?(?:articles|read)/",url.path):
+        if host == "google.com" or host.endswith(".google.com") or host.startswith("google.") or host.endswith(".googleusercontent.com"):
             return False
         return True
     except ValueError:
@@ -98,10 +96,23 @@ def source_pages(snapshot: dict[str,Any]) -> tuple[list[str],list[str]]:
     sources = snapshot.get("sources")
     if not isinstance(sources,list):
         raise ValueError("M9_BRIEF_SOURCES_MISSING")
+    sources = list(sources)
+    articles = snapshot.get("exploration_articles")
+    if isinstance(articles, list):
+        for article in articles:
+            if not isinstance(article, dict):
+                continue
+            sources.append({
+                "canonical_url": article.get("canonical_url"),
+                "canonical_name": article.get("publisher_name"),
+                "editorial_role": "DISCOVERY_COMMUNITY",
+            })
     scored:list[tuple[int,int,str,bool]] = []
     for index,source in enumerate(sources):
         if not isinstance(source,dict):continue
-        url=source.get("canonical_url")
+        metadata=source.get("metadata") if isinstance(source.get("metadata"),dict) else {}
+        url=(source.get("resolved_publisher_url") or metadata.get("resolved_publisher_url")
+             or source.get("canonical_url"))
         if not is_publishable_source_url(url):continue
         publisher = urlsplit(url).hostname or ""
         official = publisher.lower() in ("manutd.com","www.manutd.com")
@@ -132,34 +143,76 @@ def build_request(
     if not isinstance(slides,list) or len(slides)<2:
         raise ValueError("M9_BRIEF_SLIDES_MISSING")
     registry=from_tracked_entities(tracked_entities or [])
-    subjects=[]
-    for index in (0,1):
-        slide=slides[index]
+    numbered_slides = ordered_content_slides(slides)
+    if len(numbered_slides) != len(slides) or len(numbered_slides) > 6:
+        raise ValueError("M9_BRIEF_SLIDE_COUNT_INVALID")
+    first_page_subjects: list[str] | None = None
+    slots=[]
+    for index, slide in enumerate(numbered_slides):
         if not isinstance(slide,dict):raise ValueError("M9_BRIEF_SLIDES_MISSING")
+        # Photo jobs use canonical rendered order: HOOK first, then the other
+        # content in saved index order, regardless of stale slide_number values.
+        slide_number = index + 1
         direction=slide.get("visual_direction")
         if not isinstance(direction,dict):direction={}
         scene=direction.get("subject") or ""
         if not isinstance(scene,str):scene=""
         recognized=recognized_people(scene,registry)
         # A person named elsewhere in a headline is not proof they appear in a photo.
-        # For simple one-person stories only, inherit the named subject from page 1.
-        if len(recognized)>1:
-            raise ValueError(f"M9_AMBIGUOUS_PHOTO_SUBJECT_PAGE_{index+1}")
+        # Keep the existing page-1 fallback, inheriting its full named subject group.
         if len(recognized)==0:
-            if index==1 and subjects:recognized=[subjects[0]]
+            if index > 0 and first_page_subjects:recognized=list(first_page_subjects)
             else:raise ValueError(f"M9_PHOTO_SUBJECT_NOT_IDENTIFIED_PAGE_{index+1}")
-        subjects.append(recognized[0])
+        if len(recognized)>6:
+            raise ValueError(f"M9_PHOTO_SUBJECT_COUNT_INVALID_PAGE_{index+1}")
+        if index == 0:
+            first_page_subjects=list(recognized)
+        role = "COVER_NEWS" if index == 0 else "BODY_NEWS"
+        subject_alias_groups = []
+        for canonical_name in recognized:
+            aliases = list(dict.fromkeys([
+                canonical_name,
+                *[alias for alias in registry[canonical_name] if len(alias.strip()) >= 4],
+            ]))[:6]
+            subject_alias_groups.append({"canonical_name": canonical_name, "aliases": aliases})
+        flat_aliases = list(recognized)
+        flat_aliases.extend(
+            alias
+            for group in subject_alias_groups
+            for alias in group["aliases"]
+            if alias != group["canonical_name"]
+        )
+        slots.append({
+            "slot": role,
+            "slide_number": slide_number,
+            "content_role": str(slide.get("role") or ("HOOK" if index == 0 else "BODY")).strip().upper(),
+            # Retain the legacy flat field for older readers. New collectors use
+            # the grouped field so aliases for different people aren't confused.
+            "subject_aliases": list(dict.fromkeys(flat_aliases))[:6],
+            "subject_alias_groups": subject_alias_groups,
+        })
     news,official=source_pages(snapshot)
+    google_original_urls=[]
+    for source in snapshot.get("sources",[]):
+        if not isinstance(source,dict):continue
+        metadata=source.get("metadata") if isinstance(source.get("metadata"),dict) else {}
+        original=source.get("google_news_original_url") or metadata.get("google_news_original_url") or metadata.get("google_news_url")
+        if isinstance(original,str) and original.startswith("https://news.google.com/rss/articles/") and original not in google_original_urls:
+            google_original_urls.append(original)
     return {
         "publisher_article_urls":news,
         "official_article_urls":official,
-        "slots":[{"slot":role,"subject_aliases":list(dict.fromkeys([name, *[alias for alias in registry[name] if len(alias.strip()) >= 4]]))[:6]}
-                 for role,name in zip(M9_SLOT_LABELS,subjects)],
+        "slots":slots,
         "allowed_image_hosts":allowed_image_hosts,
         "_provenance":{
             "brief_id":brief.get("id"),
-            "subject_names":subjects,
-            "source_type":"creative_briefs.evidence_snapshot.sources",
+            "subject_names":[
+                group["canonical_name"]
+                for slot in slots
+                for group in slot["subject_alias_groups"]
+            ],
+            "source_type":"creative_briefs.evidence_snapshot.sources_and_exploration_articles",
+            "google_news_original_urls":google_original_urls[:20],
             "requires_human_photo_review":True,
             "auto_publish":False,
         },

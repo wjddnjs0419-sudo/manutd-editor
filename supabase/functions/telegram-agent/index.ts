@@ -11,7 +11,7 @@ import { createTelegramClient } from "../_shared/m6/telegram_client.ts";
 import { createM6Repository } from "../_shared/m6/repository.ts";
 import { createEditorialConsoleRepository, findCanonicalStoryByToken, paginateStories, shortCallbackToken, type CanonicalStory, type ConsoleView } from "../_shared/m6/editorial_console.ts";
 import { canHandleStaleConsoleCallback, dispatchEditorialConsoleAction, parseConsoleCallback, type ConsoleAction, type ConsoleState } from "../_shared/m6/editorial_console_actions.ts";
-import { invokeCanonicalCarousel } from "../_shared/m6/console_generation.ts";
+import { invokeCanonicalCarousel, type CanonicalGenerationDependencies } from "../_shared/m6/console_generation.ts";
 import { createEditorialJobQueue } from "../orchestration-worker/queue_client.ts";
 import { createTelegramAgentHandler } from "./handler.ts";
 import { answerNaturalLanguage, canonicalStoryFromReplyContext, parseReplyMessageId, replyConsoleIntent, resolveReplyContext, resolveReplyReference, type CanonicalConversationContext, type ReplyContext } from "./conversation.ts";
@@ -19,6 +19,8 @@ import { enqueueManualDiscovery, type ManualDiscoveryPayload } from "./manual_di
 import type { StoredCreativeBrief } from "../creative-generation/repository.ts";
 import type { CreativeBriefSlide } from "../creative-generation/types.ts";
 import type { EditorialSlideRole, ManutdEditorCarouselDraft } from "../_shared/editorial-style/types.ts";
+import { readExplorationConfig } from "../creative-generation/exploration.ts";
+import { dispatchPrivateExplorationPreview } from "./m9_preview_dispatch.ts";
 
 const invokeSecret = Deno.env.get("TELEGRAM_AGENT_INVOKE_SECRET") ?? "";
 const webhookSecret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
@@ -31,6 +33,7 @@ const repository = createM6Repository({ supabaseUrl, serviceRoleKey: serviceKey 
 const consoleRepository = createEditorialConsoleRepository({ supabaseUrl, serviceRoleKey: serviceKey });
 const editorialJobQueue = createEditorialJobQueue({ supabaseUrl, serviceKey });
 const manualDiscoveryPayload: ManualDiscoveryPayload = { mode: "GENERAL", search_profile: "MANUAL", max_queries: 8 };
+const explorationEnabled = readExplorationConfig((name) => Deno.env.get(name)).enabled;
 
 function profileHeaders(profile: string): Record<string, string> { return { apikey: serviceKey, authorization: `Bearer ${serviceKey}`, accept: "application/json", "accept-profile": profile, "content-profile": profile }; }
 async function rest(path: string, init: RequestInit = {}, profile?: string): Promise<unknown> {
@@ -372,6 +375,7 @@ function storedBriefToManutdDraft(row: Record<string, unknown>, story: Canonical
     style_version: typeof row.style_version === "string" ? row.style_version : "manutd-editor-v1",
     story_id: story.id,
     creative_brief_id: typeof row.id === "string" ? row.id : null,
+    ...(row.status === "READY" || row.status === "DRAFT" || row.status === "SELECTED" ? { brief_status: row.status } : {}),
     slides,
     caption: { body: caption, cta: typeof row.cta === "string" ? row.cta : null },
     editor_warning: typeof slidesJson.editor_warning === "string" ? slidesJson.editor_warning : typeof row.editor_warning === "string" ? row.editor_warning : slides.length < 3 ? "현재 근거로는 3장까지 구성하는 것이 적절합니다." : null,
@@ -379,18 +383,29 @@ function storedBriefToManutdDraft(row: Record<string, unknown>, story: Canonical
   };
 }
 
-async function generateCanonicalCarousel(story: CanonicalStory): Promise<ManutdEditorCarouselDraft> {
+async function generateCanonicalCarousel(story: CanonicalStory, allowExploration = false): Promise<ManutdEditorCarouselDraft> {
   if (!story.candidate_id) throw new Error("CANDIDATE_NOT_FOUND");
   const secret = Deno.env.get("COLLECTOR_INVOKE_SECRET") ?? "";
   if (!secret) throw new Error("COLLECTOR_INVOKE_SECRET_MISSING");
-  const brief = await invokeCanonicalCarousel(story.candidate_id, {
+  const dependencies: CanonicalGenerationDependencies = {
     invoke: async (input) => {
       const response = await fetch(`${base}/functions/v1/creative-generation`, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify(input) });
       const result = await response.json().catch(() => ({}));
       return response.ok ? result : { status: "FAILED_PROVIDER" };
     },
     loadBrief: async (id) => await rowById(`/rest/v1/creative_briefs?select=*&id=eq.${encodeURIComponent(id)}&limit=1`),
-  }, story.id);
+  };
+  let brief: Record<string, unknown>;
+  if (!story.news_eligible && allowExploration) {
+    brief = await invokeCanonicalCarousel(story.candidate_id, dependencies, story.id, "EXPLORATION");
+  } else {
+    try {
+      brief = await invokeCanonicalCarousel(story.candidate_id, dependencies, story.id);
+    } catch (error) {
+      if (!allowExploration || !(error instanceof Error) || !error.message.startsWith("CREATIVE_GENERATION_BLOCKED:")) throw error;
+      brief = await invokeCanonicalCarousel(story.candidate_id, dependencies, story.id, "EXPLORATION");
+    }
+  }
   return storedBriefToManutdDraft(brief, story);
 }
 
@@ -401,7 +416,24 @@ async function skipCanonicalStory(thread: ThreadRow, story: CanonicalStory): Pro
 async function selectCanonicalDraft(thread: ThreadRow, token: string): Promise<void> {
   const state = await loadConsoleState(thread.id);
   const briefId = state.brief_id && (state.brief_id === token || shortCallbackToken(state.brief_id) === token) ? state.brief_id : token;
-  await rest(`/rest/v1/creative_briefs?id=eq.${encodeURIComponent(briefId)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ status: "SELECTED", selected_at: new Date().toISOString() }) });
+  const brief = await rowById(`/rest/v1/creative_briefs?select=id,status&id=eq.${encodeURIComponent(briefId)}&limit=1`);
+  if (brief?.status === "DRAFT") {
+    await rest(`/rest/v1/creative_briefs?id=eq.${encodeURIComponent(briefId)}`, { method: "PATCH", headers: { "content-type": "application/json", prefer: "return=minimal" }, body: JSON.stringify({ status: "SELECTED", selected_at: new Date().toISOString() }) });
+  }
+}
+
+async function previewCanonicalDraft(thread: ThreadRow, briefId: string, freshlyGenerated = false): Promise<{ workflow_url: string }> {
+  if (!freshlyGenerated) {
+    const state = await loadConsoleState(thread.id);
+    if (state.brief_id !== briefId) throw new Error("M9_DRAFT_PREVIEW_REQUIRES_EXPLORATION");
+  }
+  const brief = await rowById(`/rest/v1/creative_briefs?select=id,status,generation_metadata&id=eq.${encodeURIComponent(briefId)}&limit=1`);
+  if (!brief || typeof brief.id !== "string" || typeof brief.status !== "string") throw new Error("M9_DRAFT_PREVIEW_REQUIRES_EXPLORATION");
+  return await dispatchPrivateExplorationPreview({ id: brief.id, status: brief.status, generation_metadata: brief.generation_metadata }, {
+    token: Deno.env.get("M9_GITHUB_ACTIONS_TOKEN") ?? "",
+    repository: Deno.env.get("M9_GITHUB_REPOSITORY") ?? "",
+    workflowRef: Deno.env.get("M9_GITHUB_WORKFLOW_REF") ?? "",
+  });
 }
 
 function consoleDependencies(thread: ThreadRow, replyContext: ReplyContext | null = null) {
@@ -415,7 +447,9 @@ function consoleDependencies(thread: ThreadRow, replyContext: ReplyContext | nul
       return await resolveConsoleStory(thread, token);
     },
     skipStory: async (story: CanonicalStory) => await skipCanonicalStory(thread, story),
-    generateCarousel: async (story: CanonicalStory) => await generateCanonicalCarousel(story),
+    generateCarousel: async (story: CanonicalStory) => await generateCanonicalCarousel(story, explorationEnabled),
+    explorationEnabled,
+    previewDraft: async (briefId: string, freshlyGenerated = false) => await previewCanonicalDraft(thread, briefId, freshlyGenerated),
     selectDraft: async (token: string) => await selectCanonicalDraft(thread, token),
   };
 }
@@ -442,6 +476,10 @@ async function runConsoleAction(thread: ThreadRow, incoming: TelegramUpdate, act
   const client = createTelegramClient({ token: botToken });
   const queryId = callbackId(incoming);
   if (queryId) await client.answerCallbackQuery(queryId).catch(() => undefined);
+  if (action.type === "GENERATE_CAROUSEL") {
+    const chatId = telegramChatId(incoming);
+    if (chatId) await client.sendText(chatId, "📝 선택한 기사 원문과 출처를 확인하고 한국어 DRAFT 원고를 생성하는 중입니다.").catch(() => undefined);
+  }
   const state = await loadConsoleState(thread.id);
   const incomingMessageId = callbackMessageId(incoming);
   const staleCallback = incomingMessageId !== null && state.telegram_message_id !== null && incomingMessageId !== state.telegram_message_id;

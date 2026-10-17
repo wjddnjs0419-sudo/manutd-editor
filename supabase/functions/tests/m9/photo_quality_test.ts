@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1.0.8";
 import {
-  inspectImageBytes,allowedPhotoImageUrl,probePhotoImage,matchPhotoSubject,
-  selectPublisherPhoto,shortlistPublisherPhotos,
+  inspectImageBytes,allowedPhotoImageUrl,probePhotoImage,matchPhotoSubject,matchPhotoSubjectGroups,
+  selectPublisherPhoto,shortlistPublisherPhotos,projectedCropScale,
 } from "../../_shared/m9/photo_quality.ts";
 import type { PhotoCandidate } from "../../_shared/m9/article_photo_candidates.ts";
 
@@ -80,6 +80,25 @@ Deno.test("subject matching is text evidence, not visual identity verification",
   assertEquals(matchPhotoSubject(candidate(),["Bruno Fernandes"]),"ALT_OR_CAPTION_MATCH");
   assertEquals(matchPhotoSubject(candidate({caption:null}),["Bruno Fernandes"]),"FILENAME_HINT");
   assertEquals(matchPhotoSubject(candidate({caption:"Another footballer",image_url:"https://images.example.org/stock-photo.jpg"}),["Bruno Fernandes"]),"UNCONFIRMED");
+  const groups=[
+    {canonical_name:"Bryan Mbeumo",aliases:["Bryan Mbeumo"]},
+    {canonical_name:"Dominic Solanke",aliases:["Dominic Solanke"]},
+  ];
+  const partial=matchPhotoSubjectGroups(candidate({caption:"Bryan Mbeumo celebrates"}),groups);
+  assertEquals(partial.coverage,"PARTIAL");
+  assertEquals(partial.metadata_matched_subjects,["Bryan Mbeumo"]);
+  const full=matchPhotoSubjectGroups(candidate({caption:"Bryan Mbeumo and Dominic Solanke"}),groups);
+  assertEquals(full.coverage,"FULL");
+  assertEquals(full.metadata_matched_subjects,["Bryan Mbeumo","Dominic Solanke"]);
+  const selected=selectPublisherPhoto([
+    candidate({image_url:"https://images.example.org/partial.jpg",caption:"Bryan Mbeumo celebrates"}),
+    candidate({image_url:"https://images.example.org/full.jpg",caption:"Bryan Mbeumo and Dominic Solanke"}),
+    candidate({image_url:"https://images.example.org/unconfirmed.jpg",caption:null,credit:null}),
+  ],[valid(2000,1300),valid(2000,1300),valid(2000,1300)],
+  ["Bryan Mbeumo","Dominic Solanke"],"BODY_NEWS",new Date("2026-10-11T12:00:00Z"),groups);
+  assertEquals(selected.selected?.candidate.image_url,"https://images.example.org/full.jpg");
+  assertEquals(selected.selected?.subject_match.coverage,"FULL");
+  assertEquals(selected.shortlist.map(x=>x.subject_match.coverage),["FULL","PARTIAL","NONE"]);
 });
 Deno.test("selects current subject-relevant article photo and flags reuse rights",()=>{
   const c=[
@@ -95,10 +114,25 @@ Deno.test("selects current subject-relevant article photo and flags reuse rights
   assertEquals(picked.selected?.can_auto_publish,false);
   assertEquals(picked.selected?.requires_review,true);
   assert(picked.selected?.flags.includes("REUSE_RIGHTS_UNVERIFIED"));
-  assertEquals(picked.shortlist.length,2);
+  assertEquals(picked.shortlist.length,3);
+  assert(picked.shortlist.some(x=>x.candidate.image_url==="https://images.example.org/tiny.jpg"));
+  assert((picked.shortlist.find(x=>x.candidate.image_url.endsWith("tiny.jpg"))?.projected_crop_scale ?? 0)>2);
 });
-Deno.test("unknown subject never becomes automatically selected",()=>{
-  const selected=selectPublisherPhoto([candidate({caption:"Unrelated photo",image_url:"https://images.example.org/a.jpg"})],[valid(2000,1500)],["Bruno Fernandes"],"PLAYER_PROFILE");
+Deno.test("unknown-name article photo remains an owner-review candidate, never auto-publish",()=>{
+  const selected=selectPublisherPhoto([candidate({caption:null,credit:null,image_url:"https://images.example.org/editorial-match.jpg"})],[valid(2000,1500)],["Bruno Fernandes"],"COVER_NEWS");
+  assertEquals(selected.status,"CANDIDATES_FOR_REVIEW");
+  assertEquals(selected.selected?.identity_evidence,"UNCONFIRMED");
+  assert(selected.selected?.flags.includes("SUBJECT_NOT_CONFIRMED"));
+  assertEquals(selected.selected?.can_auto_publish,false);
+  assertEquals(selected.selected?.requires_review,true);
+});
+Deno.test("unknown-name official-club photo is not accepted by article-only review policy",()=>{
+  const selected=selectPublisherPhoto([candidate({origin:"OFFICIAL_CLUB",caption:null,credit:null,image_url:"https://images.example.org/editorial-match.jpg"})],[valid(2000,1500)],["Bruno Fernandes"],"COVER_NEWS");
+  assertEquals(selected.status,"NO_SUITABLE_IMAGE");
+  assertEquals(selected.selected,null);
+});
+Deno.test("obvious logo and ad assets are excluded even when dimensions are valid",()=>{
+  const selected=selectPublisherPhoto([candidate({caption:"Manchester United sponsor logo",image_url:"https://images.example.org/club-logo.png"})],[valid(2000,1500)],["Bruno Fernandes"],"COVER_NEWS");
   assertEquals(selected.status,"NO_SUITABLE_IMAGE");
   assertEquals(selected.selected,null);
 });
@@ -122,4 +156,37 @@ Deno.test("bad probe vector lengths rejected, no fake successful results",()=>{
   try {selectPublisherPhoto([candidate()],[],["Bruno Fernandes"],"COVER_NEWS");}catch{threw=true;}
   assertEquals(threw,true);
   assertEquals(selectPublisherPhoto([candidate()],[{status:"UNAVAILABLE",bytes_read:0,mime_type:null,width:null,height:null}],["Bruno Fernandes"],"COVER_NEWS").status,"NO_SUITABLE_IMAGE");
+});
+
+Deno.test("landscape 1600x900 projects to 1.5x for the 4:5 crop",()=>{
+  assertEquals(projectedCropScale(1600,900),1.5);
+});
+
+Deno.test("portrait 1.5x and over-2x candidates remain visible to Python crop gates",()=>{
+  const candidates=[
+    candidate({image_url:"https://images.example.org/portrait-720.jpg"}),
+    candidate({image_url:"https://images.example.org/tiny-512.jpg"}),
+  ];
+  const selected=selectPublisherPhoto(candidates,[valid(720,900),valid(512,640)],
+    ["Bruno Fernandes"],"COVER_NEWS",new Date("2026-10-11T12:00:00Z"));
+  assertEquals(selected.status,"CANDIDATES_FOR_REVIEW");
+  assertEquals(selected.shortlist.length,2);
+  assertEquals(selected.shortlist.find(x=>x.candidate.image_url.endsWith("portrait-720.jpg"))?.projected_crop_scale,1.5);
+  assert((selected.shortlist.find(x=>x.candidate.image_url.endsWith("tiny-512.jpg"))?.projected_crop_scale ?? 0)>2);
+});
+
+Deno.test("native 1080x1350 projects to 1x",()=>{
+  assertEquals(projectedCropScale(1080,1350),1);
+});
+
+Deno.test("candidate ranking rewards projected crop fit instead of landscape orientation",()=>{
+  const landscape=candidate({image_url:"https://images.example.org/landscape.jpg",score:80});
+  const portrait=candidate({image_url:"https://images.example.org/portrait.jpg",score:80});
+  const selected=selectPublisherPhoto(
+    [landscape,portrait],[valid(1600,900),valid(960,1200)],
+    ["Bruno Fernandes"],"COVER_NEWS",new Date("2026-10-11T12:00:00Z"),
+  );
+  assertEquals(selected.selected?.candidate.image_url,"https://images.example.org/portrait.jpg");
+  assertEquals(selected.shortlist[0]?.projected_crop_scale,1.125);
+  assertEquals(selected.shortlist[1]?.projected_crop_scale,1.5);
 });

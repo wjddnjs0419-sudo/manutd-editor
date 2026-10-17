@@ -1,5 +1,5 @@
 import { assertEquals, assertThrows } from "jsr:@std/assert@1.0.8";
-import { validateM9SourceRequest } from "../../../../scripts/m9_collect_media.ts";
+import { collectM9ForWorker, validateM9SourceRequest } from "../../../../scripts/m9_collect_media.ts";
 
 const request={
  publisher_article_urls:["https://publisher.example.org/article"],
@@ -11,9 +11,24 @@ const request={
  ],
 };
 Deno.test("accepts explicit trusted publisher URLs with two different photo subjects",()=>{
- const r=validateM9SourceRequest(request);
+ const r=validateM9SourceRequest({...request,slots:[
+  request.slots[0],
+  {slot:"BODY_NEWS",subject_aliases:["Bryan Mbeumo","Dominic Solanke"],subject_alias_groups:[
+   {canonical_name:"Bryan Mbeumo",aliases:["Bryan Mbeumo"]},
+   {canonical_name:"Dominic Solanke",aliases:["Dominic Solanke"]},
+  ]},
+ ]});
  assertEquals(r.job.slots.map(x=>x.slot),["COVER_NEWS","BODY_NEWS"]);
+ assertEquals(r.job.slots[1]?.subject_alias_groups?.map(group=>group.canonical_name),["Bryan Mbeumo","Dominic Solanke"]);
  assertEquals(r.allowed_image_hosts,["i.guim.co.uk","media.manutd.com"]);
+});
+Deno.test("accepts repeated BODY_NEWS slots keyed to distinct creative pages",()=>{
+ const r=validateM9SourceRequest({...request,slots:[
+  {...request.slots[0],slide_number:1},
+  {...request.slots[1],slide_number:2},
+  {slot:"BODY_NEWS",slide_number:3,subject_aliases:["Bruno Fernandes"]},
+ ]});
+ assertEquals(r.job.slots.map(x=>x.slide_number),[1,2,3]);
 });
 Deno.test("refuses implicit CDN allowlist, missing subject or extra photo slot",()=>{
  assertThrows(()=>validateM9SourceRequest({...request,allowed_image_hosts:[]}),Error,"M9_TRUSTED_IMAGE_HOSTS_REQUIRED");
@@ -24,5 +39,19 @@ Deno.test("refuses implicit CDN allowlist, missing subject or extra photo slot",
 });
 Deno.test("refuses insecure article URLs and malformed image CDN hosts",()=>{
  assertThrows(()=>validateM9SourceRequest({...request,publisher_article_urls:["http://publisher.example.org/a"]}),Error,"M9_SOURCE_URLS_INVALID");
+ assertThrows(()=>validateM9SourceRequest({...request,publisher_article_urls:["https://news.google.com/rss/articles/article-id"]}),Error,"M9_SOURCE_URLS_INVALID");
+ assertThrows(()=>validateM9SourceRequest({...request,publisher_article_urls:["https://google.co.uk/search?q=story"]}),Error,"M9_SOURCE_URLS_INVALID");
+ assertThrows(()=>validateM9SourceRequest({...request,official_article_urls:["https://youtu.be/video-id"]}),Error,"M9_SOURCE_URLS_INVALID");
  assertThrows(()=>validateM9SourceRequest({...request,allowed_image_hosts:["*.example.org"]}),Error,"M9_TRUSTED_IMAGE_HOSTS_REQUIRED");
+});
+Deno.test("M9 keeps Google discovery provenance beside the publisher URL",async()=>{
+ const original="https://news.google.com/rss/articles/article-id";
+ const result=await collectM9ForWorker({...request,google_news_original_urls:[original]}, {
+  fetch:async()=>new Response("<html><body>No article images</body></html>"),
+ });
+ assertEquals(result.source_provenance,{
+  publisher_article_urls:request.publisher_article_urls,
+  google_news_original_urls:[original],
+  source_type:"creative_briefs.evidence_snapshot.sources",
+ });
 });

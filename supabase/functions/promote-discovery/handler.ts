@@ -4,7 +4,7 @@ export interface PromoteDiscoveryHandlerDependencies {
   readonly invokeSecret: string;
   readonly defaultLimit?: number;
   readonly now?: () => Date;
-  readonly run: (input: { asOf?: Date; limit?: number; rankingDate?: string; promotionJobId?: string; refreshExistingGrounding?: boolean }) => Promise<PromotionSummary>;
+  readonly run: (input: { asOf?: Date; limit?: number; rankingDate?: string; promotionJobId?: string; promotionObservationId?: string; refreshExistingGrounding?: boolean }) => Promise<PromotionSummary>;
 }
 
 function bearer(value: string | null): string { return value?.match(/^Bearer ([^\s]+)$/u)?.[1] ?? ""; }
@@ -33,14 +33,15 @@ export function createPromoteDiscoveryHandler(dependencies: PromoteDiscoveryHand
     try { body = await request.json(); } catch { body = {}; }
     if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 });
     const value = body as Record<string, unknown>;
-    if (Object.keys(value).some((key) => !["as_of", "limit", "ranking_date", "promotion_job_id", "refresh_existing_grounding"].includes(key))) return Response.json({ error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 });
+    if (Object.keys(value).some((key) => !["as_of", "limit", "ranking_date", "promotion_job_id", "promotion_observation_id", "refresh_existing_grounding"].includes(key))) return Response.json({ error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 });
     const asOf = value.as_of === undefined ? now() : typeof value.as_of === "string" && ISO.test(value.as_of) ? new Date(value.as_of) : null;
     const limit = value.limit === undefined ? defaultLimit : value.limit;
     const rankingDate = value.ranking_date === undefined ? undefined : typeof value.ranking_date === "string" && DATE.test(value.ranking_date) ? value.ranking_date : null;
     const refreshExistingGrounding = value.refresh_existing_grounding;
     const promotionJobId = value.promotion_job_id === undefined ? undefined : typeof value.promotion_job_id === "string" && UUID.test(value.promotion_job_id) ? value.promotion_job_id : null;
-    if (!asOf || !Number.isFinite(asOf.getTime()) || typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 || rankingDate === null || promotionJobId === null || (refreshExistingGrounding !== undefined && typeof refreshExistingGrounding !== "boolean")) return Response.json({ error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 });
-    const result = await dependencies.run({ asOf, limit, ...(rankingDate ? { rankingDate } : {}), ...(promotionJobId ? { promotionJobId } : {}), ...(refreshExistingGrounding === true ? { refreshExistingGrounding: true } : {}) });
+    const promotionObservationId = value.promotion_observation_id === undefined ? undefined : typeof value.promotion_observation_id === "string" && UUID.test(value.promotion_observation_id) ? value.promotion_observation_id : null;
+    if (!asOf || !Number.isFinite(asOf.getTime()) || typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 || rankingDate === null || promotionJobId === null || promotionObservationId === null || (promotionObservationId && !promotionJobId) || (refreshExistingGrounding !== undefined && typeof refreshExistingGrounding !== "boolean")) return Response.json({ error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, { status: 400 });
+    const result = await dependencies.run({ asOf, limit, ...(rankingDate ? { rankingDate } : {}), ...(promotionJobId ? { promotionJobId } : {}), ...(promotionObservationId ? { promotionObservationId } : {}), ...(refreshExistingGrounding === true ? { refreshExistingGrounding: true } : {}) });
     return Response.json(result);
   };
 }

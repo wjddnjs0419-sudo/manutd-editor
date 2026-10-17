@@ -37,7 +37,9 @@ export function safePublisherUrl(value: string): string | null {
       !host.includes(".") || host.includes(":") ||
       /^(?:\d{1,3}\.){3}\d{1,3}$/u.test(host) ||
       /\.(?:local|localhost|internal|invalid|test)$/u.test(host) ||
-      host === GOOGLE_NEWS || host === "google.com" || host === "www.google.com") {
+      host === GOOGLE_NEWS || host === "google.com" || host.endsWith(".google.com") ||
+      host.startsWith("google.") || host === "googleusercontent.com" ||
+      host.endsWith(".googleusercontent.com")) {
       return null;
     }
     url.hash = "";

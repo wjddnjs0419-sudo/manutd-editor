@@ -37,7 +37,15 @@ async function requestedTrigger(request: Request): Promise<GenerationTrigger> {
   const object = value as Record<string, unknown>;
   if (typeof object.candidate_id !== "string" || object.candidate_id.trim() === "") throw new InvalidRequestError();
   if (object.trigger_type !== "AUTO_PRIORITY" && object.trigger_type !== "NOTION_SELECTED" && object.trigger_type !== "MANUAL") throw new InvalidRequestError();
-  return { candidate_id: object.candidate_id, trigger_type: object.trigger_type };
+  if (object.generation_intent !== undefined && object.generation_intent !== "STANDARD" && object.generation_intent !== "EXPLORATION") throw new InvalidRequestError();
+  if (object.content_mode_override !== undefined && object.content_mode_override !== "ANALYSIS_CONTEXT") throw new InvalidRequestError();
+  if (object.content_mode_override === "ANALYSIS_CONTEXT" && (object.trigger_type !== "MANUAL" || object.generation_intent !== "EXPLORATION")) throw new InvalidRequestError();
+  return {
+    candidate_id: object.candidate_id,
+    trigger_type: object.trigger_type,
+    ...(object.generation_intent ? { generation_intent: object.generation_intent } : {}),
+    ...(object.content_mode_override === "ANALYSIS_CONTEXT" ? { content_mode_override: "ANALYSIS_CONTEXT" as const } : {}),
+  };
 }
 
 export function createCreativeGenerationHandler(
@@ -56,8 +64,17 @@ export function createCreativeGenerationHandler(
     }
     try {
       const result = await dependencies.run(await requestedTrigger(request));
-      log({ requestId: id, event: "creative_generation_completed", status: result.status });
-      return json({ request_id: id, status: result.status, candidate_id: result.candidate_id, creative_brief_id: result.creative_brief_id ?? null, revision: result.revision ?? null, input_fingerprint: result.input_fingerprint ?? null, error_codes: result.error_codes ?? [] }, result.status === "CONCURRENT" ? 202 : 200);
+      log({
+        requestId: id,
+        event: "creative_generation_completed",
+        status: result.status,
+        ...(result.provider_failure ? {
+          providerFailureCategory: result.provider_failure.category,
+          ...(result.provider_failure.code === undefined ? {} : { providerFailureCode: result.provider_failure.code }),
+          ...(result.provider_failure.http_status === undefined ? {} : { providerHttpStatus: result.provider_failure.http_status }),
+        } : {}),
+      });
+      return json({ request_id: id, status: result.status, candidate_id: result.candidate_id, creative_brief_id: result.creative_brief_id ?? null, revision: result.revision ?? null, input_fingerprint: result.input_fingerprint ?? null, error_codes: result.error_codes ?? [], ...(result.provider_failure ? { provider_failure: result.provider_failure } : {}) }, result.status === "CONCURRENT" ? 202 : 200);
     } catch (error) {
       if (error instanceof InvalidRequestError) return json({ request_id: id, error: { code: "INVALID_REQUEST", message: "Invalid request body" } }, 400);
       log({ requestId: id, event: "creative_generation_failed", code: "CREATIVE_GENERATION_FAILED" });

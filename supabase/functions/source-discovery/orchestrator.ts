@@ -91,9 +91,26 @@ export async function runSourceDiscovery(options: RunSourceDiscoveryOptions): Pr
       for (const item of items) {
         if (options.asOf && item.publishedAt && new Date(item.publishedAt).getTime() > options.asOf.getTime()) continue;
         const fetchedExcerpt = await articleExcerpt(options, feed, item.canonicalUrl);
-        const enrichedItem = fetchedExcerpt && fetchedExcerpt.length > (item.excerpt?.length ?? 0)
-          ? { ...item, excerpt: fetchedExcerpt }
-          : item;
+        const extracted = fetchedExcerpt && fetchedExcerpt.length > (item.excerpt?.length ?? 0);
+        const enrichedItem = extracted
+          ? {
+            ...item,
+            excerpt: fetchedExcerpt,
+            metadata: {
+              ...item.metadata,
+              article_extraction_status: "EXTRACTED",
+              article_body_present: true,
+              article_excerpt_chars: fetchedExcerpt.length,
+            },
+          }
+          : {
+            ...item,
+            metadata: {
+              ...item.metadata,
+              article_extraction_status: "FEED_SUMMARY",
+              article_body_present: false,
+            },
+          };
         const inserted = await options.repository.saveObservation({ ...enrichedItem, informationSourceId: sourceId, observedAt: options.now().toISOString() });
         if (inserted) {
           observed += 1;

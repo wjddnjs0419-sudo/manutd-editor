@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "target_width": 1080,
+  "target_height": 1350,
+  "max_enlargement": 2.0,
+  "scale_bands": {
+    "basic_max": 1.5,
+    "sharpness_max": 1.8,
+    "strict_max": 2.0
+  },
+  "face_detection_min_confidence": 0.5,
+  "dominant_face_area_ratio": 1.75,
+  "sharpness_metric": "opencv_laplacian_variance",
+  "quality": {
+    "face_top_padding_ratio": 0.10,
+    "minimum_face_headroom_ratio": 0.06,
+    "basic_min_face_sharpness": 20.0,
+    "sharp_min_face_sharpness": 55.0,
+    "strict_min_face_sharpness": 90.0,
+    "basic_min_face_width_px": 20.0,
+    "sharp_min_face_width_px": 32.0,
+    "strict_min_face_width_px": 48.0,
+    "basic_min_face_height_px": 24.0,
+    "sharp_min_face_height_px": 40.0,
+    "strict_min_face_height_px": 56.0
+  }
+}

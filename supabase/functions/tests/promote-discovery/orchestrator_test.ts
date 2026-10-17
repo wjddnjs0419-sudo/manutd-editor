@@ -25,6 +25,10 @@ const observation = (overrides: Partial<PromotionObservation> = {}): PromotionOb
   discoveryQueryId: "query-1",
   contentFingerprint: "fingerprint-1",
   metadata: { entities: ["Bruno Fernandes"], topic_family: "INJURY" },
+  publisherCanonicalUrl: "https://www.bbc.com/sport/football/bruno-update",
+  googleNewsOriginalUrl: "https://news.google.com/rss/articles/google-article-1",
+  articleFetchStatus: "FETCHED",
+  articleExtractionStatus: "EXTRACTED",
   storyClusterId: null,
   ...overrides,
 });
@@ -32,15 +36,13 @@ const observation = (overrides: Partial<PromotionObservation> = {}): PromotionOb
 function repository(
   observations: PromotionObservation[],
   stories: PromotionStory[] = [],
-): DiscoveryPromotionRepository & { calls: string[]; claims: unknown[]; candidates: unknown[] } {
+): DiscoveryPromotionRepository & { calls: string[]; claims: unknown[] } {
   const calls: string[] = [];
   const claims: unknown[] = [];
-  const candidates: unknown[] = [];
   return {
     calls,
     claims,
-    candidates,
-    async listFreshUnassigned() { return observations.filter((item) => item.storyClusterId === null); },
+    async listFreshUnassigned(_asOf, _limit, promotionJobId) { return observations.filter((item) => item.storyClusterId === null || (promotionJobId !== undefined && item.storyClusterId !== null)); },
     async listStories() { return stories; },
     async upsertStory(input) {
       calls.push("upsertStory");
@@ -50,23 +52,25 @@ function repository(
       stories.push(story);
       return { id: story.id, created: true };
     },
-    async assignObservation(observationId, storyClusterId) {
-      calls.push(`assign:${observationId}:${storyClusterId}`);
+    async assignObservation(observationId, storyClusterId, sourceObservationId) {
+      calls.push(`assign:${observationId}:${storyClusterId}:${sourceObservationId}`);
       const item = observations.find((value) => value.id === observationId);
       if (item) item.storyClusterId = storyClusterId;
     },
     async ensureSourceObservation(value) { calls.push(`source:${value.id}`); return `source-${value.id}`; },
+    async ensureReviewedPublisherObservation(value) { calls.push(`publisher:${value.id}`); return value.articleExtractionStatus === "EXTRACTED" ? `publisher-source-${value.id}` : null; },
+    async ensurePublisherReportClaims(value) { calls.push(`report-claims:${value.storyClusterId}:${value.publisherSourceObservationId}`); },
     async ensureDiscoveryClaim(value) { claims.push(value); },
-    async ensureEditorialCandidate(value) { candidates.push(value); calls.push(`candidate:${value.storyClusterId}`); },
   };
 }
 
-Deno.test("promotion uses the Seoul business date for candidates at a UTC day boundary", async () => {
+Deno.test("promotion does not create unranked zero score candidate", async () => {
   const repo = repository([observation()]);
 
-  await promoteDiscovery({ asOf: "2026-09-29T17:40:00.000Z", repository: repo });
+  const result = await promoteDiscovery({ asOf: "2026-09-29T17:40:00.000Z", repository: repo });
 
-  assertEquals((repo.candidates[0] as { rankingDate: string }).rankingDate, "2026-09-30");
+  assertEquals(result.editorialCandidatesEnsured, 0);
+  assertEquals(repo.calls.some((call) => call.startsWith("candidate:")), false);
 });
 
 Deno.test("promotion attaches fresh observations to an existing safe story", async () => {
@@ -82,15 +86,51 @@ Deno.test("promotion attaches fresh observations to an existing safe story", asy
   };
   const repo = repository([observation({ contentFingerprint: "new-fingerprint" })], [existing]);
   const result = await promoteDiscovery({ asOf: "2026-09-29T00:10:00.000Z", repository: repo });
-  assertEquals(result as unknown, { status: "COMPLETED", observationsProcessed: 1, storiesCreated: 0, storiesUpdated: 1, claimsCreated: 1, editorialCandidatesEnsured: 1, affectedStoryIds: ["story-existing"] });
+  assertEquals(result as unknown, { status: "COMPLETED", observationsProcessed: 1, storiesCreated: 0, storiesUpdated: 1, claimsCreated: 1, editorialCandidatesEnsured: 0, affectedStoryIds: ["story-existing"] });
   assertEquals(repo.calls.filter((item) => item.startsWith("upsertStory")).length, 1);
-  assertEquals(repo.calls.some((item) => item === "assign:observation-1:story-existing"), true);
+  assertEquals(repo.calls.some((item) => item === "assign:observation-1:story-existing:source-observation-1"), true);
+  assertEquals(repo.calls.indexOf("source:observation-1") < repo.calls.indexOf("publisher:observation-1"), true);
+  assertEquals(repo.calls.indexOf("publisher:observation-1") < repo.calls.indexOf("report-claims:story-existing:publisher-source-observation-1"), true);
+  assertEquals(repo.calls.indexOf("report-claims:story-existing:publisher-source-observation-1") < repo.calls.indexOf("assign:observation-1:story-existing:source-observation-1"), true);
   assertEquals(repo.claims[0], {
     observationId: "observation-1",
     storyClusterId: "story-existing",
     sourceObservationId: "source-observation-1",
     status: "DISCOVERY_ONLY",
   });
+});
+
+Deno.test("manual linking of an existing story source preserves its story metadata", async () => {
+  const item = observation({
+    providerId: "feed-1-bbc-sport",
+    sourceCanonicalName: "BBC Sport",
+    sourceRole: "FACT_INDEPENDENT",
+    externalId: "bbc-article-1",
+    canonicalUrl: "https://www.bbc.co.uk/sport/football/articles/c62e9g09e781o",
+    title: "Boos, anguish & fading belief - 'worrying day' for under-pressure Carrick",
+    excerpt: "Solanke scores in added time as 10-man Spurs draw with Man Utd. Manchester United failed to beat opponents reduced to 10 men.",
+    contentFingerprint: "bbc-article-fingerprint",
+    storyClusterId: "story-existing",
+    publisherCanonicalUrl: "https://www.bbc.co.uk/sport/football/articles/c62e9g09e781o",
+  });
+  const existing: PromotionStory = {
+    id: "story-existing",
+    canonicalTitle: "Boos, anguish & fading belief - 'worrying day' for under-pressure Carrick",
+    summary: "Keep existing summary",
+    topic: "MANCHESTER_UNITED",
+    firstSeenAt: "2026-10-10T20:54:46.000Z",
+    lastSeenAt: "2026-10-10T20:54:52.000Z",
+    promotionKey: null,
+    signature: { existing: true },
+  };
+  const repo = repository([item], [existing]);
+  await promoteDiscovery({
+    asOf: "2026-10-12T09:00:00.000Z",
+    repository: repo,
+    promotionJobId: "99999999-9999-4999-8999-999999999999",
+  });
+  assertEquals(repo.calls.some((call) => call === "upsertStory"), false);
+  assertEquals(repo.calls.some((call) => call === "assign:observation-1:story-existing:source-observation-1"), true);
 });
 
 Deno.test("promotion creates one canonical story and is idempotent on repeat runs", async () => {
@@ -100,13 +140,28 @@ Deno.test("promotion creates one canonical story and is idempotent on repeat run
   const second = await promoteDiscovery({ asOf: "2026-09-29T00:10:00.000Z", repository: repo });
   assertEquals(first.storiesCreated, 1);
   assertEquals(second.observationsProcessed, 0);
-  assertEquals(repo.calls.filter((item) => item.startsWith("candidate:")).length, 1);
+  assertEquals(repo.calls.filter((item) => item.startsWith("candidate:")).length, 0);
 });
 
 Deno.test("promotion never creates a verified claim from discovery evidence", async () => {
   const repo = repository([observation({ sourceRole: "DISCOVERY_COMPETITOR" })]);
   await promoteDiscovery({ asOf: "2026-09-29T00:10:00.000Z", repository: repo });
   assertEquals((repo.claims[0] as { status: string }).status, "DISCOVERY_ONLY");
+});
+
+Deno.test("Google News articles without Manchester United relevance do not create M8 candidates", async () => {
+  const repo = repository([observation({
+    title: "Chelsea sign a new midfielder after a medical",
+    excerpt: "Chelsea completed a transfer deal with the midfielder.",
+    contentFingerprint: "irrelevant-google-fingerprint",
+    metadata: { entities: ["Chelsea"], topic_family: "TRANSFER" },
+  })]);
+
+  const result = await promoteDiscovery({ asOf: "2026-09-29T00:10:00.000Z", repository: repo });
+
+  assertEquals(result.observationsProcessed, 0);
+  assertEquals(repo.calls.some((call) => call.startsWith("candidate:")), false);
+  assertEquals(repo.claims.length, 0);
 });
 
 Deno.test("promotion summary lists each created and updated story ID once", async () => {
@@ -139,7 +194,7 @@ Deno.test("promotion summary lists each created and updated story ID once", asyn
     storiesCreated: 1,
     storiesUpdated: 1,
     claimsCreated: 3,
-    editorialCandidatesEnsured: 3,
+    editorialCandidatesEnsured: 0,
     affectedStoryIds: ["story-existing", "story-2"],
   });
 });
@@ -184,7 +239,7 @@ Deno.test("trusted fact refresh rechecks only recent existing canonical stories 
   assertEquals(result.affectedStoryIds, [current.id]);
   assertEquals(result.observationsProcessed, 0);
   assertEquals(repo.claims.length, 0);
-  assertEquals(repo.candidates.length, 0);
+  assertEquals(repo.calls.some((call) => call.startsWith("candidate:")), false);
 });
 
 Deno.test("refresh has strict per-run scope cap and no writes for existing stories", async () => {

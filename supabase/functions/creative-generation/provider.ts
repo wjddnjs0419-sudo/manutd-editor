@@ -3,19 +3,32 @@ import { classifierPrompt, generationPrompt, repairPrompt } from "./prompts.ts";
 import type {
   AiClassification,
 } from "./classifier.ts";
-import type { ContentMode, CreativeBriefOutput, MatchPhase } from "./types.ts";
+import type { ContentMode, CreativeBriefOutput, GenerationIntent, MatchPhase } from "./types.ts";
 
 export interface ProviderPromptInput {
   readonly content_mode: ContentMode;
   readonly match_phase: MatchPhase | null;
   readonly evidence_snapshot: unknown;
+  readonly generation_intent?: GenerationIntent;
+}
+
+export interface ProviderRequestOptions {
+  readonly maxRetries?: number;
 }
 
 export interface CreativeGenerationProvider {
-  classify(text: string, config: ClassifierConfig): Promise<AiClassification>;
+  classify(text: string, config: ClassifierConfig, requestOptions?: ProviderRequestOptions): Promise<AiClassification>;
   generate(input: ProviderPromptInput): Promise<CreativeBriefOutput>;
   repair(input: ProviderPromptInput, output: CreativeBriefOutput, errors: readonly string[]): Promise<CreativeBriefOutput>;
   configure?(config: GenerationConfig): void;
+  getUsageStats?(): ProviderUsageStats;
+}
+
+export interface ProviderUsageStats {
+  readonly provider_calls: number;
+  readonly input_tokens: number;
+  readonly output_tokens: number;
+  readonly retry_count: number;
 }
 
 export interface OpenAIProviderOptions {
@@ -32,15 +45,32 @@ export interface OpenAIProviderOptions {
 
 export type ProviderErrorCategory = "FAILED_PROVIDER" | "PROVIDER_TIMEOUT" | "MALFORMED_PROVIDER_RESPONSE";
 
+// Locally defined codes only: never forward upstream messages or arbitrary codes.
+export type ProviderFailureCode = "HTTP_AUTH" | "HTTP_MODEL" | "HTTP_REQUEST" |
+  "HTTP_RATE_LIMIT" | "HTTP_USAGE_LIMIT" | "HTTP_QUOTA" | "HTTP_SERVER" | "HTTP_OTHER" |
+  "TIMEOUT" | "NETWORK" | "INVALID_RESPONSE_JSON" | "INVALID_OUTPUT_JSON" |
+  "MISSING_OUTPUT" | "UNKNOWN";
+
+function httpFailureCode(status?: number): ProviderFailureCode {
+  if (status === 401 || status === 403) return "HTTP_AUTH";
+  if (status === 404) return "HTTP_MODEL";
+  if (status === 400 || status === 422) return "HTTP_REQUEST";
+  if (status === 429) return "HTTP_USAGE_LIMIT";
+  if (status !== undefined && status >= 500) return "HTTP_SERVER";
+  return status === undefined ? "UNKNOWN" : "HTTP_OTHER";
+}
+
 export class ProviderError extends Error {
   readonly category: ProviderErrorCategory;
   readonly status?: number;
+  readonly code: ProviderFailureCode;
 
-  constructor(category: ProviderErrorCategory, status?: number) {
+  constructor(category: ProviderErrorCategory, status?: number, code?: ProviderFailureCode) {
     super(category);
     this.name = "ProviderError";
     this.category = category;
     this.status = status;
+    this.code = code ?? (category === "PROVIDER_TIMEOUT" ? "TIMEOUT" : httpFailureCode(status));
   }
 }
 
@@ -134,8 +164,8 @@ const CREATIVE_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        properties: { evidence_id: { type: "string" }, label: { type: "string" } },
-        required: ["evidence_id", "label"],
+        properties: { evidence_id: { type: "string" }, label: { type: "string" }, url: { type: ["string", "null"] } },
+        required: ["evidence_id", "label", "url"],
       },
     },
     editor_warning: { type: ["string", "null"] },
@@ -153,7 +183,7 @@ const CREATIVE_SCHEMA = {
   required: ["schema_version", "style_profile", "style_version", "content_mode", "match_phase", "generation_quality", "angle", "key_takeaway", "hooks", "slides", "caption", "sources", "editor_warning", "internal_grounding"],
 } as const;
 
-function outputText(body: unknown): string {
+function outputText(body: unknown, status: number): string {
   if (body && typeof body === "object") {
     const object = body as Record<string, unknown>;
     if (typeof object.output_text === "string") return object.output_text;
@@ -170,16 +200,29 @@ function outputText(body: unknown): string {
       }
     }
   }
-  throw new ProviderError("MALFORMED_PROVIDER_RESPONSE");
+  throw new ProviderError("MALFORMED_PROVIDER_RESPONSE", status, "MISSING_OUTPUT");
 }
 
-function parseOutput<T>(body: unknown): T {
+function parseOutput<T>(body: unknown, status: number): T {
   try {
-    return JSON.parse(outputText(body)) as T;
+    return JSON.parse(outputText(body, status)) as T;
   } catch (error) {
     if (error instanceof ProviderError) throw error;
-    throw new ProviderError("MALFORMED_PROVIDER_RESPONSE");
+    throw new ProviderError("MALFORMED_PROVIDER_RESPONSE", status, "INVALID_OUTPUT_JSON");
   }
+}
+
+function tokenUsage(body: unknown): { input_tokens: number; output_tokens: number } {
+  if (!body || typeof body !== "object") return { input_tokens: 0, output_tokens: 0 };
+  const usage = (body as Record<string, unknown>).usage;
+  if (!usage || typeof usage !== "object") return { input_tokens: 0, output_tokens: 0 };
+  const value = usage as Record<string, unknown>;
+  const input = value.input_tokens ?? value.prompt_tokens;
+  const output = value.output_tokens ?? value.completion_tokens;
+  return {
+    input_tokens: typeof input === "number" && input >= 0 ? input : 0,
+    output_tokens: typeof output === "number" && output >= 0 ? output : 0,
+  };
 }
 
 function retryAfterMilliseconds(headers: Headers): number {
@@ -217,12 +260,21 @@ export function createOpenAIProvider(options: OpenAIProviderOptions) {
   const maxRetries = Math.max(0, options.maxRetries ?? 2);
   const timeoutMs = options.timeoutMs ?? 30_000;
   const baseUrl = options.baseUrl ?? "https://api.openai.com/v1/responses";
+  let providerCalls = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let retryCount = 0;
 
-  async function request<T>(body: Record<string, unknown>): Promise<T> {
-    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+  async function request<T>(body: Record<string, unknown>, requestOptions?: ProviderRequestOptions): Promise<T> {
+    const requestedRetries = requestOptions?.maxRetries;
+    const requestMaxRetries = typeof requestedRetries === "number" && Number.isFinite(requestedRetries)
+      ? Math.max(0, Math.floor(requestedRetries))
+      : maxRetries;
+    for (let attempt = 0; attempt <= requestMaxRetries; attempt += 1) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
+        providerCalls += 1;
         const response = await fetchImpl(baseUrl, {
           method: "POST",
           headers: { authorization: `Bearer ${options.apiKey}`, "content-type": "application/json" },
@@ -233,17 +285,41 @@ export function createOpenAIProvider(options: OpenAIProviderOptions) {
           let parsed: unknown;
           try {
             parsed = await response.json();
-          } catch {
-            throw new ProviderError("MALFORMED_PROVIDER_RESPONSE", response.status);
+          } catch (error) {
+            // Aborted/failed body reads are transport errors, not malformed JSON.
+            if (controller.signal.aborted || !(error instanceof SyntaxError)) throw error;
+            throw new ProviderError("MALFORMED_PROVIDER_RESPONSE", response.status, "INVALID_RESPONSE_JSON");
           }
-          return parseOutput<T>(parsed);
+          const usage = tokenUsage(parsed);
+          inputTokens += usage.input_tokens;
+          outputTokens += usage.output_tokens;
+          return parseOutput<T>(parsed, response.status);
         }
         const retryable = response.status === 429 || response.status >= 500;
-        if (!retryable || attempt === maxRetries) throw new ProviderError("FAILED_PROVIDER", response.status);
+        if (!retryable || attempt === requestMaxRetries) {
+          let code = httpFailureCode(response.status);
+          if (response.status === 429) {
+            try {
+              const failure = await response.json();
+              if (failure?.error?.code === "insufficient_quota") code = "HTTP_QUOTA";
+              if (failure?.error?.code === "rate_limit_exceeded") code = "HTTP_RATE_LIMIT";
+            } catch (error) {
+              if (controller.signal.aborted) throw error;
+              // A non-JSON error body does not erase the known HTTP status.
+            }
+          }
+          throw new ProviderError("FAILED_PROVIDER", response.status, code);
+        }
+        retryCount += 1;
         await sleep(retryAfterMilliseconds(response.headers) || Math.min(1000 * (2 ** attempt), 5000));
       } catch (error) {
         if (error instanceof ProviderError) throw error;
-        if (attempt === maxRetries) throw new ProviderError(error instanceof DOMException && error.name === "AbortError" ? "PROVIDER_TIMEOUT" : "FAILED_PROVIDER");
+        if (attempt === requestMaxRetries) {
+          const timedOut = controller.signal.aborted;
+          throw new ProviderError(timedOut ? "PROVIDER_TIMEOUT" : "FAILED_PROVIDER", undefined,
+            timedOut ? "TIMEOUT" : error instanceof TypeError ? "NETWORK" : "UNKNOWN");
+        }
+        retryCount += 1;
         await sleep(Math.min(1000 * (2 ** attempt), 5000));
       } finally {
         clearTimeout(timer);
@@ -253,20 +329,25 @@ export function createOpenAIProvider(options: OpenAIProviderOptions) {
   }
 
   return {
+    getUsageStats(): ProviderUsageStats {
+      return { provider_calls: providerCalls, input_tokens: inputTokens, output_tokens: outputTokens, retry_count: retryCount };
+    },
     configure(config: GenerationConfig) {
       const configured = config.generation_config;
       if (typeof configured.model === "string" && configured.model.trim()) model = configured.model;
       if (typeof configured.reasoning === "string" && configured.reasoning.trim()) reasoning = configured.reasoning;
       if (typeof configured.max_output_tokens === "number") maxOutputTokens = configured.max_output_tokens;
     },
-    async classify(text: string, config: ClassifierConfig): Promise<AiClassification> {
-      return await request<AiClassification>(requestBody(config.model, config.reasoning, classifierPrompt(text), "content_classification", CLASSIFIER_SCHEMA, 500));
+    async classify(text: string, config: ClassifierConfig, requestOptions?: ProviderRequestOptions): Promise<AiClassification> {
+      return await request<AiClassification>(requestBody(config.model, config.reasoning, classifierPrompt(text), "content_classification", CLASSIFIER_SCHEMA, 500), requestOptions);
     },
     async generate(input: ProviderPromptInput): Promise<CreativeBriefOutput> {
-      return await request<CreativeBriefOutput>(requestBody(model, reasoning, generationPrompt(input.content_mode, input.match_phase, input.evidence_snapshot), "creative_brief", CREATIVE_SCHEMA, maxOutputTokens));
+      const requestOptions = input.generation_intent === "EXPLORATION" ? { maxRetries: 0 } : undefined;
+      return await request<CreativeBriefOutput>(requestBody(model, reasoning, generationPrompt(input.content_mode, input.match_phase, input.evidence_snapshot, input.generation_intent), "creative_brief", CREATIVE_SCHEMA, maxOutputTokens), requestOptions);
     },
     async repair(input: ProviderPromptInput, output: CreativeBriefOutput, errors: readonly string[]): Promise<CreativeBriefOutput> {
-      return await request<CreativeBriefOutput>(requestBody(model, reasoning, repairPrompt(input.content_mode, input.match_phase, input.evidence_snapshot, output, errors), "creative_brief_repair", CREATIVE_SCHEMA, maxOutputTokens));
+      const requestOptions = input.generation_intent === "EXPLORATION" ? { maxRetries: 0 } : undefined;
+      return await request<CreativeBriefOutput>(requestBody(model, reasoning, repairPrompt(input.content_mode, input.match_phase, input.evidence_snapshot, output, errors, input.generation_intent), "creative_brief_repair", CREATIVE_SCHEMA, maxOutputTokens), requestOptions);
     },
   };
 }

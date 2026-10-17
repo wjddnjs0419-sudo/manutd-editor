@@ -1,0 +1,1 @@
+export const MAX_DISCOVERY_EXCERPT_CHARS = 6_000;

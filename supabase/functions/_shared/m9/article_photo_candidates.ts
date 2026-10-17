@@ -6,7 +6,7 @@
  */
 import { fetchBoundedText } from "../../trend-discovery/search_provider_http.ts";
 import { extractResponsivePublisherPhotos } from "./responsive_media.ts";
-import { safePublisherUrl, isGoogleNewsArticleUrl, resolveGoogleNewsArticleUrl } from "../../trend-discovery/google_news_resolution.ts";
+import { safePublisherUrl } from "../../trend-discovery/google_news_resolution.ts";
 
 export type PhotoOrigin = "ARTICLE" | "OFFICIAL_CLUB";
 export type PhotoMethod = "JSON_LD" | "OG_IMAGE" | "TWITTER_IMAGE" | "FIGURE" | "RESPONSIVE_SRCSET";
@@ -160,10 +160,7 @@ export async function collectPublisherImages(
   const output: PhotoCandidate[]=[];
   const seen=new Set<string>();
   for (const source of sources.slice(0,Math.min(6,Math.max(1,options.maxPages??6)))) {
-    let url=safePublisherUrl(source.url);
-    if (!url && isGoogleNewsArticleUrl(source.url)) {
-      url=await resolveGoogleNewsArticleUrl(source.url,{fetch:fetchImpl,timeoutMs:options.timeoutMs??5500});
-    }
+    const url=safePublisherUrl(source.url);
     if (!url || seen.has(url)) continue;
     seen.add(url);
     const html=await fetchBoundedText(new URL(url),{

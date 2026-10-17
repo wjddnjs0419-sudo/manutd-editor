@@ -1,4 +1,4 @@
-import {assertEquals,assertRejects} from "jsr:@std/assert@1.0.8";
+import {assert,assertEquals,assertRejects} from "jsr:@std/assert@1.0.8";
 import {harvestArticlePhotos} from "../../_shared/m9/photo_harvest.ts";
 
 function png(w:number,h:number):ArrayBuffer {
@@ -17,14 +17,14 @@ const official='<html><head><script type="application/ld+json">'+
 '{"@type":"NewsArticle","image":{"contentUrl":"https://cdn.example.org/bruno-fernandes-portrait.png","width":1200,"height":1600,"caption":"Bruno Fernandes full-body portrait","dateCreated":"2026-10-10"}}'+
 '</script></head></html>';
 
-Deno.test("harvests real news and official photo candidates once per URL for each template",async()=>{
+Deno.test("harvests article and official photos and selects the stronger cover crop",async()=>{
  const requests:string[]=[];
  const out=await harvestArticlePhotos({
    publisher_article_urls:["https://sports.example.org/bruno"],
    official_article_urls:["https://www.manutd.com/en/news/bruno"],
    slots:[
-     {slot:"COVER_NEWS",subject_aliases:["Bruno Fernandes"]},
-     {slot:"PLAYER_PROFILE",subject_aliases:["Bruno Fernandes"]},
+     {slot:"COVER_NEWS",slide_number:1,subject_aliases:["Bruno Fernandes"]},
+     {slot:"PLAYER_PROFILE",slide_number:2,subject_aliases:["Bruno Fernandes"]},
    ],
  },{
    allowedImageHosts:["cdn.example.org"],now:new Date("2026-10-11T14:00:00Z"),
@@ -42,23 +42,53 @@ Deno.test("harvests real news and official photo candidates once per URL for eac
  assertEquals(out.candidate_count,2);
  assertEquals(out.probed_count,2);
  assertEquals(out.selections.length,2);
- assertEquals(out.selections[0]?.selected?.candidate.origin,"ARTICLE");
+ assertEquals(out.selections.map(selection=>selection.slide_number),[1,2]);
+ assertEquals(out.selections[0]?.selected?.candidate.origin,"OFFICIAL_CLUB");
+ assertEquals(out.selections[0]?.selected?.projected_crop_scale,0.9);
  assertEquals(out.selections[1]?.selected?.candidate.origin,"OFFICIAL_CLUB");
  assertEquals(out.selections[1]?.selected?.probe.height,1600);
  assertEquals(requests.length,4);
  assertEquals(out.publication_allowed,false);
  assertEquals(out.rights_status,"UNVERIFIED");
 });
-Deno.test("fails safely with unclear player caption and no image downloads",async()=>{
+Deno.test("probes article photos without player names for private review",async()=>{
  let imageRequests=0;
+ const genericArticle='<html><head><meta property="og:image" content="https://cdn.example.org/editorial-match.jpg">'+
+   '<meta property="article:published_time" content="2026-10-11T07:00:00Z"></head></html>';
  const r=await harvestArticlePhotos({
    publisher_article_urls:["https://sports.example.org/bruno"],
-   slots:[{slot:"COVER_NEWS",subject_aliases:["Casemiro"]}],
+   slots:[{slot:"COVER_NEWS",subject_aliases:["Bruno Fernandes"]}],
+ },{
+   allowedImageHosts:["cdn.example.org"],
+   fetch:async(url)=>{
+     if(String(url).includes("cdn.example.org")){
+       imageRequests++;
+       return new Response(png(1800,1200),{status:200,headers:{"content-type":"image/png"}});
+     }
+     return new Response(genericArticle,{status:200,headers:{"content-type":"text/html"}});
+   },
+ });
+ assertEquals(r.candidate_count,1);
+ assertEquals(r.probed_count,1);
+ assertEquals(r.status,"CANDIDATES_FOR_REVIEW");
+ assertEquals(imageRequests,1);
+ assertEquals(r.selections[0]?.selected?.identity_evidence,"UNCONFIRMED");
+ assert(r.selections[0]?.selected?.flags.includes("SUBJECT_NOT_CONFIRMED"));
+ assertEquals(r.selections[0]?.selected?.can_auto_publish,false);
+});
+
+Deno.test("does not probe obvious logo or advertisement assets",async()=>{
+ let imageRequests=0;
+ const article='<html><head><meta property="og:image" content="https://cdn.example.org/club-logo.png">'+
+   '<meta property="og:image:alt" content="Manchester United sponsor logo"></head></html>';
+ const r=await harvestArticlePhotos({
+   publisher_article_urls:["https://sports.example.org/bruno"],
+   slots:[{slot:"COVER_NEWS",subject_aliases:["Bruno Fernandes"]}],
  },{
    allowedImageHosts:["cdn.example.org"],
    fetch:async(url)=>{
      if(String(url).includes("cdn.example.org"))imageRequests++;
-     return new Response(news,{status:200,headers:{"content-type":"text/html"}});
+     return new Response(article,{status:200,headers:{"content-type":"text/html"}});
    },
  });
  assertEquals(r.candidate_count,1);
