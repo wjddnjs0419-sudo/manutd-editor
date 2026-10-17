@@ -30,4 +30,4 @@ if rg -n --hidden --glob '!.git/**' --glob '!.superpowers/**' --glob '!*.md' --g
 fi
 
 git -C "$repo_dir" diff --check
-echo "M8.6 deterministic smoke passed; no Telegram, Meta, OpenAI, Google News, GDELT, Notion, or production Supabase call was made."
+echo "M8.6 deterministic smoke passed; no Telegram, Meta, OpenAI, Google News, Notion, or production Supabase call was made."

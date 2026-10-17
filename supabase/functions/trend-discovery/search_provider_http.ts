@@ -118,32 +118,6 @@ export function inWindow(
     timestamp <= window.end;
 }
 
-export function asGdeltTimestamp(value: number): string {
-  const date = new Date(value);
-  const pad = (part: number) => String(part).padStart(2, "0");
-  return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${
-    pad(date.getUTCDate())
-  }${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${
-    pad(date.getUTCSeconds())
-  }`;
-}
-
-export function parseGdeltDate(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const match = value.trim().match(
-    /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z?$/u,
-  );
-  if (match) {
-    const iso = `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${
-      match[6]
-    }Z`;
-    const parsed = new Date(iso);
-    return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
-  }
-  const parsed = new Date(value);
-  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
-}
-
 export function safeText(value: unknown, maxLength: number): string | null {
   if (typeof value !== "string") return null;
   const result = value.replace(/\s+/gu, " ").trim();

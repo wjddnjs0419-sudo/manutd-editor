@@ -18,8 +18,6 @@ const base: DiscoveryQuery = {
 const fake = (label: string, calls: string[]): DiscoveryProvider => ({
   providerId: label === "google"
     ? "google-news"
-    : label === "gdelt"
-    ? "gdelt-doc"
     : label,
   sourceRole: "DISCOVERY_COMMUNITY",
   platform: "RSS",
@@ -29,13 +27,11 @@ const fake = (label: string, calls: string[]): DiscoveryProvider => ({
   },
 });
 
-Deno.test("FAST sends team and HOT entities to both search providers and preserves feeds", async () => {
+Deno.test("FAST sends team and HOT entities to Google News and preserves feeds", async () => {
   const calls: string[] = [];
   const providers = createRoutedDiscoveryProviders({
-    searchProfile: "FAST",
     trustedProviders: [fake("trusted", calls)],
     googleNewsProvider: fake("google", calls),
-    gdeltProvider: fake("gdelt", calls),
     readEnv: () => "true",
   });
   for (
@@ -51,21 +47,17 @@ Deno.test("FAST sends team and HOT entities to both search providers and preserv
   assertEquals(calls, [
     "trusted:team",
     "google:team",
-    "gdelt:team",
     "trusted:hot",
     "google:hot",
-    "gdelt:hot",
     "trusted:cold",
     "google:cold",
   ]);
 });
 
-Deno.test("PLAYER_SWEEP uses Google except HOT or BREAKING follow-up", async () => {
+Deno.test("PLAYER_SWEEP uses Google News for each search query", async () => {
   const calls: string[] = [];
   const providers = createRoutedDiscoveryProviders({
-    searchProfile: "PLAYER_SWEEP",
     googleNewsProvider: fake("google", calls),
-    gdeltProvider: fake("gdelt", calls),
     readEnv: () => "true",
   });
   for (
@@ -86,47 +78,57 @@ Deno.test("PLAYER_SWEEP uses Google except HOT or BREAKING follow-up", async () 
   assertEquals(calls, [
     "google:team",
     "google:hot",
-    "gdelt:hot",
     "google:breaking",
-    "gdelt:breaking",
   ]);
 });
 
 Deno.test("provider env switches disable search without disabling trusted feeds", async () => {
   const calls: string[] = [];
   const providers = createRoutedDiscoveryProviders({
-    searchProfile: "FAST",
     trustedProviders: [fake("trusted", calls)],
     googleNewsProvider: fake("google", calls),
-    gdeltProvider: fake("gdelt", calls),
     readEnv: (name) => name === "DISCOVERY_GOOGLE_NEWS_ENABLED" ? "false" : "0",
   });
   for (const provider of providers) await provider.discover(base);
   assertEquals(calls, ["trusted:team"]);
 });
 
-Deno.test("Google News search defaults off while GDELT and trusted feeds retain their settings", async () => {
+Deno.test("Google News search defaults off while trusted feeds remain enabled", async () => {
   const calls: string[] = [];
   const providers = createRoutedDiscoveryProviders({
-    searchProfile: "FAST",
     trustedProviders: [fake("trusted", calls)],
     googleNewsProvider: fake("google", calls),
-    gdeltProvider: fake("gdelt", calls),
     readEnv: () => undefined,
   });
 
   for (const provider of providers) await provider.discover(base);
 
-  assertEquals(calls, ["trusted:team", "gdelt:team"]);
+  assertEquals(calls, ["trusted:team"]);
 });
 
 Deno.test("Google News search only enables for an explicit true flag", async () => {
   const calls: string[] = [];
   const providers = createRoutedDiscoveryProviders({
-    searchProfile: "FAST",
     googleNewsProvider: fake("google", calls),
     readEnv: () => "enabled",
   });
   for (const provider of providers) await provider.discover(base);
   assertEquals(calls, []);
+});
+
+Deno.test("legacy GDELT configuration no longer routes searches", async () => {
+  const calls: string[] = [];
+  const options = {
+    googleNewsProvider: fake("google", calls),
+    gdeltProvider: fake("gdelt", calls),
+    readEnv: () => "true",
+  } as Parameters<typeof createRoutedDiscoveryProviders>[0] & {
+    gdeltProvider: DiscoveryProvider;
+  };
+
+  for (const provider of createRoutedDiscoveryProviders(options)) {
+    await provider.discover(base);
+  }
+
+  assertEquals(calls, ["google:team"]);
 });

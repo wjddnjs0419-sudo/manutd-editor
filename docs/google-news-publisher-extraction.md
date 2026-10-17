@@ -17,6 +17,6 @@ See [the resolver runbook](gnews-resolution-pipeline-runbook.md) for flags, depl
 
 - No browser automation, paywall bypass, or guarantee of full article text.
 - No relaxation of claim grounding, editorial eligibility, `news_eligible`, or human review.
-- Google search and URL resolution are separate flags. Both default off; GDELT and existing trusted RSS routing remain enabled as configured.
+- Google News search and publisher URL resolution are separate flags. Search is enabled explicitly; trusted RSS routing remains enabled as configured.
 - Offline tests use mocked network responses. Run the pgTAP migration test only against an explicitly isolated disposable or staging database; production remains untouched.
 - The migration and pgTAP suite were applied to an isolated local Docker Supabase project. This implementation has not changed production Supabase settings, deployed the Edge function, enabled a schedule, or made live Google requests.

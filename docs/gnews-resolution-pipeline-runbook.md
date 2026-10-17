@@ -44,7 +44,7 @@ Keep these independent and default them to off:
 | `GNEWS_RESOLVER_ENABLED` | `gnews-resolver-api` Edge environment | Enables the narrow resolver API. Defaults off. |
 | `GNEWS_RESOLVER_ENABLED` | Worker process environment | Allows the worker to make one batch. The workflow sets it only after manual opt-in. |
 
-GDELT keeps its existing setting and routing. BBC and other trusted RSS providers are unchanged. There is no cron/schedule trigger in the resolver workflow.
+Google News search is enabled through `DISCOVERY_GOOGLE_NEWS_ENABLED`; BBC and other trusted RSS providers are unchanged. There is no cron/schedule trigger in the resolver workflow.
 
 ## Manual setup after review
 
@@ -65,7 +65,7 @@ No service-role key, database URL, or Supabase admin credential belongs in GitHu
 - Publisher 429: the current worker stops fetching further publisher pages. Already resolved URLs remain resolved; the affected article fetch is marked rate limited.
 - Worker termination: the lease expires after 20 minutes. A later, separately dispatched run gets a fresh attempt. No loop or automatic retry is configured. Expired leases count toward the three-attempt cap; the third expiry becomes a terminal `FAILED/WORKER_LEASE_EXPIRED` state.
 - Unsafe URL, YouTube, malformed URL, inaccessible page, and title mismatch are stored as excluded/failure states with bounded safe categories. Do not retry by bypassing a publisher restriction.
-- Roll back new intake by setting `DISCOVERY_GOOGLE_NEWS_ENABLED=false`. Stop resolver activity by setting the Edge `GNEWS_RESOLVER_ENABLED=false` and removing/withholding GitHub environment secrets; already claimed rows will expire. Existing GDELT and trusted RSS settings are unchanged.
+- Roll back new intake by setting `DISCOVERY_GOOGLE_NEWS_ENABLED=false`. Stop resolver activity by setting the Edge `GNEWS_RESOLVER_ENABLED=false` and removing/withholding GitHub environment secrets; already claimed rows will expire. Trusted RSS settings are unchanged.
 - The migration is additive and must not be reverted by dropping provenance/cache columns while observations refer to them. If a schema correction is required, write a forward migration after preserving status/provenance data.
 
 ## Request and cost estimate
@@ -76,7 +76,7 @@ For a full batch of 30 *unique, uncached* article IDs:
 - Publisher pages: at most 30 GETs, sequentially (concurrency 1), each capped at 800 KB. A single worker run claims one batch and never loops.
 - Supabase Edge: 2 invocations per batch (claim and result write). At the current published rate of $2 per million invocations above plan quota, 1,000 batches (2,000 invocations) are about $0.004 in invocation overage, before any plan quota. See [Supabase Edge invocation billing](https://supabase.com/docs/guides/platform/manage-your-usage/edge-function-invocations).
 - GitHub Actions: two Linux jobs (offline checks and the opted-in worker). Public-repository standard runner usage is free. For a private repository beyond included minutes, the current Linux 2-core listed rate is $0.006/minute and GitHub rounds each job up to a minute; if each job takes under one billed minute, budget about $0.012 per dispatch. Verify the account allowance and live rate before rollout: [GitHub runner rates](https://docs.github.com/en/billing/reference/actions-runner-pricing) and [included usage](https://docs.github.com/en/billing/reference/product-usage-included).
-- No paid Google/GDELT API is added. Publisher network access and database compute/storage are governed by their current provider plans. The excerpt limit keeps each successful body write at or below 2,000 characters; no source HTML is stored.
+- No paid Google API is added. Publisher network access and database compute/storage are governed by their current provider plans. The excerpt limit keeps each successful body write at or below 2,000 characters; no source HTML is stored.
 
 The figures are request/cost bounds, not a recurring monthly forecast. A future schedule must be separately approved and would multiply batches, function invocations, and hosted-runner time by its actual cadence.
 
@@ -93,7 +93,7 @@ The figures are request/cost bounds, not a recurring monthly forecast. A future 
 - [ ] 403/paywall, body limit, title mismatch, no-body, and YouTube cases remain excluded from body/claim verification.
 - [ ] M8 promotion, source attribution, cluster identity, claim grounding, editorial eligibility, and M9 publisher-photo inputs verified on staging.
 - [ ] Cost allowance, logs/retention, 429 response, lease recovery, rollback owners, and incident escalation documented.
-- [ ] No cron, schedule, production deployment, GDELT removal, or Google News activation is included in this PR.
+- [ ] No cron, schedule, production deployment, or Google News activation is included in this PR.
 
 ## Tests
 
