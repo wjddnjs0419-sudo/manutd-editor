@@ -28,6 +28,30 @@ DEFAULT_GLOBAL_COOLDOWN_SECONDS = 900
 MAX_WORKER_API_BODY_BYTES = 800_000
 REQUEST_TIMEOUT_SECONDS = 20
 GOOGLE_ARTICLE_ID = re.compile(r"^/rss/articles/([A-Za-z0-9_-]{1,2000})/?$")
+RESOLVER_API_ERROR_CODES = {
+    "METHOD_NOT_ALLOWED",
+    "RESOLVER_DISABLED",
+    "UNAUTHORIZED",
+    "REQUEST_TOO_LARGE",
+    "INVALID_REQUEST_BODY",
+    "INVALID_REQUEST_ID",
+    "INVALID_BATCH_SIZE",
+    "INVALID_MODE",
+    "INVALID_LEASE_ID",
+    "INVALID_RESULTS",
+    "INVALID_UNPROCESSED_IDS",
+    "DUPLICATE_RESULT_ID",
+    "INVALID_COOLDOWN",
+    "INVALID_COOLDOWN_STATE",
+    "INVALID_ACTION",
+    "RATE_LIMITED",
+    "LEASE_EXPIRED",
+    "IDEMPOTENCY_CONFLICT",
+    "LEASE_CONFLICT",
+    "API_OPERATION_FAILED",
+    "API_INVALID_RESPONSE",
+    "API_UNAVAILABLE",
+}
 
 
 class ResolverApiError(RuntimeError):
@@ -90,7 +114,21 @@ class ResolverApiClient:
         if response.status_code == 429:
             raise ResolverApiError("RESOLVER_API_RATE_LIMITED")
         if not response.ok:
-            raise ResolverApiError("RESOLVER_API_REJECTED")
+            error_code = None
+            try:
+                error_payload = response.json()
+            except ValueError:
+                error_payload = None
+            if isinstance(error_payload, dict):
+                candidate = error_payload.get("error")
+                if isinstance(candidate, str) and candidate in RESOLVER_API_ERROR_CODES:
+                    error_code = candidate
+            category = (
+                f"RESOLVER_API_REJECTED:{error_code}"
+                if error_code
+                else "RESOLVER_API_REJECTED"
+            )
+            raise ResolverApiError(category)
         try:
             value = response.json()
         except ValueError as exc:
