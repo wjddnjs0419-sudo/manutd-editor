@@ -1,0 +1,120 @@
+name: Google News URL resolver validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_live_google_requests:
+        description: "Allow the bounded 30-link live Google News URL test"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gnews-decoder-validation
+  cancel-in-progress: false
+
+jobs:
+  resolve-google-news-urls:
+    if: inputs.confirm_live_google_requests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Check out the selected ref
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned PoC dependencies
+        run: python -m pip install --disable-pip-version-check -r scripts/requirements-gnews-decoder-poc.txt
+
+      - name: Run offline safety tests
+        run: python -m unittest scripts.test_gnews_decoder_poc -v
+
+      - name: Confirm the bounded sample is exactly 30 links
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.gnews_decoder_poc import dedupe_records
+
+          records = json.loads(Path("scripts/fixtures/gnews-decoder-input.json").read_text())
+          if len(dedupe_records(records)) != 30 or len(records) != 30:
+              raise SystemExit("The live job requires exactly 30 unique fixture URLs")
+          PY
+
+      - name: Resolve the 30 fixture URLs
+        env:
+          RESULT_PATH: ${{ runner.temp }}/gnews-decoder-result.json
+        run: >-
+          python scripts/gnews_decoder_poc.py
+          --input scripts/fixtures/gnews-decoder-input.json
+          --output "$RESULT_PATH"
+          --skip-body
+
+      - name: Add request-by-request measurements to the run summary
+        if: always()
+        env:
+          RESULT_PATH: ${{ runner.temp }}/gnews-decoder-result.json
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          result_path = Path(os.environ["RESULT_PATH"])
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          if not result_path.exists():
+              summary_path.write_text("Live resolver result was not produced.\n", encoding="utf-8")
+              raise SystemExit(0)
+
+          result = json.loads(result_path.read_text(encoding="utf-8"))
+          index = {item["google_url"]: n for n, item in enumerate(result.get("articles", []), 1)}
+          rows = [
+              "## Google News URL resolver live test",
+              "",
+              f"- gnews-decoder: `{result.get('decoder_version')}`",
+              f"- fixture URLs: {result.get('unique_valid_article_count')}",
+              f"- converted: {result.get('conversion_success_count')} ({result.get('conversion_success_rate_pct')}%)",
+              f"- batch wall time: {result.get('batch_elapsed_ms')} ms",
+              f"- Google requests: {result.get('request_count')}",
+              f"- HTTP 429: {result.get('google_http_429_observed')}",
+              f"- fatal error: {result.get('fatal_error') or 'none'}",
+              "",
+              "| Request | Method | HTTP | Elapsed (ms) | Path |",
+              "| --- | --- | ---: | ---: | --- |",
+          ]
+          for metric in result.get("request_metrics", []):
+              origin = metric.get("article_origin_url")
+              request_label = f"Article {index.get(origin, '?')}" if metric.get("method") == "GET" else "Batch RPC"
+              path = urlsplit(metric.get("url", "")).path
+              rows.append(
+                  f"| {request_label} | {metric.get('method')} | {metric.get('status')} | "
+                  f"{metric.get('elapsed_ms')} | `{path}` |"
+              )
+          summary_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+          if result.get("google_http_429_observed") or result.get("fatal_error"):
+              print("Google rate limit or resolver error occurred; inspect the result artifact.", file=sys.stderr)
+              raise SystemExit(1)
+          if result.get("conversion_success_count") != result.get("unique_valid_article_count"):
+              print("One or more fixture links did not resolve; inspect the result artifact.", file=sys.stderr)
+              raise SystemExit(1)
+          PY
+
+      - name: Upload bounded JSON result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gnews-decoder-live-result-${{ github.run_id }}
+          path: ${{ runner.temp }}/gnews-decoder-result.json
+          if-no-files-found: warn
+          retention-days: 7
