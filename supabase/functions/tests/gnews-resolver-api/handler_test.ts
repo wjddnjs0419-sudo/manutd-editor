@@ -184,6 +184,46 @@ Deno.test("completion rejects an unverified or non-HTTPS publisher URL", async (
   assertEquals(calls, 0);
 });
 
+Deno.test("completion reports a safe reason for an invalid result without echoing article data", async () => {
+  let calls = 0;
+  const handler = createGnewsResolverApiHandler({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "service-role-key",
+    workerToken: "worker-secret",
+    enabled: true,
+    fetch: async () => { calls += 1; return Response.json({}); },
+  });
+  const response = await handler(new Request("https://edge.test", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      action: "complete",
+      request_id: "run-5-complete",
+      lease_id: "00000000-0000-4000-8000-000000000001",
+      results: [{
+        id: "00000000-0000-4000-8000-000000000002",
+        url_resolution_status: "RESOLVED",
+        resolved_publisher_url: "https://publisher.example/article",
+        article_fetch_status: "FETCHED",
+        article_extraction_status: "EXTRACTED",
+        article_final_url: "https://publisher.example/article",
+        article_content_excerpt: "   ",
+        private_article_text: "must not be reflected in the response",
+        safe_error_category: null,
+      }],
+      unprocessed_ids: [],
+      global_cooldown_seconds: 0,
+    }),
+  }));
+
+  assertEquals(response.status, 400);
+  assertEquals(await response.json(), {
+    error: "INVALID_RESULTS",
+    invalid_results: [{ index: 0, reason: "EMPTY_EXTRACTED_ARTICLE_BODY" }],
+  });
+  assertEquals(calls, 0);
+});
+
 Deno.test("completion surfaces an expired lease as a conflict for safe worker restart", async () => {
   const handler = createGnewsResolverApiHandler({
     supabaseUrl: "https://example.supabase.co",

@@ -52,6 +52,21 @@ RESOLVER_API_ERROR_CODES = {
     "API_INVALID_RESPONSE",
     "API_UNAVAILABLE",
 }
+RESOLVER_API_VALIDATION_REASONS = {
+    "RESULT_BATCH_TOO_LARGE",
+    "INVALID_RESULT_OBJECT",
+    "INVALID_RESULT_ID",
+    "INVALID_RESULT_STATUS",
+    "INVALID_RESULT_ERROR_CATEGORY",
+    "UNSAFE_RESOLVED_PUBLISHER_URL",
+    "PUBLISHER_URL_WITHOUT_RESOLUTION",
+    "UNSAFE_ARTICLE_FINAL_URL",
+    "INVALID_ARTICLE_EXCERPT",
+    "EMPTY_EXTRACTED_ARTICLE_BODY",
+    "EXCERPT_WITHOUT_EXTRACTION",
+    "ARTICLE_FETCH_WITHOUT_RESOLUTION",
+    "DUPLICATE_RESULT_ID",
+}
 
 
 class ResolverApiError(RuntimeError):
@@ -123,6 +138,21 @@ class ResolverApiClient:
                 candidate = error_payload.get("error")
                 if isinstance(candidate, str) and candidate in RESOLVER_API_ERROR_CODES:
                     error_code = candidate
+                if error_code == "INVALID_RESULTS":
+                    failures = error_payload.get("invalid_results")
+                    if isinstance(failures, list):
+                        for failure in failures[:5]:
+                            if not isinstance(failure, dict):
+                                continue
+                            reason = failure.get("reason")
+                            if not isinstance(reason, str) or reason not in RESOLVER_API_VALIDATION_REASONS:
+                                continue
+                            index = failure.get("index")
+                            if isinstance(index, int) and not isinstance(index, bool) and 0 <= index < MAX_BATCH_SIZE:
+                                error_code = f"{error_code}:RESULT_{index}:{reason}"
+                            else:
+                                error_code = f"{error_code}:{reason}"
+                            break
             category = (
                 f"RESOLVER_API_REJECTED:{error_code}"
                 if error_code
