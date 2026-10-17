@@ -303,6 +303,38 @@ class GNewsResolverWorkerTests(unittest.TestCase):
             api.claim("workflow-run:attempt-1:claim", 30)
         self.assertEqual(calls, [True])
 
+    def test_api_rejections_report_only_allowlisted_error_codes(self):
+        payloads = [
+            b'{"error":"INVALID_RESULTS","message":"worker-token must not leak"}',
+            b'{"error":"untrusted server detail"}',
+            b"not-json",
+        ]
+
+        for payload, expected in zip(
+            payloads,
+            (
+                "RESOLVER_API_REJECTED:INVALID_RESULTS",
+                "RESOLVER_API_REJECTED",
+                "RESOLVER_API_REJECTED",
+            ),
+        ):
+            with self.subTest(expected=expected):
+                def request(*_args, **_kwargs):
+                    response = requests.Response()
+                    response.status_code = 400
+                    response._content = payload
+                    return response
+
+                api = ResolverApiClient(
+                    "https://example.supabase.co/functions/v1/gnews-resolver-api",
+                    "worker-token",
+                    request=request,
+                )
+                with self.assertRaises(ResolverApiError) as raised:
+                    api.claim("workflow-run:attempt-1:claim", 30)
+                self.assertEqual(str(raised.exception), expected)
+                self.assertNotIn("worker-token", str(raised.exception))
+
     def test_claim_defaults_to_recent_and_backfill_is_explicit_and_bounded(self):
         payloads = []
 
