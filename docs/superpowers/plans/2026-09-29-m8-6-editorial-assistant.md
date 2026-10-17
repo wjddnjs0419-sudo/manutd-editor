@@ -48,9 +48,9 @@
 
 **Owner:** Agent C
 
-**Write scope:** `supabase/functions/trend-discovery/google_news_provider.ts`, `gdelt_provider.ts`, `provider_router.ts`, provider-local config/helpers, and focused provider tests only. Do not edit trend-discovery types/orchestrator/repository/handler/index, scheduling, seed, README, validators, or worker files.
+**Write scope:** `supabase/functions/trend-discovery/google_news_provider.ts`, `provider_router.ts`, provider-local config/helpers, and focused provider tests only. Do not edit trend-discovery types/orchestrator/repository/handler/index, scheduling, seed, README, validators, or worker files.
 
-**Deliverable:** Bounded Google News RSS and GDELT providers plus routing and failure isolation. Preserve missing publication timestamps and never fetch arbitrary hosts.
+**Deliverable:** Bounded Google News RSS provider routing and failure isolation. Preserve missing publication timestamps and never fetch arbitrary hosts.
 
 ### Task 4: Round 1 — match personal assistant helpers
 

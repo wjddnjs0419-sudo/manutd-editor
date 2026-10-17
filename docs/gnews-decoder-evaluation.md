@@ -121,7 +121,7 @@ PYTHONDONTWRITEBYTECODE=1 /tmp/manutd-gnews-decoder-poc/venv/bin/python scripts/
 - `google_news_provider.ts`는 RSS 항목을 발견하고 Google News RSS URL을 canonical URL로 보존한다. 수집 자체가 publisher URL 변환을 수행하는 구조는 아니다.
 - 현 `article_enrichment.ts`는 안전한 HTTPS 주소를 가져오며 리다이렉트는 거부하고, 200 KB·8초 제한으로 문단 기반 excerpt를 만든다. 따라서 URL 변환만 성공해도 본문 추출을 보장하지 않는다. 이 PoC의 페이지 접근 정책은 검증을 위해 공인 주소로만 수동 리다이렉트를 제한적으로 따랐고, 운영 코드를 바꾸지 않았다.
 - `orchestrator.ts`는 발견과 enrichment를 별도 동시성 제한으로 수행한다. 실패 시 URL 변환 단계와 본문 추출 단계를 분리해 상태를 기록하는 것이 적합하다.
-- 이번 체크아웃의 `provider_router.ts`에는 현재 Google News provider 경로가 있지만, PoC는 이를 호출하거나 provider 설정을 바꾸지 않았다. GDELT 설정도 건드리지 않았다.
+- 이번 체크아웃의 `provider_router.ts`에는 현재 Google News provider 경로가 있지만, PoC는 이를 호출하거나 provider 설정을 바꾸지 않았다.
 
 ## ManUtd Editor 적용 가능성
 
@@ -160,5 +160,5 @@ Python 실행이 가능한 별도 Actions 작업은 패키지 사용 위치로�
 
 - 추가: `scripts/gnews_decoder_poc.py`, `scripts/test_gnews_decoder_poc.py`, `scripts/requirements-gnews-decoder-poc.txt`, `scripts/fixtures/gnews-decoder-input.json`, 이 보고서.
 - 오프라인 테스트: 12건 모두 통과.
-- 실행하지 않음: production Supabase 쓰기, Google News 운영 설정 변경, GDELT 비활성화, Cron/스케줄러 변경, 자동 배포, M8/M9 workflow 수정.
+- 실행하지 않음: production Supabase 쓰기, Google News 운영 설정 변경, Cron/스케줄러 변경, 자동 배포, M8/M9 workflow 수정.
 - legacy 실시간 비교는 커밋 `648e3d4f26bb9fc5867fe97e67e940e1bec687d8`의 resolver 파일을 임시 실행했다. 현재 체크아웃에 없는 문서 `docs/google-news-publisher-extraction.md`는 검토 불가 상태로 남겼으며, 현재/과거 구현 분석은 해당 resolver 소스와 기존 진단 기록을 근거로 했다.

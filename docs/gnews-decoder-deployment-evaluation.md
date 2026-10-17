@@ -11,7 +11,7 @@
 - 같은 원문 페이지 10개를 페이지당 한 번 가져와 200/500/800KB 상한에 맞춰 비교했다. 개선 추출기의 유효 기사 본문은 **3/10 → 6/10 → 8/10**이었다. 구형 추출기는 500KB에서 7/10, 800KB에서 9/10을 표시했지만 Times of India 페이지의 “Be respectful · TOI community guidelines”를 본문으로 잘못 잡아 각 단계에서 한 건씩 오탐이다.
 - 본문 테스트는 원문 페이지 HTTP 요청 10회, 429 없음이었다. New York Times는 403을 반환했고 우회하지 않았다. 전체 HTML은 파일로 저장하지 않았고, 결과에는 최대 500자 미리보기와 크기/상태만 남겼다.
 - 기존 Supabase Edge fetch helper가 응답 본문을 최대 200,000바이트로 제한한다. 이 공용 hard cap을 올리는 대신, 운영 통합 시 기사 페이지 전용 800,000바이트 상한을 추가해야 한다.
-- Google News 설정, Supabase 데이터, GDELT, cron, 배포, M8/M9 workflow는 변경하지 않았다.
+- Google News 설정, Supabase 데이터, cron, 배포, M8/M9 workflow는 변경하지 않았다.
 
 ## 1. GitHub Actions URL 변환
 
@@ -138,7 +138,7 @@ Google News RSS
 5. promotion 연결: 검증된 publisher URL만 원문 canonical로 사용하고 Google URL은 discovery/provenance에 계속 남긴다. source name, external ID, clustering 및 기존 M8/M9 카드 생성 흐름의 회귀 검증을 넣는다.
 6. 독립적인 통합 검증: 기존 M9 workflow와 cron을 바꾸지 않고, 중복 입력/429/403/body-too-large/저관련 결과를 fixture로 시험한다. 별도 승인 후 feature flag 활성화를 논의한다.
 
-이번 PoC에서 실제 작업은 30개 URL의 GitHub runner 변환, 동일 10개 페이지의 본문 한도 실험, 네트워크 없는 단위 테스트, 수동 실행 workflow 및 이 보고서까지다. Production Supabase, Google News 운영 설정, GDELT, schedule, 자동 배포 및 M8/M9 코드 변경은 없었다.
+이번 PoC에서 실제 작업은 30개 URL의 GitHub runner 변환, 동일 10개 페이지의 본문 한도 실험, 네트워크 없는 단위 테스트, 수동 실행 workflow 및 이 보고서까지다. Production Supabase, Google News 운영 설정, schedule, 자동 배포 및 M8/M9 코드 변경은 없었다.
 
 ## 참고 실행 산출물
 
