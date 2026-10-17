@@ -2,6 +2,7 @@ import type { CanonicalFixture, StoredMatch } from "./fixture_types.ts";
 import type { FixtureAlertEvent, FixtureSyncRepository, FixtureSyncState } from "./fixture_service.ts";
 import type { CandidateReferencePost } from "./reference_media.ts";
 import type { IntelligenceReadinessRecord, IntelligenceReadinessStatus } from "./readiness.ts";
+import type { MatchCalendarSyncState } from "./match_calendar.ts";
 import { isManchesterUnitedRelevant } from "../m8/manchester_united_relevance.ts";
 import { safePublisherUrl } from "../../trend-discovery/google_news_resolution.ts";
 
@@ -32,6 +33,9 @@ export interface BriefingCandidateRow {
 }
 
 export interface M6Repository extends FixtureSyncRepository {
+  listMatchesForCalendar(from: Date, to: Date): Promise<readonly StoredMatch[]>;
+  getMatchCalendarSyncState(matchId: string): Promise<MatchCalendarSyncState | null>;
+  saveMatchCalendarSyncState(state: MatchCalendarSyncState): Promise<void>;
   listBriefingCandidates(rankingDate: string, readinessStartedAt?: string): Promise<readonly BriefingCandidateRow[]>;
   getIntelligenceReadiness(rankingDate: string): Promise<IntelligenceReadinessRecord | null>;
 }
@@ -160,6 +164,24 @@ export function createM6Repository(options: M6RepositoryOptions): M6Repository {
 
   return {
     async listUpcomingMatches(from, to) { return listUpcomingMatches(from, to); },
+    async listMatchesForCalendar(from, to) { return listUpcomingMatches(from, to); },
+    async getMatchCalendarSyncState(matchId) {
+      const result = await request(`/rest/v1/match_calendar_sync_state?select=match_id,notion_page_id,last_synced_hash,last_synced_at&match_id=eq.${encodeURIComponent(matchId)}&limit=1`, {}, "app_private");
+      if (!Array.isArray(result)) throw new M6RepositoryError("RESPONSE");
+      const value = result[0];
+      if (!value) return null;
+      const source = row(value);
+      if (typeof source.match_id !== "string") throw new M6RepositoryError("RESPONSE");
+      return {
+        match_id: source.match_id,
+        notion_page_id: nullableString(source.notion_page_id),
+        last_synced_hash: nullableString(source.last_synced_hash),
+        last_synced_at: nullableString(source.last_synced_at),
+      } satisfies MatchCalendarSyncState;
+    },
+    async saveMatchCalendarSyncState(state) {
+      await request(`/rest/v1/match_calendar_sync_state?on_conflict=match_id`, { method: "POST", headers: { prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(state) }, "app_private");
+    },
     async getMatchByExternalId(externalMatchId) {
       const result = await request(`/rest/v1/matches?select=*&external_match_id=eq.${encodeURIComponent(externalMatchId)}&provider=eq.espn&limit=1`);
       if (!Array.isArray(result)) throw new M6RepositoryError("RESPONSE");

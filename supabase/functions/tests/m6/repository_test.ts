@@ -186,3 +186,57 @@ Deno.test("M6 repository restores eligible legacy rows while excluding current u
   assertEquals(selected[0]?.editorial_score, 89.5);
   assertEquals(selected[0]?.source_url, "https://www.examplepublisher.com/united-report");
 });
+
+Deno.test("M6 repository reads and upserts match calendar projection state", async () => {
+  const calls: Array<{ url: string; method: string; profile: string | null; body: string | null }> = [];
+  const repository = createM6Repository({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "test-service-role-key",
+    fetch: async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      calls.push({
+        url,
+        method,
+        profile: new Headers(init?.headers).get("content-profile"),
+        body: typeof init?.body === "string" ? init.body : null,
+      });
+      if (url.includes("/match_calendar_sync_state?") && method === "GET") {
+        return new Response(JSON.stringify([{
+          match_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+          notion_page_id: "notion-page",
+          last_synced_hash: "hash-v1",
+          last_synced_at: "2026-10-17T00:00:00.000Z",
+        }]));
+      }
+      if (url.includes("/matches?")) return new Response(JSON.stringify([]));
+      return new Response(null, { status: 204 });
+    },
+  });
+
+  const matchId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const state = await repository.getMatchCalendarSyncState(matchId);
+  await repository.saveMatchCalendarSyncState({
+    match_id: matchId,
+    notion_page_id: "notion-page",
+    last_synced_hash: "hash-v2",
+    last_synced_at: "2026-10-17T01:00:00.000Z",
+  });
+  const matches = await repository.listMatchesForCalendar(
+    new Date("2026-10-01T00:00:00.000Z"),
+    new Date("2026-12-01T00:00:00.000Z"),
+  );
+
+  assertEquals(state?.last_synced_hash, "hash-v1");
+  assertEquals(matches, []);
+  assertEquals(calls[0]?.profile, "app_private");
+  assertEquals(calls[1]?.method, "POST");
+  assertEquals(calls[1]?.profile, "app_private");
+  assertEquals(JSON.parse(calls[1]?.body ?? "{}"), {
+    match_id: matchId,
+    notion_page_id: "notion-page",
+    last_synced_hash: "hash-v2",
+    last_synced_at: "2026-10-17T01:00:00.000Z",
+  });
+  assertEquals(calls[2]?.url.includes("kickoff_at=gte.2026-10-01T00%3A00%3A00.000Z"), true);
+});
