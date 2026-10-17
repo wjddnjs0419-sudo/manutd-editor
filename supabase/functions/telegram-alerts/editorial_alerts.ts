@@ -24,6 +24,8 @@ export interface EditorialStoryAlertRow {
   readonly primarySourceObservationId?: string | null;
   readonly primaryClaimId?: string | null;
   readonly groundingEvidenceAvailable?: boolean;
+  readonly trustState?: "VERIFIED" | "REPORTED" | "DISCOVERY";
+  readonly materialFingerprint?: string;
 }
 
 export interface CanonicalEditorialEvidence {
