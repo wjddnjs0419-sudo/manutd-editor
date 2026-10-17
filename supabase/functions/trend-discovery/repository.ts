@@ -24,6 +24,44 @@ function object(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+interface DatabaseHttpDiagnostic {
+  readonly code: string | null;
+  readonly reason: string;
+}
+
+class DatabaseHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly diagnostic: DatabaseHttpDiagnostic,
+  ) {
+    super(`DATABASE_HTTP_ERROR status=${status} code=${diagnostic.code ?? "UNKNOWN"} reason=${diagnostic.reason}`);
+    this.name = "DatabaseHttpError";
+  }
+}
+
+function databaseHttpDiagnostic(body: unknown): DatabaseHttpDiagnostic {
+  const error = object(body);
+  const rawCode = typeof error.code === "string" ? error.code : "";
+  const code = /^[A-Za-z0-9_]{4,16}$/u.test(rawCode) ? rawCode : null;
+  const message = typeof error.message === "string" ? error.message : "";
+  const constraint = message.match(/\bconstraint\s+["']([a-z][a-z0-9_]{0,127})["']/iu)?.[1];
+  const column = message.match(/\bcolumn\s+["']([a-z][a-z0-9_]{0,127})["']/iu)?.[1];
+  if (constraint) return { code, reason: `constraint:${constraint}` };
+  if (column) return { code, reason: `column:${column}` };
+
+  const reason = message
+    .replace(/\b(?:authorization|api[_-]?key|token|secret|password)\b\s*[:=]\s*\S+/giu, "[credential redacted]")
+    .replace(/\bBearer\s+\S+/giu, "Bearer [redacted]")
+    .replace(/https?:\/\/\S+/giu, "[url redacted]")
+    .replace(/"(?:[^"]|"")*"/gu, '"[redacted]"')
+    .replace(/'(?:[^']|'')*'/gu, "'[redacted]'")
+    .replace(/[\u0000-\u001F\u007F]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, 180);
+  return { code, reason: reason || "database rejected request" };
+}
+
 export function createTrendDiscoveryRepository(options: RepositoryOptions): TrendDiscoveryRepository {
   if (!options.supabaseUrl.trim() || !options.serviceRoleKey.trim()) throw new Error("DATABASE_CONFIGURATION_ERROR");
   const base = options.supabaseUrl.replace(/\/$/u, "");
@@ -40,7 +78,15 @@ export function createTrendDiscoveryRepository(options: RepositoryOptions): Tren
         ...init.headers,
       },
     });
-    if (!response.ok) throw new Error("DATABASE_HTTP_ERROR");
+    if (!response.ok) {
+      let body: unknown = null;
+      try {
+        body = JSON.parse(await response.text());
+      } catch {
+        // Keep the response body out of logs when it is not a known JSON error shape.
+      }
+      throw new DatabaseHttpError(response.status, databaseHttpDiagnostic(body));
+    }
     const text = await response.text();
     return text.trim() ? JSON.parse(text) : null;
   }
@@ -62,7 +108,22 @@ export function createTrendDiscoveryRepository(options: RepositoryOptions): Tren
       const existing = await request(`/rest/v1/discovery_observations?${query}`);
       const existingRow = Array.isArray(existing) && object(existing[0]) ? existing[0] : null;
       const payload = { provider_id: observation.providerId, source_canonical_name: observation.sourceCanonicalName, editorial_role: observation.sourceRole, external_id: observation.externalId, canonical_url: observation.canonicalUrl, title: observation.title, excerpt: observation.excerpt, published_at: observation.publishedAt, last_observed_at: observation.observedAt, platform: observation.platform, engagement: observation.engagement, engagement_available: observation.engagementAvailable, content_fingerprint: observation.contentFingerprint, metadata: { ...observation.metadata, ...(runId ? { last_run_id: runId } : {}) }, observation_count: existingRow ? undefined : 1 };
-      const result = await request("/rest/v1/discovery_observations?on_conflict=provider_id%2Cexternal_id", { method: "POST", headers: { prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify(payload) });
+      let result: unknown;
+      try {
+        result = await request("/rest/v1/discovery_observations?on_conflict=provider_id%2Cexternal_id", { method: "POST", headers: { prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify(payload) });
+      } catch (error) {
+        if (error instanceof DatabaseHttpError) {
+          console.error(JSON.stringify({
+            event: "trend_discovery_observation_upsert_rejected",
+            status: error.status,
+            database_code: error.diagnostic.code,
+            reason: error.diagnostic.reason,
+            provider_id: observation.providerId,
+            content_fingerprint_prefix: observation.contentFingerprint.slice(0, 16),
+          }));
+        }
+        throw error;
+      }
       const row = Array.isArray(result) && object(result[0]) ? result[0] : existingRow;
       if (!row || typeof row.id !== "string") throw new Error("DISCOVERY_OBSERVATION_PERSISTENCE_ERROR");
       return { inserted: !existingRow, observationId: row.id, storyClusterId: typeof row.story_cluster_id === "string" ? row.story_cluster_id : null };
