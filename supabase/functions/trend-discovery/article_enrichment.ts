@@ -2,6 +2,7 @@ import { resolveGoogleNewsArticleUrl, isGoogleNewsArticleUrl } from "./google_ne
 import { extractArticleExcerpt } from "../source-discovery/article_extractor.ts";
 import type { DiscoveryObservation } from "./types.ts";
 import { fetchBoundedText, safeHttpsUrl } from "./search_provider_http.ts";
+import { MAX_DISCOVERY_EXCERPT_CHARS } from "./limits.ts";
 
 export interface ArticleEnricherOptions {
   readonly fetch?: typeof fetch;
@@ -13,7 +14,10 @@ export interface ArticleEnricherOptions {
 export type ArticleEnricher = (observation: DiscoveryObservation) => Promise<DiscoveryObservation>;
 
 export function createArticleEnricher(options: ArticleEnricherOptions = {}): ArticleEnricher {
-  const maxExcerptChars = options.maxExcerptChars ?? 6_000;
+  const maxExcerptChars = Math.min(
+    options.maxExcerptChars ?? MAX_DISCOVERY_EXCERPT_CHARS,
+    MAX_DISCOVERY_EXCERPT_CHARS,
+  );
   return async (observation) => {
     const originalUrl = safeHttpsUrl(observation.canonicalUrl);
     if (!originalUrl) return observation;
@@ -28,14 +32,16 @@ export function createArticleEnricher(options: ArticleEnricherOptions = {}): Art
     });
     if (!body) return observation;
     const articleExcerpt = extractArticleExcerpt(body, maxExcerptChars);
-    if (!articleExcerpt || articleExcerpt.length <= (observation.excerpt?.length ?? 0)) return observation;
+    if (!articleExcerpt) return observation;
+    const boundedExcerpt = articleExcerpt.slice(0, MAX_DISCOVERY_EXCERPT_CHARS);
+    if (boundedExcerpt.length <= (observation.excerpt?.length ?? 0)) return observation;
     return {
       ...observation,
-      excerpt: articleExcerpt,
+      excerpt: boundedExcerpt,
       metadata: {
         ...observation.metadata,
         article_enrichment: "EXTRACTED",
-        article_excerpt_chars: articleExcerpt.length,
+        article_excerpt_chars: boundedExcerpt.length,
       },
     };
   };
